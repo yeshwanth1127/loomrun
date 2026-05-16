@@ -1,0 +1,376 @@
+generator client {
+  provider             = "prisma-client-py"
+  interface            = "asyncio"
+  recursive_type_depth = 5
+  enable_experimental_decimal = true
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum MembershipRole {
+  OWNER
+  SALES
+  TELECALLER
+  PRODUCTION
+  VIEWER
+}
+
+enum LeadSource {
+  WHATSAPP
+  TELECALLER
+  WEB
+  INSTAGRAM
+  REFERRAL
+  OTHER
+}
+
+enum LeadStage {
+  NEW
+  CONTACTED
+  QUALIFICATION
+  QUOTATION
+  NEGOTIATION
+  SAMPLE
+  WON
+  LOST
+}
+
+enum LeadActivityType {
+  NOTE
+  STAGE_CHANGE
+  ASSIGNMENT
+  CALL
+  WHATSAPP
+  EMAIL
+  SYSTEM
+}
+
+enum QuotationStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  REJECTED
+  EXPIRED
+}
+
+enum ProductionStage {
+  PENDING
+  FABRIC_CHECK
+  PROCUREMENT
+  FABRIC_RECEIVED
+  CUTTING
+  PRINTING
+  STITCHING
+  QC
+  PACKING
+  PAYMENT_HOLD
+  READY_DISPATCH
+  SHIPPED
+  DELIVERED
+}
+
+enum PaymentStatus {
+  PENDING
+  PARTIAL
+  PAID
+}
+
+enum OutboundChannel {
+  WHATSAPP
+  SMS
+  EMAIL
+}
+
+enum OutboundMessageStatus {
+  QUEUED
+  SENDING
+  SENT
+  FAILED
+}
+
+enum CallOutcome {
+  CONNECTED
+  NO_ANSWER
+  BUSY
+  WRONG_NUMBER
+  NOT_INTERESTED
+  CALLBACK_SCHEDULED
+  QUALIFIED
+}
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  passwordHash  String   @map("password_hash")
+  name          String?
+  isSuperAdmin  Boolean  @default(false) @map("is_super_admin")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  memberships        Membership[]
+  leadActivities     LeadActivity[]       @relation("LeadActivityActor")
+  assignedLeads      Lead[]               @relation("LeadAssignee")
+  telecallerCalls    TelecallerCallLog[]
+  quotationsCreated  Quotation[]          @relation("QuotationAuthor")
+
+  @@map("users")
+}
+
+model Organization {
+  id               String   @id @default(cuid())
+  name             String
+  slug             String   @unique
+  plan             String   @default("free")
+  suspended        Boolean  @default(false)
+  stripeCustomerId String?  @map("stripe_customer_id")
+  brandLogoUrl     String?  @map("brand_logo_url")
+  brandLegalName   String?  @map("brand_legal_name")
+  brandAddress     String?  @map("brand_address")
+  brandPhone       String?  @map("brand_phone")
+  brandEmail       String?  @map("brand_email")
+  brandWebsite     String?  @map("brand_website")
+  brandTaxId       String?  @map("brand_tax_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  memberships       Membership[]
+  leads             Lead[]
+  quotations        Quotation[]
+  productionOrders  ProductionOrder[]
+  payments          Payment[]
+  subscriptions     Subscription[]
+  whatsappThreads   WhatsAppThread[]
+  outboundMessages  OutboundMessage[]
+  telecallerCalls   TelecallerCallLog[]
+
+  @@map("organizations")
+}
+
+model Membership {
+  id             String         @id @default(cuid())
+  userId         String         @map("user_id")
+  organizationId String         @map("organization_id")
+  role           MembershipRole @default(VIEWER)
+  createdAt      DateTime       @default(now()) @map("created_at")
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+  @@map("memberships")
+}
+
+model Lead {
+  id              String     @id @default(cuid())
+  organizationId  String     @map("organization_id")
+  source          LeadSource @default(OTHER)
+  stage           LeadStage  @default(NEW)
+  title           String
+  company         String?
+  phone           String?
+  email           String?
+  notes           String?
+  assigneeId      String?    @map("assignee_id")
+  nextFollowUpAt  DateTime?  @map("next_follow_up_at")
+  estimatedValue  Decimal?   @map("estimated_value") @db.Decimal(12, 2)
+  createdAt       DateTime   @default(now()) @map("created_at")
+  updatedAt       DateTime   @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  assignee     User?        @relation("LeadAssignee", fields: [assigneeId], references: [id])
+  activities   LeadActivity[]
+  quotations   Quotation[]
+  production   ProductionOrder?
+  threads      WhatsAppThread[]
+  outbound     OutboundMessage[]
+  calls        TelecallerCallLog[]
+
+  @@index([organizationId, stage])
+  @@index([organizationId, nextFollowUpAt])
+  @@map("leads")
+}
+
+model LeadActivity {
+  id        String             @id @default(cuid())
+  leadId    String             @map("lead_id")
+  userId    String?            @map("user_id")
+  type      LeadActivityType   @default(NOTE)
+  body      String
+  metadata  Json?
+  createdAt DateTime           @default(now()) @map("created_at")
+
+  lead Lead  @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  user User? @relation("LeadActivityActor", fields: [userId], references: [id])
+
+  @@index([leadId])
+  @@map("lead_activities")
+}
+
+model Quotation {
+  id             String           @id @default(cuid())
+  organizationId String           @map("organization_id")
+  leadId         String           @map("lead_id")
+  authorId       String?          @map("author_id")
+  number         String
+  version        Int              @default(1)
+  status         QuotationStatus  @default(DRAFT)
+  pdfUrl         String?          @map("pdf_url")
+  subtotal       Decimal          @default(0) @db.Decimal(12, 2)
+  tax            Decimal          @default(0) @db.Decimal(12, 2)
+  total          Decimal          @default(0) @db.Decimal(12, 2)
+  sentAt         DateTime?        @map("sent_at")
+  pdfJobId       String?          @map("pdf_job_id")
+  createdAt      DateTime         @default(now()) @map("created_at")
+  updatedAt      DateTime         @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lead         Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  author       User?        @relation("QuotationAuthor", fields: [authorId], references: [id])
+  lines        QuotationLine[]
+  productionOrders ProductionOrder[]
+
+  @@unique([organizationId, number])
+  @@index([organizationId, status])
+  @@map("quotations")
+}
+
+model QuotationLine {
+  id          String   @id @default(cuid())
+  quotationId String   @map("quotation_id")
+  description String
+  quantity    Decimal  @default(1) @db.Decimal(12, 2)
+  unitPrice   Decimal  @map("unit_price") @db.Decimal(12, 2)
+  lineTotal   Decimal  @map("line_total") @db.Decimal(12, 2)
+  sortOrder   Int      @default(0) @map("sort_order")
+
+  quotation Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+
+  @@index([quotationId])
+  @@map("quotation_lines")
+}
+
+model ProductionOrder {
+  id             String           @id @default(cuid())
+  organizationId String           @map("organization_id")
+  leadId         String           @unique @map("lead_id")
+  quotationId    String?          @map("quotation_id")
+  stage          ProductionStage  @default(PENDING)
+  delayFlag      Boolean          @default(false) @map("delay_flag")
+  stageEnteredAt DateTime         @default(now()) @map("stage_entered_at")
+  createdAt      DateTime         @default(now()) @map("created_at")
+  updatedAt      DateTime         @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lead         Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  quotation    Quotation?   @relation(fields: [quotationId], references: [id])
+  payments     Payment[]
+
+  @@index([organizationId, stage])
+  @@map("production_orders")
+}
+
+model Payment {
+  id                 String        @id @default(cuid())
+  organizationId     String        @map("organization_id")
+  productionOrderId  String        @map("production_order_id")
+  amountCents        Int           @map("amount_cents")
+  status             PaymentStatus @default(PENDING)
+  note               String?
+  recordedAt         DateTime      @default(now()) @map("recorded_at")
+
+  organization    Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  productionOrder   ProductionOrder @relation(fields: [productionOrderId], references: [id], onDelete: Cascade)
+
+  @@index([productionOrderId])
+  @@map("payments")
+}
+
+model Subscription {
+  id                   String   @id @default(cuid())
+  organizationId       String   @map("organization_id")
+  stripeSubscriptionId String?  @map("stripe_subscription_id")
+  planKey              String   @map("plan_key")
+  status               String   @default("inactive")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@map("subscriptions")
+}
+
+model WhatsAppThread {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  leadId         String   @map("lead_id")
+  externalWaId   String   @map("external_wa_id")
+  lastMessageAt  DateTime? @map("last_message_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lead         Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  messages     WhatsAppMessage[]
+
+  @@unique([organizationId, externalWaId])
+  @@index([leadId])
+  @@map("whatsapp_threads")
+}
+
+model WhatsAppMessage {
+  id        String   @id @default(cuid())
+  threadId  String   @map("thread_id")
+  direction String
+  body      String
+  raw       Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  thread WhatsAppThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId])
+  @@map("whatsapp_messages")
+}
+
+model OutboundMessage {
+  id             String                 @id @default(cuid())
+  organizationId String                 @map("organization_id")
+  leadId         String?                @map("lead_id")
+  channel        OutboundChannel        @default(WHATSAPP)
+  payload        Json
+  status         OutboundMessageStatus  @default(QUEUED)
+  attempts       Int                    @default(0)
+  nextAttemptAt  DateTime?              @map("next_attempt_at")
+  lastError      String?                @map("last_error")
+  createdAt      DateTime               @default(now()) @map("created_at")
+  updatedAt      DateTime               @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lead         Lead?        @relation(fields: [leadId], references: [id])
+
+  @@index([organizationId, status])
+  @@map("outbound_messages")
+}
+
+model TelecallerCallLog {
+  id             String      @id @default(cuid())
+  organizationId String      @map("organization_id")
+  leadId         String      @map("lead_id")
+  userId         String      @map("user_id")
+  attemptNumber  Int         @map("attempt_number")
+  outcome        CallOutcome
+  notes          String?
+  nextCallAt     DateTime?   @map("next_call_at")
+  createdAt      DateTime    @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lead         Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id])
+
+  @@index([organizationId, createdAt])
+  @@index([leadId])
+  @@map("telecaller_call_logs")
+}
