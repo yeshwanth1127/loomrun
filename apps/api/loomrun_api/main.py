@@ -11,6 +11,7 @@ from loomrun_api.routers import (
     auth,
     dashboard,
     integrations_whatsapp,
+    lead_connections,
     leads,
     orgs,
     production,
@@ -43,6 +44,7 @@ app.include_router(admin.router, prefix="/v1/admin", tags=["admin"])
 app.include_router(whatsapp_hooks.router, prefix="/v1", tags=["hooks"])
 app.include_router(orgs.router, prefix="/v1", tags=["organizations"])
 app.include_router(leads.router, prefix="/v1", tags=["leads"])
+app.include_router(lead_connections.router, prefix="/v1", tags=["lead-connections"])
 app.include_router(quotations.router, prefix="/v1", tags=["quotations"])
 app.include_router(production.router, prefix="/v1", tags=["production"])
 app.include_router(integrations_whatsapp.router, prefix="/v1", tags=["whatsapp"])

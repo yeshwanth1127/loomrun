@@ -3,6 +3,7 @@ import { useAuth } from './context/AuthContext'
 import { AppShell } from './components/AppShell'
 import { CEODashboardPage } from './pages/CEODashboardPage'
 import { LeadsPage } from './pages/LeadsPage'
+import { LeadConnectionsPage } from './pages/LeadConnectionsPage'
 import { LoginPage } from './pages/LoginPage'
 import { ProductionPage } from './pages/ProductionPage'
 import { QuotationsPage } from './pages/QuotationsPage'
@@ -36,6 +37,7 @@ export default function App() {
       <Route path="/app" element={<AppShell />}>
         <Route index element={<Navigate to="leads" replace />} />
         <Route path="leads" element={<LeadsPage />} />
+        <Route path="leads/connections" element={<LeadConnectionsPage />} />
         <Route path="quotations" element={<QuotationsPage />} />
         <Route path="production" element={<ProductionPage />} />
         <Route path="telecaller" element={<TelecallerPage />} />

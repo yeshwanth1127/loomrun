@@ -25,6 +25,18 @@ enum LeadSource {
   INSTAGRAM
   REFERRAL
   OTHER
+  META_ADS
+  GOOGLE_ADS
+  INDIAMART
+  WEBSITE
+  MANUAL
+}
+
+enum LeadStatus {
+  ACTIVE
+  WON
+  LOST
+  UNQUALIFIED
 }
 
 enum LeadStage {
@@ -145,6 +157,7 @@ model Organization {
   whatsappThreads   WhatsAppThread[]
   outboundMessages  OutboundMessage[]
   telecallerCalls   TelecallerCallLog[]
+  leadConnections   LeadConnection[]
 
   @@map("organizations")
 }
@@ -165,20 +178,28 @@ model Membership {
 }
 
 model Lead {
-  id              String     @id @default(cuid())
-  organizationId  String     @map("organization_id")
-  source          LeadSource @default(OTHER)
-  stage           LeadStage  @default(NEW)
-  title           String
-  company         String?
-  phone           String?
-  email           String?
-  notes           String?
-  assigneeId      String?    @map("assignee_id")
-  nextFollowUpAt  DateTime?  @map("next_follow_up_at")
-  estimatedValue  Decimal?   @map("estimated_value") @db.Decimal(12, 2)
-  createdAt       DateTime   @default(now()) @map("created_at")
-  updatedAt       DateTime   @updatedAt @map("updated_at")
+  id               String      @id @default(cuid())
+  organizationId   String      @map("organization_id")
+  source           LeadSource  @default(OTHER)
+  stage            LeadStage   @default(NEW)
+  leadStatus       LeadStatus  @default(ACTIVE) @map("lead_status")
+  title            String
+  company          String?
+  phone            String?
+  email            String?
+  city             String?
+  sourceDetail     String?     @map("source_detail")
+  productInterest  String?     @map("product_interest")
+  quantityEstimate String?     @map("quantity_estimate")
+  leadScore        Int         @default(0) @map("lead_score")
+  tags             String[]
+  notes            String?
+  assigneeId       String?     @map("assignee_id")
+  nextFollowUpAt   DateTime?   @map("next_follow_up_at")
+  lastActivityAt   DateTime?   @map("last_activity_at")
+  estimatedValue   Decimal?    @map("estimated_value") @db.Decimal(12, 2)
+  createdAt        DateTime    @default(now()) @map("created_at")
+  updatedAt        DateTime    @updatedAt @map("updated_at")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   assignee     User?        @relation("LeadAssignee", fields: [assigneeId], references: [id])
@@ -353,6 +374,25 @@ model OutboundMessage {
 
   @@index([organizationId, status])
   @@map("outbound_messages")
+}
+
+model LeadConnection {
+  id             String    @id @default(cuid())
+  organizationId String    @map("organization_id")
+  sourceName     String    @map("source_name")
+  status         String    @default("disconnected")
+  credentials    Json?
+  webhookSecret  String?   @map("webhook_secret")
+  lastSync       DateTime? @map("last_sync")
+  leadsCount     Int       @default(0) @map("leads_count")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, sourceName])
+  @@index([organizationId])
+  @@map("lead_connections")
 }
 
 model TelecallerCallLog {

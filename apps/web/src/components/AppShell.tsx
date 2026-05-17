@@ -4,6 +4,7 @@ import {
   Building2,
   FileText,
   LayoutDashboard,
+  Link2,
   LogOut,
   MessageCircle,
   Palette,
@@ -25,11 +26,12 @@ type OrgBrandMeta = {
 }
 
 const NAV = [
-  { to: '/app/leads',       icon: LayoutDashboard, label: 'Leads' },
-  { to: '/app/quotations',  icon: FileText,         label: 'Quotations' },
-  { to: '/app/production',  icon: Zap,              label: 'Production' },
-  { to: '/app/telecaller',  icon: Phone,            label: 'Telecaller' },
-  { to: '/app/whatsapp',    icon: MessageCircle,    label: 'WhatsApp' },
+  { to: '/app/leads',              icon: LayoutDashboard, label: 'Leads' },
+  { to: '/app/leads/connections',  icon: Link2,           label: 'Integrations' },
+  { to: '/app/quotations',         icon: FileText,        label: 'Quotations' },
+  { to: '/app/production',         icon: Zap,             label: 'Production' },
+  { to: '/app/telecaller',         icon: Phone,           label: 'Telecaller' },
+  { to: '/app/whatsapp',           icon: MessageCircle,   label: 'WhatsApp' },
 ]
 
 const CEO_NAV = [
