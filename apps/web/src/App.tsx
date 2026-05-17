@@ -11,6 +11,7 @@ import { RegisterPage } from './pages/RegisterPage'
 import { RegisterSuperAdminPage } from './pages/RegisterSuperAdminPage'
 import { TeamPage } from './pages/TeamPage'
 import { TelecallerPage } from './pages/TelecallerPage'
+import { TelephonyPage } from './pages/TelephonyPage'
 import { WhatsAppPage } from './pages/WhatsAppPage'
 import { AdminPage } from './pages/AdminPage'
 import { BrandAssetsPage } from './pages/BrandAssetsPage'
@@ -41,6 +42,7 @@ export default function App() {
         <Route path="quotations" element={<QuotationsPage />} />
         <Route path="production" element={<ProductionPage />} />
         <Route path="telecaller" element={<TelecallerPage />} />
+        <Route path="settings/telephony" element={<TelephonyPage />} />
         <Route path="whatsapp" element={<WhatsAppPage />} />
         <Route path="ceo" element={<CEODashboardPage />} />
         <Route path="brand-assets" element={<BrandAssetsPage />} />

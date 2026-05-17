@@ -91,26 +91,28 @@ async def connect_source(org_id: str, body: ConnectPayload, ctx: OrgContext = De
         where={"organizationId": ctx.organization_id, "sourceName": body.source_name}
     )
     if existing:
+        update_data = {
+            "status": "connected",
+            "webhookSecret": existing.webhookSecret or webhook_secret,
+        }
+        if creds is not None:
+            update_data["credentials"] = creds
         updated = await prisma.leadconnection.update(
             where={"id": existing.id},
-            data={
-                "status": "connected",
-                "credentials": creds,
-                "webhookSecret": existing.webhookSecret or webhook_secret,
-            },
+            data=update_data,
         )
         return _serialize_connection(updated)
 
-    created = await prisma.leadconnection.create(
-        data={
-            "organizationId": ctx.organization_id,
-            "sourceName": body.source_name,
-            "status": "connected",
-            "credentials": creds,
-            "webhookSecret": webhook_secret,
-            "leadsCount": 0,
-        }
-    )
+    create_data = {
+        "organizationId": ctx.organization_id,
+        "sourceName": body.source_name,
+        "status": "connected",
+        "webhookSecret": webhook_secret,
+        "leadsCount": 0,
+    }
+    if creds is not None:
+        create_data["credentials"] = creds
+    created = await prisma.leadconnection.create(data=create_data)
     return _serialize_connection(created)
 
 

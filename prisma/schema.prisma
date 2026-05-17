@@ -158,6 +158,8 @@ model Organization {
   outboundMessages  OutboundMessage[]
   telecallerCalls   TelecallerCallLog[]
   leadConnections   LeadConnection[]
+  telephonyConfigs  TelephonyConfig[]
+  catalogItems      CatalogItem[]
 
   @@map("organizations")
 }
@@ -396,21 +398,61 @@ model LeadConnection {
 }
 
 model TelecallerCallLog {
-  id             String      @id @default(cuid())
-  organizationId String      @map("organization_id")
-  leadId         String      @map("lead_id")
-  userId         String      @map("user_id")
-  attemptNumber  Int         @map("attempt_number")
-  outcome        CallOutcome
-  notes          String?
-  nextCallAt     DateTime?   @map("next_call_at")
-  createdAt      DateTime    @default(now()) @map("created_at")
+  id              String      @id @default(cuid())
+  organizationId  String      @map("organization_id")
+  leadId          String      @map("lead_id")
+  userId          String?     @map("user_id")
+  attemptNumber   Int         @map("attempt_number")
+  outcome         CallOutcome
+  notes           String?
+  nextCallAt      DateTime?   @map("next_call_at")
+  callSid         String?     @map("call_sid")
+  recordingUrl    String?     @map("recording_url")
+  transcriptRaw   String?     @map("transcript_raw")
+  aiSummary       String?     @map("ai_summary")
+  durationSeconds Int?        @map("duration_seconds")
+  callSource      String      @default("HUMAN") @map("call_source")
+  createdAt       DateTime    @default(now()) @map("created_at")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   lead         Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  user         User         @relation(fields: [userId], references: [id])
+  user         User?        @relation(fields: [userId], references: [id])
 
   @@index([organizationId, createdAt])
   @@index([leadId])
   @@map("telecaller_call_logs")
+}
+
+model TelephonyConfig {
+  id             String    @id @default(cuid())
+  organizationId String    @map("organization_id")
+  providerType   String    @map("provider_type")
+  providerName   String    @map("provider_name")
+  status         String    @default("disconnected")
+  isActive       Boolean   @default(false) @map("is_active")
+  credentials    Json?
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, providerType, providerName])
+  @@index([organizationId, providerType])
+  @@map("telephony_configs")
+}
+
+model CatalogItem {
+  id             String    @id @default(cuid())
+  organizationId String    @map("organization_id")
+  name           String
+  description    String?
+  unitPrice      Float     @map("unit_price")
+  sku            String?
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@map("catalog_items")
 }

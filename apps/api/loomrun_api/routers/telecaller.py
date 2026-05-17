@@ -14,6 +14,7 @@ class CallLogCreate(BaseModel):
     lead_id: str
     outcome: CallOutcome
     notes: str | None = None
+    duration_seconds: int | None = None
     next_call_at: datetime | None = None
 
 
@@ -36,7 +37,9 @@ async def log_call(
             "attemptNumber": attempt,
             "outcome": body.outcome,
             "notes": body.notes,
+            "durationSeconds": body.duration_seconds,
             "nextCallAt": body.next_call_at,
+            "callSource": "HUMAN",
         }
     )
     await prisma.leadactivity.create(
@@ -45,7 +48,11 @@ async def log_call(
             "userId": ctx.membership.userId,
             "type": LeadActivityType.CALL,
             "body": f"Call attempt {attempt}: {body.outcome.name}",
-            "metadata": {"outcome": body.outcome.name, "notes": body.notes},
+            "metadata": {
+                "outcome": body.outcome.name,
+                "notes": body.notes,
+                "duration_seconds": body.duration_seconds,
+            },
         }
     )
     return {
@@ -53,6 +60,35 @@ async def log_call(
         "attempt_number": row.attemptNumber,
         "outcome": row.outcome.name,
         "created_at": row.createdAt.isoformat(),
+    }
+
+
+@router.get("/orgs/{org_id}/telecaller/calls/{call_id}")
+async def get_call(
+    org_id: str,
+    call_id: str,
+    ctx: OrgContext = Depends(get_org_context),
+) -> dict:
+    call = await prisma.telecallercalllog.find_first(
+        where={"id": call_id, "organizationId": ctx.organization_id},
+        include={"user": True, "lead": True},
+    )
+    if not call:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Call not found")
+    return {
+        "id": call.id,
+        "lead_title": call.lead.title if call.lead else None,
+        "user_email": call.user.email if call.user else None,
+        "outcome": call.outcome.name if hasattr(call.outcome, "name") else str(call.outcome),
+        "notes": call.notes,
+        "duration_seconds": call.durationSeconds,
+        "call_source": call.callSource,
+        "attempt_number": call.attemptNumber,
+        "recording_url": call.recordingUrl,
+        "transcript_raw": call.transcriptRaw,
+        "ai_summary": call.aiSummary,
+        "created_at": call.createdAt.isoformat(),
+        "next_call_at": call.nextCallAt.isoformat() if call.nextCallAt else None,
     }
 
 

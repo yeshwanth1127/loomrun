@@ -1,8 +1,10 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from arq.connections import create_pool, RedisSettings
 
+from loomrun_api.config import settings
 from loomrun_api.deps import OrgContext, get_org_context
 from loomrun_api.prisma_client import prisma
 from prisma.enums import LeadActivityType, LeadSource, LeadStage, LeadStatus
@@ -221,6 +223,19 @@ async def create_lead(org_id: str, body: LeadCreate, ctx: OrgContext = Depends(g
             "body": "Lead created",
         }
     )
+
+    # Enqueue 5-minute auto-call check
+    try:
+        pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+        await pool.enqueue_job(
+            "check_lead_call_needed",
+            lead.id,
+            ctx.organization_id,
+            _defer_by=timedelta(minutes=5),
+        )
+    except Exception:
+        pass  # Non-critical; auto-call can be triggered manually if needed
+
     return _serialize_lead(lead)
 
 

@@ -9,6 +9,7 @@ from loomrun_api.prisma_client import prisma
 from loomrun_api.routers import (
     admin,
     auth,
+    catalog,
     dashboard,
     integrations_whatsapp,
     lead_connections,
@@ -17,6 +18,7 @@ from loomrun_api.routers import (
     production,
     quotations,
     telecaller,
+    telephony,
     whatsapp_hooks,
 )
 
@@ -45,6 +47,8 @@ app.include_router(whatsapp_hooks.router, prefix="/v1", tags=["hooks"])
 app.include_router(orgs.router, prefix="/v1", tags=["organizations"])
 app.include_router(leads.router, prefix="/v1", tags=["leads"])
 app.include_router(lead_connections.router, prefix="/v1", tags=["lead-connections"])
+app.include_router(telephony.router, prefix="/v1", tags=["telephony"])
+app.include_router(catalog.router, prefix="/v1", tags=["catalog"])
 app.include_router(quotations.router, prefix="/v1", tags=["quotations"])
 app.include_router(production.router, prefix="/v1", tags=["production"])
 app.include_router(integrations_whatsapp.router, prefix="/v1", tags=["whatsapp"])

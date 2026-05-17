@@ -6,6 +6,14 @@ import { useAuth } from '../context/AuthContext'
 import { apiFetch } from '../lib/api'
 
 type Lead = { id: string; title: string }
+type CatalogItem = {
+  id: string
+  name: string
+  description: string | null
+  unit_price: number
+  sku: string | null
+  created_at: string
+}
 type Quotation = {
   id: string
   number: string
@@ -38,6 +46,12 @@ export function QuotationsPage() {
     queryKey: ['leads-select', orgId],
     enabled: !!orgId,
     queryFn: () => apiFetch<{ items: Lead[] }>(`/v1/orgs/${orgId}/leads`),
+  })
+
+  const catalogQ = useQuery({
+    queryKey: ['catalog', orgId],
+    enabled: !!orgId,
+    queryFn: () => apiFetch<{ items: CatalogItem[] }>(`/v1/orgs/${orgId}/catalog`),
   })
 
   const q = useQuery({
@@ -136,6 +150,39 @@ export function QuotationsPage() {
 
               <div>
                 <div className="input-label" style={{ marginBottom: '0.5rem' }}>Line items</div>
+
+                {(catalogQ.data?.items?.length ?? 0) > 0 && (
+                  <div style={{ marginBottom: '0.75rem' }}>
+                    <div className="muted small" style={{ marginBottom: '0.3rem' }}>Quick add from catalog</div>
+                    <div className="row" style={{ gap: '0.5rem', alignItems: 'center' }}>
+                      <select
+                        className="select"
+                        defaultValue=""
+                        onChange={(e) => {
+                          if (e.target.value) {
+                            const item = catalogQ.data!.items.find((i) => i.id === e.target.value)
+                            if (item) {
+                              addLine()
+                              const lastIdx = lines.length
+                              updateLine(lastIdx, 'description', item.name)
+                              updateLine(lastIdx, 'unit_price', String(item.unit_price))
+                            }
+                          }
+                          e.target.value = ''
+                        }}
+                        style={{ flex: 1 }}
+                      >
+                        <option value="">Select item to add…</option>
+                        {catalogQ.data?.items.map((item) => (
+                          <option key={item.id} value={item.id}>
+                            {item.name} (₹{item.unit_price.toLocaleString('en-IN')})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                )}
+
                 <div className="stack" style={{ gap: '0.5rem' }}>
                   {lines.map((line, i) => (
                     <div key={i} className="row" style={{ gap: '0.5rem', alignItems: 'center' }}>
@@ -179,7 +226,7 @@ export function QuotationsPage() {
                   ))}
                 </div>
                 <button type="button" className="btn btn-ghost btn-sm" style={{ marginTop: '0.5rem' }} onClick={addLine}>
-                  + Add line
+                  + Add line manually
                 </button>
               </div>
 

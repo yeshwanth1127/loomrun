@@ -69,6 +69,67 @@ async def process_outbound_whatsapp(_ctx: dict) -> int:
         await db.disconnect()
 
 
+async def check_lead_call_needed(_ctx: dict, lead_id: str, org_id: str) -> str:
+    """
+    Check if a lead needs an automated AI call (5-min fallback).
+
+    Fires 5 minutes after lead creation. If no human-initiated call has been logged,
+    triggers an automated call via the org's active AI call provider.
+    """
+    import httpx
+
+    db = Prisma()
+    await db.connect()
+    try:
+        existing_call = await db.telecallercalllog.find_first(
+            where={"leadId": lead_id, "organizationId": org_id}
+        )
+        if existing_call:
+            logger.info("Lead %s already has a call log, skipping AI auto-call", lead_id)
+            return "skipped"
+
+        lead = await db.lead.find_first(where={"id": lead_id})
+        if not lead or not lead.phone:
+            logger.warning("Lead %s has no phone number, skipping AI auto-call", lead_id)
+            return "no_phone"
+
+        config = await db.telephonyconfig.find_first(
+            where={"organizationId": org_id, "providerType": "AI_CALL", "isActive": True}
+        )
+        if not config:
+            logger.warning("Org %s has no active AI call provider configured", org_id)
+            return "no_provider"
+
+        from loomrun_api.telephony.resolver import get_active_ai_adapter
+
+        try:
+            adapter = get_active_ai_adapter.__wrapped__(org_id)  # call the unwrapped coroutine
+            await adapter.initiate_call(
+                lead_phone=lead.phone,
+                lead_name=lead.title,
+                metadata={"lead_id": lead_id, "org_id": org_id}
+            )
+
+            attempt_number = await db.telecallercalllog.count(where={"leadId": lead_id}) + 1
+            await db.telecallercalllog.create(
+                data={
+                    "organizationId": org_id,
+                    "leadId": lead_id,
+                    "userId": None,
+                    "attemptNumber": attempt_number,
+                    "outcome": "CONNECTED",
+                    "callSource": "AI_AUTO",
+                }
+            )
+            logger.info("AI auto-call initiated for lead %s via %s", lead_id, config.providerName)
+            return "initiated"
+        except Exception as e:
+            logger.error("Failed to initiate AI auto-call for lead %s: %s", lead_id, e)
+            return "failed"
+    finally:
+        await db.disconnect()
+
+
 class WorkerSettings:
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
-    functions = [generate_quotation_pdf_job, process_outbound_whatsapp]
+    functions = [generate_quotation_pdf_job, process_outbound_whatsapp, check_lead_call_needed]

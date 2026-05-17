@@ -9,6 +9,7 @@ import {
   MessageCircle,
   Palette,
   Phone,
+  Smartphone,
   Users,
   Zap,
 } from 'lucide-react'
@@ -157,6 +158,13 @@ export function AppShell() {
               <div className="sidebar-section-label">Settings</div>
               {isOwner && (
                 <>
+                  <NavLink
+                    to="/app/settings/telephony"
+                    className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
+                  >
+                    <Smartphone size={16} />
+                    Telephony
+                  </NavLink>
                   <NavLink
                     to="/app/brand-assets"
                     className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
