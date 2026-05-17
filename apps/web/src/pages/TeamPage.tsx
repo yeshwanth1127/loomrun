@@ -14,7 +14,7 @@ type Member = {
   created_at: string
 }
 
-const ROLES = ['SALES', 'TELECALLER', 'PRODUCTION', 'VIEWER'] as const
+const ROLES = ['TELECALLER'] as const
 
 const ROLE_COLOR: Record<string, string> = {
   OWNER:      'badge-indigo',
@@ -30,7 +30,7 @@ export function TeamPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [name, setName] = useState('')
-  const [role, setRole] = useState<string>('SALES')
+  const [role, setRole] = useState<string>('TELECALLER')
 
   const membership = me?.organizations.find((o) => o.organization.id === orgId)
   const isOwner = membership?.role === 'OWNER'

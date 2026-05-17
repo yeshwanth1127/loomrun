@@ -28,10 +28,10 @@ type OrgBrandMeta = {
 
 const NAV = [
   { to: '/app/leads',              icon: LayoutDashboard, label: 'Leads' },
+  { to: '/app/telecaller',         icon: Phone,           label: 'Telecaller' },
   { to: '/app/leads/connections',  icon: Link2,           label: 'Integrations' },
   { to: '/app/quotations',         icon: FileText,        label: 'Quotations' },
   { to: '/app/production',         icon: Zap,             label: 'Production' },
-  { to: '/app/telecaller',         icon: Phone,           label: 'Telecaller' },
   { to: '/app/whatsapp',           icon: MessageCircle,   label: 'WhatsApp' },
 ]
 
@@ -211,7 +211,14 @@ export function AppShell() {
           )}
           <div className="user-row">
             <div className="user-avatar">{initials}</div>
-            <div className="user-email">{me.email}</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div className="user-email">{me.email}</div>
+              {membership?.role && (
+                <div style={{ fontSize: '0.65rem', color: '#94a3b8', marginTop: '0.1rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  {membership.role}
+                </div>
+              )}
+            </div>
             <button type="button" className="btn-logout" onClick={() => logout()} title="Sign out">
               <LogOut size={15} />
             </button>

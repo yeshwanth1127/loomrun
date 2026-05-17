@@ -5,9 +5,13 @@ from pydantic import BaseModel
 
 from loomrun_api.deps import OrgContext, get_org_context
 from loomrun_api.prisma_client import prisma
-from prisma.enums import CallOutcome, LeadActivityType
+from prisma.enums import CallOutcome, LeadActivityType, LeadStage
 
 router = APIRouter()
+
+
+def _enum_str(val) -> str:
+    return val.name if hasattr(val, "name") else str(val)
 
 
 class CallLogCreate(BaseModel):
@@ -42,23 +46,37 @@ async def log_call(
             "callSource": "HUMAN",
         }
     )
+    call_body = f"Call attempt {attempt}: {body.outcome.name}"
+    if body.notes:
+        call_body += f" — {body.notes}"
     await prisma.leadactivity.create(
         data={
             "leadId": body.lead_id,
             "userId": ctx.membership.userId,
             "type": LeadActivityType.CALL,
-            "body": f"Call attempt {attempt}: {body.outcome.name}",
-            "metadata": {
-                "outcome": body.outcome.name,
-                "notes": body.notes,
-                "duration_seconds": body.duration_seconds,
-            },
+            "body": call_body,
         }
     )
+
+    if lead.stage == LeadStage.NEW:
+        await prisma.lead.update(
+            where={"id": body.lead_id},
+            data={"stage": LeadStage.CONTACTED, "lastActivityAt": datetime.utcnow()},
+        )
+        stage_note = body.outcome.name + (f" — {body.notes}" if body.notes else "")
+        await prisma.leadactivity.create(
+            data={
+                "leadId": body.lead_id,
+                "userId": ctx.membership.userId,
+                "type": LeadActivityType.STAGE_CHANGE,
+                "body": f"Moved to Contacted — {stage_note}",
+            }
+        )
+
     return {
         "id": row.id,
         "attempt_number": row.attemptNumber,
-        "outcome": row.outcome.name,
+        "outcome": _enum_str(row.outcome),
         "created_at": row.createdAt.isoformat(),
     }
 
@@ -79,7 +97,7 @@ async def get_call(
         "id": call.id,
         "lead_title": call.lead.title if call.lead else None,
         "user_email": call.user.email if call.user else None,
-        "outcome": call.outcome.name if hasattr(call.outcome, "name") else str(call.outcome),
+        "outcome": _enum_str(call.outcome),
         "notes": call.notes,
         "duration_seconds": call.durationSeconds,
         "call_source": call.callSource,
@@ -96,6 +114,7 @@ async def get_call(
 async def telecaller_daily_summary(
     org_id: str,
     day: str | None = Query(None, description="YYYY-MM-DD in UTC; default today"),
+    user_id: str | None = Query(None, description="Filter by user ID"),
     ctx: OrgContext = Depends(get_org_context),
 ) -> dict:
     if day:
@@ -106,16 +125,19 @@ async def telecaller_daily_summary(
     else:
         start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     end = start + timedelta(days=1)
+    where: dict = {
+        "organizationId": ctx.organization_id,
+        "createdAt": {"gte": start, "lt": end},
+    }
+    if user_id:
+        where["userId"] = user_id
     calls = await prisma.telecallercalllog.find_many(
-        where={
-            "organizationId": ctx.organization_id,
-            "createdAt": {"gte": start, "lt": end},
-        },
+        where=where,
         include={"user": True, "lead": True},
     )
     by_outcome: dict[str, int] = {}
     for c in calls:
-        name = c.outcome.name if hasattr(c.outcome, "name") else str(c.outcome)
+        name = _enum_str(c.outcome)
         by_outcome[name] = by_outcome.get(name, 0) + 1
     return {
         "date": start.date().isoformat(),
@@ -126,7 +148,7 @@ async def telecaller_daily_summary(
                 "id": c.id,
                 "lead_title": c.lead.title if c.lead else None,
                 "user_email": c.user.email if c.user else None,
-                "outcome": c.outcome.name if hasattr(c.outcome, "name") else str(c.outcome),
+                "outcome": _enum_str(c.outcome),
                 "created_at": c.createdAt.isoformat(),
             }
             for c in calls

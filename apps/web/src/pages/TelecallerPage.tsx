@@ -20,7 +20,7 @@ const OUTCOMES = [
 const OUTCOME_MAP = Object.fromEntries(OUTCOMES.map((o) => [o.value, o]))
 
 export function TelecallerPage() {
-  const { orgId } = useAuth()
+  const { orgId, me } = useAuth()
   const qc = useQueryClient()
   const [leadId, setLeadId] = useState('')
   const [outcome, setOutcome] = useState('CONNECTED')
@@ -29,23 +29,30 @@ export function TelecallerPage() {
   const [nextFollowUpDate, setNextFollowUpDate] = useState('')
   const [selectedCallId, setSelectedCallId] = useState<string | null>(null)
 
+  const membership = me?.organizations.find((o) => o.organization.id === orgId)
+  const isTelecaller = membership?.role === 'TELECALLER'
+  const myUserId = me?.id ?? null
+
   const leadsQ = useQuery({
     queryKey: ['leads-select', orgId],
     enabled: !!orgId,
     queryFn: () => apiFetch<{ items: Lead[] }>(`/v1/orgs/${orgId}/leads`),
   })
 
+  const summaryUserId = isTelecaller ? myUserId : null
   const summary = useQuery({
-    queryKey: ['tele-summary', orgId],
+    queryKey: ['tele-summary', orgId, summaryUserId],
     enabled: !!orgId,
     refetchInterval: 30_000,
-    queryFn: () =>
-      apiFetch<{
+    queryFn: () => {
+      const qs = summaryUserId ? `?user_id=${summaryUserId}` : ''
+      return apiFetch<{
         date: string
         total_calls: number
         by_outcome: Record<string, number>
         calls: { id: string; lead_title: string | null; user_email: string | null; outcome: string; created_at: string }[]
-      }>(`/v1/orgs/${orgId}/telecaller/daily-summary`),
+      }>(`/v1/orgs/${orgId}/telecaller/daily-summary${qs}`)
+    },
   })
 
   const callDetail = useQuery({
@@ -106,7 +113,7 @@ export function TelecallerPage() {
     <>
       <div className="page-header">
         <h1>Telecaller</h1>
-        <p>Log calls and track daily performance</p>
+        <p>{isTelecaller ? 'Your calls and daily performance' : 'Log calls and track daily performance'}</p>
       </div>
 
       <div className="page-body" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem', alignItems: 'start' }}>
@@ -194,7 +201,7 @@ export function TelecallerPage() {
               {/* Outcome breakdown */}
               <div className="card">
                 <div style={{ fontWeight: 700, marginBottom: '1rem' }}>
-                  Today — {data.date}
+                  {isTelecaller ? 'My Today' : 'Today'} — {data.date}
                 </div>
                 <div style={{ fontSize: '2.5rem', fontWeight: 800, color: '#0f172a', lineHeight: 1 }}>
                   {data.total_calls}
