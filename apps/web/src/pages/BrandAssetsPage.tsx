@@ -24,6 +24,8 @@ type BrandPayload = {
   website: string | null
   tax_id: string | null
   has_logo: boolean
+  has_signature?: boolean
+  has_upi_qr?: boolean
   updated_at: string
 }
 
@@ -40,6 +42,8 @@ export function BrandAssetsPage() {
   const [website, setWebsite] = useState('')
   const [taxId, setTaxId] = useState('')
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [signaturePreviewUrl, setSignaturePreviewUrl] = useState<string | null>(null)
+  const [upiQrPreviewUrl, setUpiQrPreviewUrl] = useState<string | null>(null)
 
   const brandQ = useQuery({
     queryKey: ['org-brand', orgId],
@@ -88,6 +92,56 @@ export function BrandAssetsPage() {
       if (revoke) URL.revokeObjectURL(revoke)
     }
   }, [orgId, brandQ.data?.has_logo, brandQ.data?.updated_at])
+
+  useEffect(() => {
+    let revoke: string | null = null
+    if (!orgId || !brandQ.data?.has_signature) {
+      setSignaturePreviewUrl(null)
+      return () => {}
+    }
+    const token = localStorage.getItem('access_token')
+    ;(async () => {
+      const res = await fetch(`${base}/v1/orgs/${orgId}/brand/signature`, {
+        headers: { Authorization: `Bearer ${token ?? ''}` },
+      })
+      if (!res.ok) {
+        setSignaturePreviewUrl(null)
+        return
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      revoke = url
+      setSignaturePreviewUrl(url)
+    })().catch(() => setSignaturePreviewUrl(null))
+    return () => {
+      if (revoke) URL.revokeObjectURL(revoke)
+    }
+  }, [orgId, brandQ.data?.has_signature, brandQ.data?.updated_at])
+
+  useEffect(() => {
+    let revoke: string | null = null
+    if (!orgId || !brandQ.data?.has_upi_qr) {
+      setUpiQrPreviewUrl(null)
+      return () => {}
+    }
+    const token = localStorage.getItem('access_token')
+    ;(async () => {
+      const res = await fetch(`${base}/v1/orgs/${orgId}/brand/upi-qr`, {
+        headers: { Authorization: `Bearer ${token ?? ''}` },
+      })
+      if (!res.ok) {
+        setUpiQrPreviewUrl(null)
+        return
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      revoke = url
+      setUpiQrPreviewUrl(url)
+    })().catch(() => setUpiQrPreviewUrl(null))
+    return () => {
+      if (revoke) URL.revokeObjectURL(revoke)
+    }
+  }, [orgId, brandQ.data?.has_upi_qr, brandQ.data?.updated_at])
 
   const save = useMutation({
     mutationFn: () =>
@@ -138,6 +192,78 @@ export function BrandAssetsPage() {
   const deleteLogo = useMutation({
     mutationFn: () =>
       apiFetch<{ updated_at: string }>(`/v1/orgs/${orgId}/brand/logo`, { method: 'DELETE' }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['org-brand', orgId] })
+    },
+  })
+
+  const uploadSignature = useMutation({
+    mutationFn: async (file: File) => {
+      const token = localStorage.getItem('access_token')
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await fetch(`${base}/v1/orgs/${orgId}/brand/signature`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: fd,
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        let msg = text
+        try {
+          const j = JSON.parse(text) as { detail?: unknown }
+          msg = typeof j.detail === 'string' ? j.detail : text
+        } catch {
+          /* ignore */
+        }
+        throw new Error(msg || res.statusText)
+      }
+      return res.json() as Promise<{ updated_at: string }>
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['org-brand', orgId] })
+    },
+  })
+
+  const deleteSignature = useMutation({
+    mutationFn: () =>
+      apiFetch<{ updated_at: string }>(`/v1/orgs/${orgId}/brand/signature`, { method: 'DELETE' }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['org-brand', orgId] })
+    },
+  })
+
+  const uploadUpiQr = useMutation({
+    mutationFn: async (file: File) => {
+      const token = localStorage.getItem('access_token')
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await fetch(`${base}/v1/orgs/${orgId}/brand/upi-qr`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: fd,
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        let msg = text
+        try {
+          const j = JSON.parse(text) as { detail?: unknown }
+          msg = typeof j.detail === 'string' ? j.detail : text
+        } catch {
+          /* ignore */
+        }
+        throw new Error(msg || res.statusText)
+      }
+      return res.json() as Promise<{ updated_at: string }>
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['org-brand', orgId] })
+    },
+  })
+
+  const deleteUpiQr = useMutation({
+    mutationFn: () =>
+      apiFetch<{ updated_at: string }>(`/v1/orgs/${orgId}/brand/upi-qr`, { method: 'DELETE' }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['org-brand', orgId] })
     },
@@ -282,6 +408,122 @@ export function BrandAssetsPage() {
             {uploadLogo.isError && <p className="error small">{(uploadLogo.error as Error).message}</p>}
           </div>
 
+          <div className="card stack">
+            <div className="section-title row" style={{ alignItems: 'center', gap: '0.5rem' }}>
+              <Palette size={18} />
+              Signature
+            </div>
+            <div className="row" style={{ alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+              <div
+                style={{
+                  width: 96,
+                  height: 96,
+                  borderRadius: 12,
+                  border: '1px dashed #cbd5e1',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: '#f8fafc',
+                  overflow: 'hidden',
+                }}
+              >
+                {signaturePreviewUrl ? (
+                  <img src={signaturePreviewUrl} alt="" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+                ) : (
+                  <span className="muted small">No signature</span>
+                )}
+              </div>
+              <div className="stack" style={{ gap: '0.5rem' }}>
+                <label className="btn btn-sm" style={{ cursor: uploadSignature.isPending ? 'wait' : 'pointer' }}>
+                  <Upload size={14} />
+                  Upload signature
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    hidden
+                    disabled={uploadSignature.isPending}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0]
+                      e.target.value = ''
+                      if (f) uploadSignature.mutate(f)
+                    }}
+                  />
+                </label>
+                {brandQ.data?.has_signature && (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-ghost"
+                    disabled={deleteSignature.isPending}
+                    onClick={() => deleteSignature.mutate()}
+                  >
+                    <Trash2 size={14} />
+                    Remove signature
+                  </button>
+                )}
+              </div>
+            </div>
+            <p className="muted small">PNG, JPEG, or WebP · max 500&nbsp;KB · appears on quotation PDFs</p>
+            {uploadSignature.isError && <p className="error small">{(uploadSignature.error as Error).message}</p>}
+          </div>
+
+          <div className="card stack">
+            <div className="section-title row" style={{ alignItems: 'center', gap: '0.5rem' }}>
+              <Palette size={18} />
+              UPI QR Code
+            </div>
+            <div className="row" style={{ alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+              <div
+                style={{
+                  width: 96,
+                  height: 96,
+                  borderRadius: 12,
+                  border: '1px dashed #cbd5e1',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: '#f8fafc',
+                  overflow: 'hidden',
+                }}
+              >
+                {upiQrPreviewUrl ? (
+                  <img src={upiQrPreviewUrl} alt="" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+                ) : (
+                  <span className="muted small">No QR code</span>
+                )}
+              </div>
+              <div className="stack" style={{ gap: '0.5rem' }}>
+                <label className="btn btn-sm" style={{ cursor: uploadUpiQr.isPending ? 'wait' : 'pointer' }}>
+                  <Upload size={14} />
+                  Upload QR code
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    hidden
+                    disabled={uploadUpiQr.isPending}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0]
+                      e.target.value = ''
+                      if (f) uploadUpiQr.mutate(f)
+                    }}
+                  />
+                </label>
+                {brandQ.data?.has_upi_qr && (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-ghost"
+                    disabled={deleteUpiQr.isPending}
+                    onClick={() => deleteUpiQr.mutate()}
+                  >
+                    <Trash2 size={14} />
+                    Remove QR code
+                  </button>
+                )}
+              </div>
+            </div>
+            <p className="muted small">PNG, JPEG, or WebP · max 200&nbsp;KB · payment QR code for invoices</p>
+            {uploadUpiQr.isError && <p className="error small">{(uploadUpiQr.error as Error).message}</p>}
+          </div>
+
           <form className="card stack" onSubmit={onSubmit}>
             <div className="section-title">Business details</div>
             <div className="form-field">
@@ -350,7 +592,8 @@ export function BrandAssetsPage() {
 
           <div>
             <p className="muted small" style={{ marginBottom: '0.75rem' }}>
-              Upload a CSV file with your product catalog. Use columns: <strong>name</strong>, <strong>unit_price</strong>, description (optional), sku (optional)
+              Upload any CSV export — we auto-detect columns (e.g. product name, price, rate, MRP, SKU).
+              Comma, semicolon, or tab separators work. Prices can include ₹, commas, or decimals.
             </p>
             <label className="btn btn-sm" style={{ cursor: uploadCatalog.isPending ? 'wait' : 'pointer' }}>
               <Upload size={14} />
@@ -369,16 +612,33 @@ export function BrandAssetsPage() {
             </label>
             {uploadCatalog.isError && <p className="error small" style={{ marginTop: '0.5rem' }}>{(uploadCatalog.error as Error).message}</p>}
             {uploadCatalog.isSuccess && !uploadCatalog.isPending && (
-              <p className="success small" style={{ marginTop: '0.5rem' }}>
-                Uploaded {(uploadCatalog.data as any).items_created} item(s).
-                {(uploadCatalog.data as any).errors.length > 0 && (
+              <div className="success small" style={{ marginTop: '0.5rem' }}>
+                Uploaded {(uploadCatalog.data as { items_created: number }).items_created} item(s).
+                {(uploadCatalog.data as { column_mapping?: Record<string, string> }).column_mapping && (
+                  <div style={{ marginTop: '0.5rem' }}>
+                    <strong>Detected columns:</strong>
+                    <ul style={{ marginTop: '0.25rem', paddingLeft: '1.25rem' }}>
+                      {Object.entries((uploadCatalog.data as { column_mapping: Record<string, string> }).column_mapping).map(([k, v]) => (
+                        <li key={k}>{k} → {v}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {(uploadCatalog.data as { warnings?: string[] }).warnings?.length ? (
+                  <ul style={{ marginTop: '0.5rem', paddingLeft: '1.5rem', color: '#b45309' }}>
+                    {(uploadCatalog.data as { warnings: string[] }).warnings.map((w, i) => (
+                      <li key={i} style={{ fontSize: '0.85rem' }}>{w}</li>
+                    ))}
+                  </ul>
+                ) : null}
+                {(uploadCatalog.data as { errors: string[] }).errors?.length > 0 && (
                   <ul style={{ marginTop: '0.5rem', paddingLeft: '1.5rem' }}>
-                    {(uploadCatalog.data as any).errors.map((err: string, i: number) => (
+                    {(uploadCatalog.data as { errors: string[] }).errors.map((err, i) => (
                       <li key={i} style={{ fontSize: '0.85rem' }}>{err}</li>
                     ))}
                   </ul>
                 )}
-              </p>
+              </div>
             )}
           </div>
 

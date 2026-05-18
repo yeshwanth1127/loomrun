@@ -1,8 +1,9 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
+from loomrun_api.date_filter import apply_created_at
 from loomrun_api.deps import OrgContext, get_org_context
 from loomrun_api.prisma_client import prisma
 from prisma.enums import PaymentStatus, ProductionStage
@@ -27,9 +28,15 @@ class PaymentCreate(BaseModel):
 
 
 @router.get("/orgs/{org_id}/production")
-async def list_production(org_id: str, ctx: OrgContext = Depends(get_org_context)) -> dict:
+async def list_production(
+    org_id: str,
+    day: str | None = Query(None, description="YYYY-MM-DD or all"),
+    ctx: OrgContext = Depends(get_org_context),
+) -> dict:
+    where: dict = {"organizationId": ctx.organization_id}
+    apply_created_at(where, day)
     rows = await prisma.productionorder.find_many(
-        where={"organizationId": ctx.organization_id},
+        where=where,
         order={"updatedAt": "desc"},
         include={"lead": True, "quotation": True, "payments": True},
     )

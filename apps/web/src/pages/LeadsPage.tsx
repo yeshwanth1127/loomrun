@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { AnimatePresence, motion } from 'framer-motion'
 import {
   Calendar,
   Check,
@@ -10,10 +11,14 @@ import {
   Table2,
   X,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { DragEvent, FormEvent } from 'react'
 import { NavLink } from 'react-router-dom'
+import { toast } from 'sonner'
 import { useAuth } from '../context/AuthContext'
+import { useDateFilter } from '../context/DateFilterContext'
+import { KanbanSkeleton, TableSkeleton } from '../components/ui/Skeleton'
+import { isTelecallerRole, membershipForOrg } from '../lib/membership'
 import { apiFetch } from '../lib/api'
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -39,6 +44,8 @@ type Lead = {
   estimated_value: number | null
   created_at: string
   updated_at: string
+  last_call_outcome?: string | null
+  last_call_logged_by?: string | null
   activities?: Activity[]
   assignee?: { id: string; name: string | null; email: string } | null
 }
@@ -54,6 +61,16 @@ type Activity = {
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const STAGES = ['NEW', 'CONTACTED', 'QUALIFICATION', 'QUOTATION', 'NEGOTIATION', 'SAMPLE', 'WON', 'LOST']
+
+const CALL_OUTCOME_LABELS: Record<string, string> = {
+  CONNECTED: 'Connected',
+  NO_ANSWER: 'No answer',
+  BUSY: 'Busy',
+  WRONG_NUMBER: 'Wrong number',
+  NOT_INTERESTED: 'Not interested',
+  CALLBACK_SCHEDULED: 'Callback scheduled',
+  QUALIFIED: 'Qualified',
+}
 
 const STAGE_LABELS: Record<string, string> = {
   NEW: 'New',
@@ -444,7 +461,6 @@ function AddLeadModal({ orgId, onClose, onCreated }: {
   const [quantityEstimate, setQuantityEstimate] = useState('')
   const [notes, setNotes] = useState('')
   const [value, setValue] = useState('')
-  const [error, setError] = useState('')
 
   const create = useMutation({
     mutationFn: () =>
@@ -464,10 +480,11 @@ function AddLeadModal({ orgId, onClose, onCreated }: {
         },
       }),
     onSuccess: () => {
+      toast.success('Lead created')
       onCreated()
       onClose()
     },
-    onError: (e) => setError((e as Error).message),
+    onError: (e) => toast.error((e as Error).message),
   })
 
   return (
@@ -525,7 +542,6 @@ function AddLeadModal({ orgId, onClose, onCreated }: {
               <label className="input-label">Notes</label>
               <textarea className="input" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Any relevant details…" rows={2} style={{ width: '100%', resize: 'vertical' }} />
             </div>
-            {error && <p className="error">{error}</p>}
           </div>
           <div className="modal-footer">
             <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
@@ -570,6 +586,12 @@ function KanbanCard({ lead, onDragStart, onDragEnd, onClick }: {
       </div>
       {lead.product_interest && (
         <div className="muted" style={{ fontSize: '0.75rem', marginBottom: '0.35rem' }}>{lead.product_interest}</div>
+      )}
+      {lead.last_call_outcome && (
+        <div className="muted" style={{ fontSize: '0.72rem', marginBottom: '0.35rem' }}>
+          Last call: {CALL_OUTCOME_LABELS[lead.last_call_outcome] ?? lead.last_call_outcome}
+          {lead.last_call_logged_by ? ` · ${lead.last_call_logged_by}` : ''}
+        </div>
       )}
       <div className="row" style={{ gap: '0.5rem', justifyContent: 'space-between', marginTop: '0.25rem' }}>
         {lead.next_follow_up_at ? (
@@ -749,7 +771,9 @@ function TableView({ leads, orgId, onSelectLead, onStageChange }: {
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export function LeadsPage() {
-  const { orgId } = useAuth()
+  const { orgId, me } = useAuth()
+  const { dayParam, appendDay, isAll } = useDateFilter()
+  const isTelecaller = isTelecallerRole(membershipForOrg(me, orgId))
   const qc = useQueryClient()
   const [view, setView] = useState<'board' | 'table'>('board')
   const [showAddModal, setShowAddModal] = useState(false)
@@ -768,13 +792,20 @@ export function LeadsPage() {
   if (filters.search) params.set('search', filters.search)
   if (filters.score_min) params.set('score_min', filters.score_min)
   if (filters.score_max) params.set('score_max', filters.score_max)
+  appendDay(params)
   const qs = params.toString()
 
   const q = useQuery({
-    queryKey: ['leads', orgId, qs],
+    queryKey: ['leads', orgId, qs, dayParam],
     enabled: !!orgId,
-    queryFn: () => apiFetch<{ items: Lead[] }>(`/v1/orgs/${orgId}/leads${qs ? `?${qs}` : ''}`),
+    queryFn: () => apiFetch<{ items: Lead[] }>(`/v1/orgs/${orgId}/leads?${qs}`),
   })
+
+  useEffect(() => {
+    if (q.error) {
+      toast.error((q.error as Error).message)
+    }
+  }, [q.error])
 
   const updateStage = useMutation({
     mutationFn: (p: { id: string; stage: string }) =>
@@ -803,13 +834,17 @@ export function LeadsPage() {
           <div>
             <h1>Leads</h1>
             <p style={{ marginTop: '0.15rem', marginBottom: 0 }}>
-              {leads.length} lead{leads.length !== 1 ? 's' : ''} · Manage your sales pipeline
+              {leads.length} lead{leads.length !== 1 ? 's' : ''}
+              {isAll ? '' : ` · Created ${dayParam}`}
+              {' · '}Manage your sales pipeline
             </p>
           </div>
           <div className="row" style={{ gap: '0.5rem' }}>
-            <NavLink to="/app/leads/connections" className="btn btn-ghost btn-sm">
-              Integrations
-            </NavLink>
+            {!isTelecaller && (
+              <NavLink to="/app/leads/connections" className="btn btn-ghost btn-sm">
+                Integrations
+              </NavLink>
+            )}
             <button type="button" className="btn" onClick={() => setShowAddModal(true)}>
               <Plus size={15} /> Add Lead
             </button>
@@ -891,8 +926,7 @@ export function LeadsPage() {
 
       {/* Body */}
       <div className="page-body" style={{ padding: view === 'board' ? '1.25rem 1.5rem' : '1.5rem 2rem' }}>
-        {q.isLoading && <p className="muted">Loading leads…</p>}
-        {q.error && <p className="error">{(q.error as Error).message}</p>}
+        {q.isLoading && (view === 'board' ? <KanbanSkeleton /> : <TableSkeleton rows={8} />)}
 
         {!q.isLoading && leads.length === 0 && (
           <div className="empty-state card">
@@ -920,23 +954,41 @@ export function LeadsPage() {
       </div>
 
       {/* Add Lead Modal */}
-      {showAddModal && (
-        <AddLeadModal
-          orgId={orgId}
-          onClose={() => setShowAddModal(false)}
-          onCreated={() => void qc.invalidateQueries({ queryKey: ['leads', orgId] })}
-        />
-      )}
+      <AnimatePresence>
+        {showAddModal && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            transition={{ duration: 0.15 }}
+          >
+            <AddLeadModal
+              orgId={orgId}
+              onClose={() => setShowAddModal(false)}
+              onCreated={() => void qc.invalidateQueries({ queryKey: ['leads', orgId] })}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Lead Detail Drawer */}
-      {selectedLead && (
-        <LeadDetailDrawer
-          lead={selectedLead}
-          orgId={orgId}
-          onClose={() => setSelectedLead(null)}
-          onStageChange={(stage) => handleStageChange(selectedLead.id, stage)}
-        />
-      )}
+      <AnimatePresence>
+        {selectedLead && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.12 }}
+          >
+            <LeadDetailDrawer
+              lead={selectedLead}
+              orgId={orgId}
+              onClose={() => setSelectedLead(null)}
+              onStageChange={(stage) => handleStageChange(selectedLead.id, stage)}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
     </>
   )
 }

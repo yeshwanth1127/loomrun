@@ -16,9 +16,10 @@ export function RegisterPage() {
   return (
     <div className="auth-wrap">
       <div className="auth-card">
-        <div className="auth-logo">F</div>
+        <div className="auth-logo">loomrun</div>
+        <div className="auth-logo-sub">Textile Operations</div>
         <div className="auth-title">Create workspace</div>
-        <div className="auth-sub">Set up your Fabblen organization</div>
+        <div className="auth-sub">Set up your textile production hub</div>
 
         <form
           className="stack"

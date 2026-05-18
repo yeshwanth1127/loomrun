@@ -1,11 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Download, FileText, Plus, Send } from 'lucide-react'
+import { Download, FileText, Mail, MessageCircle, Plus } from 'lucide-react'
 import type { FormEvent } from 'react'
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import { useDateFilter } from '../context/DateFilterContext'
 import { apiFetch } from '../lib/api'
+import { toast } from 'sonner'
 
-type Lead = { id: string; title: string }
+type Lead = { id: string; title: string; phone?: string | null; email?: string | null }
 type CatalogItem = {
   id: string
   name: string
@@ -17,13 +20,20 @@ type CatalogItem = {
 type Quotation = {
   id: string
   number: string
+  invoice_number: string | null
   status: string
   total: number
   lead_id: string
+  lead_title: string | null
+  lead_phone: string | null
+  lead_email: string | null
   pdf_url: string | null
   sent_at: string | null
-  lines: { description: string; quantity: number; unit_price: number; line_total: number }[]
+  invoiced_at: string | null
+  lines: { id?: string; description: string; quantity: number; unit_price: number; line_total: number }[]
 }
+
+type LineDraft = { description: string; quantity: string; unit_price: string }
 
 const STATUS_COLOR: Record<string, string> = {
   DRAFT:    'badge-slate',
@@ -33,14 +43,47 @@ const STATUS_COLOR: Record<string, string> = {
   EXPIRED:  'badge-amber',
 }
 
+const emptyLine = (): LineDraft => ({ description: '', quantity: '1', unit_price: '' })
+
 const base = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+
+async function downloadPdf(orgId: string, quotationId: string, number: string) {
+  try {
+    const response = await fetch(
+      `${base}/v1/orgs/${orgId}/quotations/${quotationId}/pdf-file`,
+      {
+        headers: { Authorization: `Bearer ${localStorage.getItem('access_token') ?? ''}` },
+      }
+    )
+    if (!response.ok) {
+      throw new Error('Failed to download PDF')
+    }
+    const blob = await response.blob()
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `quotation-${number}.pdf`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+  } catch (err) {
+    toast.error((err as Error).message || 'Failed to download PDF')
+  }
+}
 
 export function QuotationsPage() {
   const { orgId } = useAuth()
+  const { dayParam, appendDay, isAll } = useDateFilter()
   const qc = useQueryClient()
   const [showForm, setShowForm] = useState(false)
   const [leadId, setLeadId] = useState('')
-  const [lines, setLines] = useState([{ description: '', quantity: '1', unit_price: '' }])
+  const [lines, setLines] = useState<LineDraft[]>([emptyLine()])
+  const [sendError, setSendError] = useState<string | null>(null)
+  const [sendNotice, setSendNotice] = useState<string | null>(null)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editLeadId, setEditLeadId] = useState('')
+  const [editLines, setEditLines] = useState<LineDraft[]>([emptyLine()])
 
   const leadsQ = useQuery({
     queryKey: ['leads-select', orgId],
@@ -55,10 +98,16 @@ export function QuotationsPage() {
   })
 
   const q = useQuery({
-    queryKey: ['quotations', orgId],
+    queryKey: ['quotations', orgId, dayParam],
     enabled: !!orgId,
-    queryFn: () => apiFetch<{ items: Quotation[] }>(`/v1/orgs/${orgId}/quotations`),
+    queryFn: () => {
+      const params = new URLSearchParams()
+      appendDay(params)
+      return apiFetch<{ items: Quotation[] }>(`/v1/orgs/${orgId}/quotations?${params}`)
+    },
   })
+
+  const catalogItems = catalogQ.data?.items ?? []
 
   const create = useMutation({
     mutationFn: () =>
@@ -75,7 +124,7 @@ export function QuotationsPage() {
       }),
     onSuccess: () => {
       setLeadId('')
-      setLines([{ description: '', quantity: '1', unit_price: '' }])
+      setLines([emptyLine()])
       setShowForm(false)
       void qc.invalidateQueries({ queryKey: ['quotations', orgId] })
     },
@@ -88,9 +137,68 @@ export function QuotationsPage() {
   })
 
   const send = useMutation({
+    mutationFn: ({ id, channel }: { id: string; channel: 'whatsapp' | 'email' }) =>
+      apiFetch<{
+        id: string
+        status: string
+        lead_stage: string
+        channel: string
+        message?: string
+      }>(`/v1/orgs/${orgId}/quotations/${id}/send`, {
+        method: 'POST',
+        json: { channel },
+      }),
+    onSuccess: (data) => {
+      setSendError(null)
+      const via = data.channel === 'whatsapp' ? 'WhatsApp' : 'Email'
+      setSendNotice(
+        data.message ?? `Sent via ${via}. Lead stage: ${data.lead_stage.replace(/_/g, ' ')}`
+      )
+      void qc.invalidateQueries({ queryKey: ['quotations', orgId] })
+      void qc.invalidateQueries({ queryKey: ['leads', orgId] })
+      void qc.invalidateQueries({ queryKey: ['leads-select', orgId] })
+    },
+    onError: (err: Error) => {
+      setSendNotice(null)
+      setSendError(err.message)
+    },
+  })
+
+  const edit = useMutation({
+    mutationFn: () =>
+      apiFetch(`/v1/orgs/${orgId}/quotations/${editingId}`, {
+        method: 'PATCH',
+        json: {
+          lead_id: editLeadId,
+          lines: editLines.map((l) => ({
+            description: l.description,
+            quantity: Number(l.quantity),
+            unit_price: Number(l.unit_price),
+          })),
+        },
+      }),
+    onSuccess: () => {
+      setEditingId(null)
+      setEditLeadId('')
+      setEditLines([emptyLine()])
+      toast.success('Quotation updated')
+      void qc.invalidateQueries({ queryKey: ['quotations', orgId] })
+    },
+    onError: (err: Error) => {
+      toast.error(err.message)
+    },
+  })
+
+  const genInvoice = useMutation({
     mutationFn: (id: string) =>
-      apiFetch(`/v1/orgs/${orgId}/quotations/${id}/send`, { method: 'POST' }),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['quotations', orgId] }),
+      apiFetch(`/v1/orgs/${orgId}/quotations/${id}/generate-invoice`, { method: 'POST' }),
+    onSuccess: () => {
+      toast.success('Invoice generated')
+      void qc.invalidateQueries({ queryKey: ['quotations', orgId] })
+    },
+    onError: (err: Error) => {
+      toast.error(err.message)
+    },
   })
 
   if (!orgId) return (
@@ -103,22 +211,73 @@ export function QuotationsPage() {
   const leads = leadsQ.data?.items ?? []
 
   function addLine() {
-    setLines([...lines, { description: '', quantity: '1', unit_price: '' }])
+    setLines([...lines, emptyLine()])
   }
 
   function removeLine(i: number) {
     setLines(lines.filter((_, idx) => idx !== i))
   }
 
-  function updateLine(i: number, field: string, val: string) {
-    setLines(lines.map((l, idx) => idx === i ? { ...l, [field]: val } : l))
+  function updateLine(i: number, field: keyof LineDraft, val: string) {
+    setLines(lines.map((l, idx) => (idx === i ? { ...l, [field]: val } : l)))
   }
+
+  function applyCatalogToLine(i: number, itemId: string) {
+    const item = catalogItems.find((c) => c.id === itemId)
+    if (!item) return
+    setLines((prev) =>
+      prev.map((l, idx) =>
+        idx === i
+          ? { ...l, description: item.name, unit_price: String(item.unit_price) }
+          : l
+      )
+    )
+  }
+
+  function addCatalogAsNewLine(itemId: string) {
+    const item = catalogItems.find((c) => c.id === itemId)
+    if (!item) return
+    setLines((prev) => [
+      ...prev,
+      { description: item.name, quantity: '1', unit_price: String(item.unit_price) },
+    ])
+  }
+
+  function openEdit(quotation: Quotation) {
+    setEditingId(quotation.id)
+    setEditLeadId(quotation.lead_id)
+    setEditLines(
+      quotation.lines.map((l) => ({
+        description: l.description,
+        quantity: String(l.quantity),
+        unit_price: String(l.unit_price),
+      }))
+    )
+  }
+
+  function addEditLine() {
+    setEditLines([...editLines, emptyLine()])
+  }
+
+  function removeEditLine(i: number) {
+    setEditLines(editLines.filter((_, idx) => idx !== i))
+  }
+
+  function updateEditLine(i: number, field: keyof LineDraft, val: string) {
+    setEditLines(editLines.map((l, idx) => (idx === i ? { ...l, [field]: val } : l)))
+  }
+
+  const selectedLead = leads.find((l) => l.id === leadId)
 
   return (
     <>
       <div className="page-header">
         <h1>Quotations</h1>
-        <p>{quotations.length} quotation{quotations.length !== 1 ? 's' : ''} · Generate and track quotes</p>
+        <p>
+          {quotations.length} quotation{quotations.length !== 1 ? 's' : ''}
+          {isAll ? '' : ` · Created ${dayParam}`}
+          {' · '}Generate and track quotes
+        </p>
       </div>
 
       <div className="page-body stack" style={{ gap: '1.25rem' }}>
@@ -129,6 +288,9 @@ export function QuotationsPage() {
             New quotation
           </button>
         </div>
+
+        {sendNotice && <p className="success">{sendNotice}</p>}
+        {sendError && <p className="error">{sendError}</p>}
 
         {showForm && (
           <div className="card">
@@ -149,79 +311,95 @@ export function QuotationsPage() {
               </div>
 
               <div>
-                <div className="input-label" style={{ marginBottom: '0.5rem' }}>Line items</div>
-
-                {(catalogQ.data?.items?.length ?? 0) > 0 && (
-                  <div style={{ marginBottom: '0.75rem' }}>
-                    <div className="muted small" style={{ marginBottom: '0.3rem' }}>Quick add from catalog</div>
+                <div className="row spread" style={{ marginBottom: '0.5rem', alignItems: 'center' }}>
+                  <div className="input-label">Line items</div>
+                  {catalogItems.length > 0 ? (
                     <div className="row" style={{ gap: '0.5rem', alignItems: 'center' }}>
+                      <span className="muted small">{catalogItems.length} catalog items</span>
                       <select
                         className="select"
                         defaultValue=""
                         onChange={(e) => {
-                          if (e.target.value) {
-                            const item = catalogQ.data!.items.find((i) => i.id === e.target.value)
-                            if (item) {
-                              addLine()
-                              const lastIdx = lines.length
-                              updateLine(lastIdx, 'description', item.name)
-                              updateLine(lastIdx, 'unit_price', String(item.unit_price))
-                            }
-                          }
+                          if (e.target.value) addCatalogAsNewLine(e.target.value)
                           e.target.value = ''
                         }}
-                        style={{ flex: 1 }}
+                        style={{ minWidth: 200 }}
                       >
-                        <option value="">Select item to add…</option>
-                        {catalogQ.data?.items.map((item) => (
+                        <option value="">+ Add from catalog…</option>
+                        {catalogItems.map((item) => (
                           <option key={item.id} value={item.id}>
-                            {item.name} (₹{item.unit_price.toLocaleString('en-IN')})
+                            {item.name} — ₹{item.unit_price.toLocaleString('en-IN')}
+                            {item.sku ? ` (${item.sku})` : ''}
                           </option>
                         ))}
                       </select>
                     </div>
-                  </div>
-                )}
+                  ) : (
+                    <p className="muted small">
+                      No catalog yet.{' '}
+                      <Link to="/app/brand-assets">Upload CSV in Brand assets</Link>
+                    </p>
+                  )}
+                </div>
 
-                <div className="stack" style={{ gap: '0.5rem' }}>
+                <div className="stack" style={{ gap: '0.75rem' }}>
                   {lines.map((line, i) => (
-                    <div key={i} className="row" style={{ gap: '0.5rem', alignItems: 'center' }}>
-                      <input
-                        className="input"
-                        placeholder="Description"
-                        value={line.description}
-                        onChange={(e) => updateLine(i, 'description', e.target.value)}
-                        style={{ flex: 3 }}
-                        required
-                      />
-                      <input
-                        className="input"
-                        type="number"
-                        placeholder="Qty"
-                        value={line.quantity}
-                        onChange={(e) => updateLine(i, 'quantity', e.target.value)}
-                        style={{ flex: 1, minWidth: 60 }}
-                        min={1}
-                        required
-                      />
-                      <input
-                        className="input"
-                        type="number"
-                        placeholder="Unit price ₹"
-                        value={line.unit_price}
-                        onChange={(e) => updateLine(i, 'unit_price', e.target.value)}
-                        style={{ flex: 1.5, minWidth: 100 }}
-                        min={0}
-                        required
-                      />
-                      <span style={{ minWidth: 80, fontWeight: 600, fontSize: '0.85rem' }}>
-                        {line.quantity && line.unit_price
-                          ? `₹${(Number(line.quantity) * Number(line.unit_price)).toLocaleString('en-IN')}`
-                          : '—'}
-                      </span>
-                      {lines.length > 1 && (
-                        <button type="button" className="btn btn-ghost btn-sm" onClick={() => removeLine(i)}>✕</button>
+                    <div key={i} className="stack" style={{ gap: '0.35rem', padding: '0.5rem', background: '#f8fafc', borderRadius: 8 }}>
+                      {catalogItems.length > 0 && (
+                        <select
+                          className="select"
+                          defaultValue=""
+                          onChange={(e) => {
+                            if (e.target.value) applyCatalogToLine(i, e.target.value)
+                            e.target.value = ''
+                          }}
+                        >
+                          <option value="">Fill from catalog…</option>
+                          {catalogItems.map((item) => (
+                            <option key={item.id} value={item.id}>
+                              {item.name} — ₹{item.unit_price.toLocaleString('en-IN')}
+                            </option>
+                          ))}
+                        </select>
                       )}
+                      <div className="row" style={{ gap: '0.5rem', alignItems: 'center' }}>
+                        <input
+                          className="input"
+                          placeholder="Description"
+                          value={line.description}
+                          onChange={(e) => updateLine(i, 'description', e.target.value)}
+                          style={{ flex: 3 }}
+                          required
+                        />
+                        <input
+                          className="input"
+                          type="number"
+                          placeholder="Qty"
+                          value={line.quantity}
+                          onChange={(e) => updateLine(i, 'quantity', e.target.value)}
+                          style={{ flex: 1, minWidth: 60 }}
+                          min={1}
+                          required
+                        />
+                        <input
+                          className="input"
+                          type="number"
+                          placeholder="Unit price ₹"
+                          value={line.unit_price}
+                          onChange={(e) => updateLine(i, 'unit_price', e.target.value)}
+                          style={{ flex: 1.5, minWidth: 100 }}
+                          min={0}
+                          required
+                        />
+                        <span style={{ minWidth: 80, fontWeight: 600, fontSize: '0.85rem' }}>
+                          {line.quantity && line.unit_price
+                            ? `₹${(Number(line.quantity) * Number(line.unit_price)).toLocaleString('en-IN')}`
+                            : '—'}
+                        </span>
+                        {lines.length > 1 && (
+                          <button type="button" className="btn btn-ghost btn-sm" onClick={() => removeLine(i)}>✕</button>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -229,6 +407,14 @@ export function QuotationsPage() {
                   + Add line manually
                 </button>
               </div>
+
+              {selectedLead && (
+                <p className="muted small">
+                  Send later via {selectedLead.phone ? 'WhatsApp' : 'WhatsApp (no phone on lead)'}
+                  {' · '}
+                  {selectedLead.email ? 'Email' : 'Email (no address on lead)'}
+                </p>
+              )}
 
               {create.error && <p className="error">{(create.error as Error).message}</p>}
               <div className="row">
@@ -259,7 +445,8 @@ export function QuotationsPage() {
               </thead>
               <tbody>
                 {quotations.map((x) => {
-                  const leadName = leads.find((l) => l.id === x.lead_id)?.title ?? x.lead_id.slice(0, 8)
+                  const leadName = x.lead_title ?? leads.find((l) => l.id === x.lead_id)?.title ?? x.lead_id.slice(0, 8)
+                  const canSend = x.status === 'DRAFT' && !!x.pdf_url
                   return (
                     <tr key={x.id}>
                       <td>
@@ -275,7 +462,7 @@ export function QuotationsPage() {
                         {x.sent_at ? new Date(x.sent_at).toLocaleDateString('en-IN') : '—'}
                       </td>
                       <td>
-                        <div className="row" style={{ gap: '0.35rem' }}>
+                        <div className="stack" style={{ gap: '0.35rem', alignItems: 'flex-start' }}>
                           {!x.pdf_url ? (
                             <button
                               type="button"
@@ -286,26 +473,71 @@ export function QuotationsPage() {
                               Generate PDF
                             </button>
                           ) : (
-                            <a
-                              href={`${base}/v1/orgs/${orgId}/quotations/${x.id}/pdf-file`}
-                              target="_blank"
-                              rel="noreferrer"
+                            <button
+                              type="button"
                               className="btn btn-ghost btn-sm"
+                              onClick={() => downloadPdf(orgId, x.id, x.number)}
                             >
                               <Download size={13} />
                               PDF
-                            </a>
+                            </button>
+                          )}
+                          {canSend && (
+                            <div className="row" style={{ gap: '0.35rem', flexWrap: 'wrap' }}>
+                              <button
+                                type="button"
+                                className="btn btn-sm"
+                                style={{ background: '#25d366' }}
+                                disabled={send.isPending}
+                                title="Mark as sent via WhatsApp"
+                                onClick={() => send.mutate({ id: x.id, channel: 'whatsapp' })}
+                              >
+                                <MessageCircle size={13} />
+                                {send.isPending ? 'Sending…' : 'WhatsApp'}
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-sm"
+                                style={{ background: '#6366f1' }}
+                                disabled={send.isPending}
+                                title="Mark as sent via email"
+                                onClick={() => send.mutate({ id: x.id, channel: 'email' })}
+                              >
+                                <Mail size={13} />
+                                {send.isPending ? 'Sending…' : 'Email'}
+                              </button>
+                            </div>
+                          )}
+                          {x.status === 'SENT' && !x.invoice_number && (
+                            <div className="row" style={{ gap: '0.35rem', flexWrap: 'wrap' }}>
+                              <button
+                                type="button"
+                                className="btn btn-sm"
+                                style={{ background: '#10b981' }}
+                                disabled={genInvoice.isPending}
+                                onClick={() => genInvoice.mutate(x.id)}
+                              >
+                                Quotation Accepted
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-sm"
+                                onClick={() => openEdit(x)}
+                              >
+                                Edit & Resend
+                              </button>
+                            </div>
+                          )}
+                          {x.invoice_number && (
+                            <span className="badge badge-green">Invoice #{x.invoice_number.split('-')[1]}</span>
                           )}
                           {x.status === 'DRAFT' && (
                             <button
                               type="button"
-                              className="btn btn-sm"
-                              style={{ background: '#10b981' }}
-                              disabled={send.isPending}
-                              onClick={() => send.mutate(x.id)}
+                              className="btn btn-ghost btn-sm"
+                              onClick={() => openEdit(x)}
                             >
-                              <Send size={13} />
-                              Send
+                              Edit
                             </button>
                           )}
                         </div>
@@ -324,6 +556,89 @@ export function QuotationsPage() {
           )
         )}
       </div>
+
+      {editingId && (
+        <div className="modal-wrap">
+          <div className="modal-overlay" onClick={() => setEditingId(null)} />
+          <div className="modal card" style={{ maxWidth: 600, gap: '1rem' }}>
+            <div style={{ fontWeight: 700, fontSize: '1.1rem' }}>Edit Quotation</div>
+            <form
+              className="stack"
+              onSubmit={(e: FormEvent) => {
+                e.preventDefault()
+                if (editLeadId && editLines.every((l) => l.description && l.unit_price)) void edit.mutateAsync()
+              }}
+            >
+              <div className="form-field">
+                <label className="input-label">Lead *</label>
+                <select className="select" value={editLeadId} onChange={(e) => setEditLeadId(e.target.value)} required>
+                  <option value="">Select lead…</option>
+                  {leads.map((l) => <option key={l.id} value={l.id}>{l.title}</option>)}
+                </select>
+              </div>
+
+              <div>
+                <div className="input-label" style={{ marginBottom: '0.5rem' }}>Line items</div>
+                <div className="stack" style={{ gap: '0.75rem' }}>
+                  {editLines.map((line, i) => (
+                    <div key={i} className="stack" style={{ gap: '0.35rem', padding: '0.5rem', background: '#f8fafc', borderRadius: 8 }}>
+                      <div className="row" style={{ gap: '0.5rem', alignItems: 'center' }}>
+                        <input
+                          className="input"
+                          placeholder="Description"
+                          value={line.description}
+                          onChange={(e) => updateEditLine(i, 'description', e.target.value)}
+                          style={{ flex: 3 }}
+                          required
+                        />
+                        <input
+                          className="input"
+                          type="number"
+                          placeholder="Qty"
+                          value={line.quantity}
+                          onChange={(e) => updateEditLine(i, 'quantity', e.target.value)}
+                          style={{ flex: 1, minWidth: 60 }}
+                          min={1}
+                          required
+                        />
+                        <input
+                          className="input"
+                          type="number"
+                          placeholder="Unit price ₹"
+                          value={line.unit_price}
+                          onChange={(e) => updateEditLine(i, 'unit_price', e.target.value)}
+                          style={{ flex: 1.5, minWidth: 100 }}
+                          min={0}
+                          required
+                        />
+                        <span style={{ minWidth: 80, fontWeight: 600, fontSize: '0.85rem' }}>
+                          {line.quantity && line.unit_price
+                            ? `₹${(Number(line.quantity) * Number(line.unit_price)).toLocaleString('en-IN')}`
+                            : '—'}
+                        </span>
+                        {editLines.length > 1 && (
+                          <button type="button" className="btn btn-ghost btn-sm" onClick={() => removeEditLine(i)}>✕</button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <button type="button" className="btn btn-ghost btn-sm" style={{ marginTop: '0.5rem' }} onClick={addEditLine}>
+                  + Add line
+                </button>
+              </div>
+
+              {edit.error && <p className="error">{(edit.error as Error).message}</p>}
+              <div className="row">
+                <button type="submit" className="btn" disabled={edit.isPending}>
+                  {edit.isPending ? 'Updating…' : 'Update quotation'}
+                </button>
+                <button type="button" className="btn btn-ghost" onClick={() => setEditingId(null)}>Cancel</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </>
   )
 }

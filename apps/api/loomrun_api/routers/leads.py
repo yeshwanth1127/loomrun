@@ -5,8 +5,10 @@ from pydantic import BaseModel, Field
 from arq.connections import create_pool, RedisSettings
 
 from loomrun_api.config import settings
+from loomrun_api.date_filter import apply_created_at
 from loomrun_api.deps import OrgContext, get_org_context
 from loomrun_api.prisma_client import prisma
+from loomrun_api.prisma_json import json_meta
 from prisma.enums import LeadActivityType, LeadSource, LeadStage, LeadStatus
 
 router = APIRouter()
@@ -52,8 +54,36 @@ def _compute_lead_score(source, phone: str | None, email: str | None, product_in
     return min(score, 100)
 
 
-def _serialize_lead(lead) -> dict:
-    return {
+def _call_summary_fields(call) -> dict:
+    if not call:
+        return {"last_call_outcome": None, "last_call_logged_by": None}
+    outcome = call.outcome.name if hasattr(call.outcome, "name") else str(call.outcome)
+    user = getattr(call, "user", None)
+    logged_by = None
+    if user:
+        logged_by = (user.name.strip() if user.name else None) or user.email
+    elif call.callSource == "AI_AUTO":
+        logged_by = "AI Auto-Call"
+    return {"last_call_outcome": outcome, "last_call_logged_by": logged_by}
+
+
+async def _latest_calls_by_lead(organization_id: str, lead_ids: list[str]) -> dict:
+    if not lead_ids:
+        return {}
+    calls = await prisma.telecallercalllog.find_many(
+        where={"organizationId": organization_id, "leadId": {"in": lead_ids}},
+        order={"createdAt": "desc"},
+        include={"user": True},
+    )
+    latest: dict = {}
+    for call in calls:
+        if call.leadId not in latest:
+            latest[call.leadId] = call
+    return latest
+
+
+def _serialize_lead(lead, *, with_last_call: bool = False, last_call=None) -> dict:
+    data = {
         "id": lead.id,
         "organization_id": lead.organizationId,
         "source": lead.source.name if hasattr(lead.source, "name") else str(lead.source),
@@ -77,6 +107,9 @@ def _serialize_lead(lead) -> dict:
         "created_at": lead.createdAt.isoformat(),
         "updated_at": lead.updatedAt.isoformat(),
     }
+    if with_last_call:
+        data.update(_call_summary_fields(last_call))
+    return data
 
 
 class LeadCreate(BaseModel):
@@ -164,9 +197,11 @@ async def list_leads(
     score_min: int | None = Query(None),
     score_max: int | None = Query(None),
     search: str | None = Query(None),
+    day: str | None = Query(None, description="YYYY-MM-DD or all"),
     ctx: OrgContext = Depends(get_org_context),
 ) -> dict:
     where: dict = {"organizationId": ctx.organization_id}
+    apply_created_at(where, day)
     if stage is not None:
         where["stage"] = stage
     if source is not None:
@@ -187,7 +222,13 @@ async def list_leads(
             {"email": {"contains": search, "mode": "insensitive"}},
         ]
     leads = await prisma.lead.find_many(where=where, order={"updatedAt": "desc"})
-    return {"items": [_serialize_lead(lead) for lead in leads]}
+    latest_calls = await _latest_calls_by_lead(ctx.organization_id, [lead.id for lead in leads])
+    return {
+        "items": [
+            _serialize_lead(lead, with_last_call=True, last_call=latest_calls.get(lead.id))
+            for lead in leads
+        ]
+    }
 
 
 @router.post("/orgs/{org_id}/leads", status_code=status.HTTP_201_CREATED)
@@ -264,7 +305,7 @@ async def ingest_lead(org_id: str, body: LeadIngestPayload, ctx: OrgContext = De
                 "leadId": existing.id,
                 "type": LeadActivityType.SYSTEM,
                 "body": note,
-                "metadata": {"source": src_name, "campaign": body.campaign, "ad_id": body.ad_id},
+                "metadata": json_meta({"source": src_name, "campaign": body.campaign, "ad_id": body.ad_id}),
             }
         )
         await prisma.lead.update(
@@ -303,7 +344,13 @@ async def ingest_lead(org_id: str, body: LeadIngestPayload, ctx: OrgContext = De
             "leadId": lead.id,
             "type": LeadActivityType.SYSTEM,
             "body": "Lead ingested",
-            "metadata": {"source": source.name if hasattr(source, "name") else str(source), "campaign": body.campaign, "ad_id": body.ad_id},
+            "metadata": json_meta(
+                {
+                    "source": source.name if hasattr(source, "name") else str(source),
+                    "campaign": body.campaign,
+                    "ad_id": body.ad_id,
+                }
+            ),
         }
     )
     return {**_serialize_lead(lead), "duplicate": False}
@@ -346,15 +393,16 @@ async def update_lead(
         update_data["title"] = body.title
     if body.source is not None:
         update_data["source"] = body.source
-    if body.stage is not None:
+    if body.stage is not None and body.stage != lead.stage:
+        stage_name = body.stage.name if hasattr(body.stage, "name") else str(body.stage)
         update_data["stage"] = body.stage
         await prisma.leadactivity.create(
             data={
                 "leadId": lead_id,
                 "userId": ctx.membership.userId,
                 "type": LeadActivityType.STAGE_CHANGE,
-                "body": f"Stage changed to {body.stage.name}",
-                "metadata": {"stage": body.stage.name},
+                "body": f"Stage changed to {stage_name}",
+                "metadata": json_meta({"stage": stage_name}),
             }
         )
     if body.lead_status is not None:
@@ -393,7 +441,7 @@ async def update_lead(
                 "userId": ctx.membership.userId,
                 "type": LeadActivityType.ASSIGNMENT,
                 "body": "Assignee updated",
-                "metadata": {"assignee_id": body.assignee_id},
+                "metadata": json_meta({"assignee_id": body.assignee_id}),
             }
         )
     if body.next_follow_up_at is not None:
@@ -419,15 +467,15 @@ async def add_activity(
     lead = await prisma.lead.find_first(where={"id": lead_id, "organizationId": ctx.organization_id})
     if not lead:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Lead not found")
-    act = await prisma.leadactivity.create(
-        data={
-            "leadId": lead_id,
-            "userId": ctx.membership.userId,
-            "type": body.type,
-            "body": body.body,
-            "metadata": body.metadata,
-        }
-    )
+    activity_data: dict = {
+        "leadId": lead_id,
+        "userId": ctx.membership.userId,
+        "type": body.type,
+        "body": body.body,
+    }
+    if body.metadata is not None:
+        activity_data["metadata"] = json_meta(body.metadata)
+    act = await prisma.leadactivity.create(data=activity_data)
     await prisma.lead.update(
         where={"id": lead_id},
         data={"lastActivityAt": datetime.utcnow()},

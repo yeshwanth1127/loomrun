@@ -1,9 +1,7 @@
-import csv
-import io
-
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
+from loomrun_api.catalog_csv import parse_catalog_rows
 from loomrun_api.deps import OrgContext, get_org_context
 from loomrun_api.prisma_client import prisma
 
@@ -96,60 +94,32 @@ async def upload_catalog_csv(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="File must be a CSV file")
 
     content = await file.read()
-    try:
-        text = content.decode("utf-8")
-    except UnicodeDecodeError:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="File must be UTF-8 encoded")
-
-    reader = csv.DictReader(io.StringIO(text))
-    if not reader.fieldnames:
+    if not content.strip():
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="CSV file is empty")
 
-    required_fields = {"name", "unit_price"}
-    if not required_fields.issubset(set(reader.fieldnames)):
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            detail=f"CSV must have columns: {', '.join(required_fields)}",
-        )
+    items, column_mapping, warnings, errors = parse_catalog_rows(content)
+    if not items and errors and not warnings:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=errors[0] if len(errors) == 1 else "; ".join(errors[:5]))
 
     items_created = 0
-    errors = []
-
-    for row_num, row in enumerate(reader, start=2):
+    for item in items:
         try:
-            name = row.get("name", "").strip()
-            unit_price_str = row.get("unit_price", "").strip()
-            description = row.get("description", "").strip() or None
-            sku = row.get("sku", "").strip() or None
-
-            if not name:
-                errors.append(f"Row {row_num}: name is required")
-                continue
-
-            try:
-                unit_price = float(unit_price_str)
-            except ValueError:
-                errors.append(f"Row {row_num}: unit_price must be a number")
-                continue
-
-            if unit_price < 0:
-                errors.append(f"Row {row_num}: unit_price must be >= 0")
-                continue
-
             await prisma.catalogitem.create(
                 data={
                     "organizationId": ctx.organization_id,
-                    "name": name,
-                    "description": description,
-                    "unitPrice": unit_price,
-                    "sku": sku,
+                    "name": item["name"],
+                    "description": item.get("description"),
+                    "unitPrice": item["unit_price"],
+                    "sku": item.get("sku"),
                 }
             )
             items_created += 1
         except Exception as e:
-            errors.append(f"Row {row_num}: {str(e)}")
+            errors.append(f"Could not save '{item.get('name', '?')}': {e}")
 
     return {
         "items_created": items_created,
         "errors": errors,
+        "warnings": warnings,
+        "column_mapping": column_mapping,
     }

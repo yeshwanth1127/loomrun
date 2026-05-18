@@ -1,17 +1,30 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
+from loomrun_api.date_filter import apply_created_at, day_label, parse_day_param
 from loomrun_api.deps import OrgContext, get_org_context
+from loomrun_api.lead_call_sync import enum_str, sync_lead_after_call
 from loomrun_api.prisma_client import prisma
-from prisma.enums import CallOutcome, LeadActivityType, LeadStage
+from prisma.enums import CallOutcome
 
 router = APIRouter()
 
 
 def _enum_str(val) -> str:
     return val.name if hasattr(val, "name") else str(val)
+
+
+def _caller_fields(user) -> dict:
+    if not user:
+        return {"user_email": None, "user_name": None, "logged_by": None}
+    name = user.name.strip() if user.name else None
+    return {
+        "user_email": user.email,
+        "user_name": name,
+        "logged_by": name or user.email,
+    }
 
 
 class CallLogCreate(BaseModel):
@@ -44,40 +57,29 @@ async def log_call(
             "durationSeconds": body.duration_seconds,
             "nextCallAt": body.next_call_at,
             "callSource": "HUMAN",
-        }
+        },
+        include={"user": True},
     )
-    call_body = f"Call attempt {attempt}: {body.outcome.name}"
-    if body.notes:
-        call_body += f" — {body.notes}"
-    await prisma.leadactivity.create(
-        data={
-            "leadId": body.lead_id,
-            "userId": ctx.membership.userId,
-            "type": LeadActivityType.CALL,
-            "body": call_body,
-        }
+    caller = _caller_fields(row.user)
+    new_stage = await sync_lead_after_call(
+        lead_id=body.lead_id,
+        user_id=ctx.membership.userId,
+        outcome=body.outcome,
+        notes=body.notes,
+        attempt=attempt,
+        lead_stage=lead.stage,
+        logged_by=caller["logged_by"],
     )
-
-    if lead.stage == LeadStage.NEW:
-        await prisma.lead.update(
-            where={"id": body.lead_id},
-            data={"stage": LeadStage.CONTACTED, "lastActivityAt": datetime.utcnow()},
-        )
-        stage_note = body.outcome.name + (f" — {body.notes}" if body.notes else "")
-        await prisma.leadactivity.create(
-            data={
-                "leadId": body.lead_id,
-                "userId": ctx.membership.userId,
-                "type": LeadActivityType.STAGE_CHANGE,
-                "body": f"Moved to Contacted — {stage_note}",
-            }
-        )
 
     return {
         "id": row.id,
+        "lead_id": body.lead_id,
         "attempt_number": row.attemptNumber,
         "outcome": _enum_str(row.outcome),
         "created_at": row.createdAt.isoformat(),
+        "lead_stage": enum_str(new_stage),
+        "stage_changed": new_stage != lead.stage,
+        **caller,
     }
 
 
@@ -96,7 +98,7 @@ async def get_call(
     return {
         "id": call.id,
         "lead_title": call.lead.title if call.lead else None,
-        "user_email": call.user.email if call.user else None,
+        **_caller_fields(call.user),
         "outcome": _enum_str(call.outcome),
         "notes": call.notes,
         "duration_seconds": call.durationSeconds,
@@ -113,41 +115,32 @@ async def get_call(
 @router.get("/orgs/{org_id}/telecaller/daily-summary")
 async def telecaller_daily_summary(
     org_id: str,
-    day: str | None = Query(None, description="YYYY-MM-DD in UTC; default today"),
+    day: str | None = Query(None, description="YYYY-MM-DD in UTC, or all for all time"),
     user_id: str | None = Query(None, description="Filter by user ID"),
     ctx: OrgContext = Depends(get_org_context),
 ) -> dict:
-    if day:
-        try:
-            start = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        except ValueError as e:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid day format") from e
-    else:
-        start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    end = start + timedelta(days=1)
-    where: dict = {
-        "organizationId": ctx.organization_id,
-        "createdAt": {"gte": start, "lt": end},
-    }
+    where: dict = {"organizationId": ctx.organization_id}
+    apply_created_at(where, day)
     if user_id:
         where["userId"] = user_id
     calls = await prisma.telecallercalllog.find_many(
         where=where,
         include={"user": True, "lead": True},
+        order={"createdAt": "desc"},
     )
     by_outcome: dict[str, int] = {}
     for c in calls:
         name = _enum_str(c.outcome)
         by_outcome[name] = by_outcome.get(name, 0) + 1
     return {
-        "date": start.date().isoformat(),
+        "date": day_label(day),
         "total_calls": len(calls),
         "by_outcome": by_outcome,
         "calls": [
             {
                 "id": c.id,
                 "lead_title": c.lead.title if c.lead else None,
-                "user_email": c.user.email if c.user else None,
+                **_caller_fields(c.user),
                 "outcome": _enum_str(c.outcome),
                 "created_at": c.createdAt.isoformat(),
             }

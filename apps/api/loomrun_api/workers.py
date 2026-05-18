@@ -44,17 +44,14 @@ async def generate_quotation_pdf_job(_ctx: dict, quotation_id: str) -> str | Non
 
 
 async def process_outbound_whatsapp(_ctx: dict) -> int:
-    """Mark queued WhatsApp outbound rows as SENT (stub transport)."""
+    """Mark queued WhatsApp and email outbound rows as SENT (stub transport)."""
     db = Prisma()
     await db.connect()
     try:
-        from prisma.enums import OutboundChannel, OutboundMessageStatus
+        from prisma.enums import OutboundMessageStatus
 
         pending = await db.outboundmessage.find_many(
-            where={
-                "channel": OutboundChannel.WHATSAPP,
-                "status": OutboundMessageStatus.QUEUED,
-            },
+            where={"status": OutboundMessageStatus.QUEUED},
             take=50,
         )
         count = 0
@@ -110,6 +107,9 @@ async def check_lead_call_needed(_ctx: dict, lead_id: str, org_id: str) -> str:
                 metadata={"lead_id": lead_id, "org_id": org_id}
             )
 
+            from prisma.enums import CallOutcome, LeadStage
+            from loomrun_api.lead_call_sync import sync_lead_after_call
+
             attempt_number = await db.telecallercalllog.count(where={"leadId": lead_id}) + 1
             await db.telecallercalllog.create(
                 data={
@@ -117,9 +117,19 @@ async def check_lead_call_needed(_ctx: dict, lead_id: str, org_id: str) -> str:
                     "leadId": lead_id,
                     "userId": None,
                     "attemptNumber": attempt_number,
-                    "outcome": "CONNECTED",
+                    "outcome": CallOutcome.CONNECTED,
                     "callSource": "AI_AUTO",
                 }
+            )
+            await sync_lead_after_call(
+                lead_id=lead_id,
+                user_id=None,
+                outcome=CallOutcome.CONNECTED,
+                notes=None,
+                attempt=attempt_number,
+                lead_stage=lead.stage,
+                logged_by="AI Auto-Call",
+                db=db,
             )
             logger.info("AI auto-call initiated for lead %s via %s", lead_id, config.providerName)
             return "initiated"

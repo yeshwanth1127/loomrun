@@ -1,11 +1,21 @@
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { MessageCircle, Send } from 'lucide-react'
 import type { FormEvent } from 'react'
 import { useState } from 'react'
 import { useAuth } from '../context/AuthContext'
+import { useDateFilter } from '../context/DateFilterContext'
 import { apiFetch } from '../lib/api'
 
 type Lead = { id: string; title: string; phone: string | null }
+
+type OutboundMessage = {
+  id: string
+  lead_id: string | null
+  lead_title: string | null
+  status: string
+  message: string | null
+  created_at: string
+}
 
 const TEMPLATES = [
   { label: 'Follow-up', text: 'Hi {name}, following up on your quotation. Please let us know if you have any questions!' },
@@ -15,6 +25,8 @@ const TEMPLATES = [
 
 export function WhatsAppPage() {
   const { orgId } = useAuth()
+  const { dayParam, appendDay, isAll } = useDateFilter()
+  const qc = useQueryClient()
   const [leadId, setLeadId] = useState('')
   const [message, setMessage] = useState('')
 
@@ -24,13 +36,26 @@ export function WhatsAppPage() {
     queryFn: () => apiFetch<{ items: Lead[] }>(`/v1/orgs/${orgId}/leads`),
   })
 
+  const messagesQ = useQuery({
+    queryKey: ['whatsapp-messages', orgId, dayParam],
+    enabled: !!orgId,
+    queryFn: () => {
+      const params = new URLSearchParams()
+      appendDay(params)
+      return apiFetch<{ items: OutboundMessage[] }>(`/v1/orgs/${orgId}/integrations/whatsapp/messages?${params}`)
+    },
+  })
+
   const send = useMutation({
     mutationFn: () =>
       apiFetch(`/v1/orgs/${orgId}/integrations/whatsapp/outbound`, {
         method: 'POST',
         json: { lead_id: leadId, message },
       }),
-    onSuccess: () => setMessage(''),
+    onSuccess: () => {
+      setMessage('')
+      void qc.invalidateQueries({ queryKey: ['whatsapp-messages', orgId] })
+    },
   })
 
   const base = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
@@ -42,11 +67,16 @@ export function WhatsAppPage() {
   )
 
   const leads = leadsQ.data?.items ?? []
+  const messages = messagesQ.data?.items ?? []
   return (
     <>
       <div className="page-header">
         <h1>WhatsApp</h1>
-        <p>Send messages and manage automated follow-ups</p>
+        <p>
+          Send messages and manage automated follow-ups
+          {!isAll && ` · Showing ${messages.length} from ${dayParam}`}
+          {isAll && messages.length > 0 && ` · ${messages.length} message${messages.length !== 1 ? 's' : ''}`}
+        </p>
       </div>
 
       <div className="page-body" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem', alignItems: 'start' }}>
@@ -94,8 +124,30 @@ export function WhatsAppPage() {
           </form>
         </div>
 
-        {/* Templates & webhook info */}
+        {/* Templates, messages & webhook info */}
         <div className="stack" style={{ gap: '1.25rem' }}>
+          <div className="card">
+            <div style={{ fontWeight: 700, marginBottom: '0.75rem' }}>Message Log</div>
+            {messagesQ.isLoading && <p className="muted small">Loading…</p>}
+            {!messagesQ.isLoading && messages.length === 0 && (
+              <p className="muted small">{isAll ? 'No messages queued yet.' : 'No messages on this date.'}</p>
+            )}
+            <div className="stack" style={{ gap: '0.5rem', maxHeight: 280, overflow: 'auto' }}>
+              {messages.map((m) => (
+                <div key={m.id} style={{ padding: '0.4rem 0', borderBottom: '1px solid #f8fafc' }}>
+                  <div style={{ fontSize: '0.85rem', fontWeight: 600 }}>{m.lead_title ?? '—'}</div>
+                  <div className="muted small" style={{ marginTop: '0.15rem' }}>{m.message ?? '—'}</div>
+                  <div className="row spread" style={{ marginTop: '0.25rem' }}>
+                    <span className="badge badge-slate">{m.status}</span>
+                    <span className="muted small">
+                      {new Date(m.created_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
           <div className="card">
             <div style={{ fontWeight: 700, marginBottom: '0.75rem' }}>Quick Templates</div>
             <div className="stack" style={{ gap: '0.5rem' }}>

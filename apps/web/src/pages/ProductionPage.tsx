@@ -3,6 +3,7 @@ import { AlertTriangle, ChevronRight, Plus, Zap } from 'lucide-react'
 import type { FormEvent } from 'react'
 import { useState } from 'react'
 import { useAuth } from '../context/AuthContext'
+import { useDateFilter } from '../context/DateFilterContext'
 import { apiFetch } from '../lib/api'
 
 type Lead = { id: string; title: string }
@@ -65,6 +66,7 @@ function daysAgo(dt: string) {
 
 export function ProductionPage() {
   const { orgId } = useAuth()
+  const { dayParam, appendDay, isAll } = useDateFilter()
   const qc = useQueryClient()
   const [showForm, setShowForm] = useState(false)
   const [leadId, setLeadId] = useState('')
@@ -76,9 +78,13 @@ export function ProductionPage() {
   })
 
   const q = useQuery({
-    queryKey: ['production', orgId],
+    queryKey: ['production', orgId, dayParam],
     enabled: !!orgId,
-    queryFn: () => apiFetch<{ items: Row[] }>(`/v1/orgs/${orgId}/production`),
+    queryFn: () => {
+      const params = new URLSearchParams()
+      appendDay(params)
+      return apiFetch<{ items: Row[] }>(`/v1/orgs/${orgId}/production?${params}`)
+    },
   })
 
   const create = useMutation({
@@ -113,6 +119,7 @@ export function ProductionPage() {
         <h1>Production</h1>
         <p>
           {orders.length} order{orders.length !== 1 ? 's' : ''} in pipeline
+          {isAll ? '' : ` · Started ${dayParam}`}
           {delayedCount > 0 && <span className="error"> · {delayedCount} delayed</span>}
         </p>
       </div>

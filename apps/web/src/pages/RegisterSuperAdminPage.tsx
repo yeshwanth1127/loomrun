@@ -15,10 +15,11 @@ export function RegisterSuperAdminPage() {
   return (
     <div className="auth-wrap">
       <div className="auth-card">
-        <div className="auth-logo" style={{ background: '#7c3aed' }}>⚙</div>
+        <div className="auth-logo">loomrun</div>
+        <div className="auth-logo-sub">Admin Setup</div>
         <div className="auth-title">Platform Admin</div>
         <div className="auth-sub">
-          Creates a super admin account. Your email must be in the server's{' '}
+          Create a super admin account. Your email must be in the server's{' '}
           <code className="mono">SUPER_ADMIN_EMAILS</code> setting.
         </div>
 
@@ -53,7 +54,7 @@ export function RegisterSuperAdminPage() {
 
           {err && <p className="error">{err}</p>}
 
-          <button type="submit" className="btn" disabled={loading} style={{ width: '100%', justifyContent: 'center', background: '#7c3aed' }}>
+          <button type="submit" className="btn" disabled={loading} style={{ width: '100%', justifyContent: 'center' }}>
             {loading ? 'Registering…' : 'Register as super admin'}
           </button>
 

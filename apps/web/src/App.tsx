@@ -1,12 +1,15 @@
-import { Navigate, Route, Routes } from 'react-router-dom'
+import { Navigate, Outlet, Route, Routes } from 'react-router-dom'
 import { useAuth } from './context/AuthContext'
 import { AppShell } from './components/AppShell'
+import { TelecallerRouteGuard } from './components/TelecallerRouteGuard'
+import { isTelecallerRole, membershipForOrg } from './lib/membership'
 import { CEODashboardPage } from './pages/CEODashboardPage'
 import { LeadsPage } from './pages/LeadsPage'
 import { LeadConnectionsPage } from './pages/LeadConnectionsPage'
 import { LoginPage } from './pages/LoginPage'
 import { ProductionPage } from './pages/ProductionPage'
 import { QuotationsPage } from './pages/QuotationsPage'
+import { InvoicesPage } from './pages/InvoicesPage'
 import { RegisterPage } from './pages/RegisterPage'
 import { RegisterSuperAdminPage } from './pages/RegisterSuperAdminPage'
 import { TeamPage } from './pages/TeamPage'
@@ -17,15 +20,28 @@ import { AdminPage } from './pages/AdminPage'
 import { BrandAssetsPage } from './pages/BrandAssetsPage'
 
 function Home() {
-  const { me, loading } = useAuth()
+  const { me, loading, orgId } = useAuth()
   if (loading) return <p className="center muted">Loading…</p>
   if (me) {
     if (me.is_super_admin && me.organizations.length === 0) {
       return <Navigate to="/app/admin" replace />
     }
+    const membership = membershipForOrg(me, orgId)
+    if (isTelecallerRole(membership)) {
+      return <Navigate to="/app/telecaller" replace />
+    }
     return <Navigate to="/app/leads" replace />
   }
   return <Navigate to="/login" replace />
+}
+
+function AppIndex() {
+  const { me, orgId } = useAuth()
+  const membership = membershipForOrg(me, orgId)
+  if (isTelecallerRole(membership)) {
+    return <Navigate to="telecaller" replace />
+  }
+  return <Navigate to="leads" replace />
 }
 
 export default function App() {
@@ -36,10 +52,18 @@ export default function App() {
       <Route path="/register" element={<RegisterPage />} />
       <Route path="/register-super-admin" element={<RegisterSuperAdminPage />} />
       <Route path="/app" element={<AppShell />}>
-        <Route index element={<Navigate to="leads" replace />} />
+        <Route
+          element={
+            <TelecallerRouteGuard>
+              <Outlet />
+            </TelecallerRouteGuard>
+          }
+        >
+        <Route index element={<AppIndex />} />
         <Route path="leads" element={<LeadsPage />} />
         <Route path="leads/connections" element={<LeadConnectionsPage />} />
         <Route path="quotations" element={<QuotationsPage />} />
+        <Route path="invoices" element={<InvoicesPage />} />
         <Route path="production" element={<ProductionPage />} />
         <Route path="telecaller" element={<TelecallerPage />} />
         <Route path="settings/telephony" element={<TelephonyPage />} />
@@ -48,6 +72,7 @@ export default function App() {
         <Route path="brand-assets" element={<BrandAssetsPage />} />
         <Route path="team" element={<TeamPage />} />
         <Route path="admin" element={<AdminPage />} />
+        </Route>
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

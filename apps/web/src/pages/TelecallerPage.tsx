@@ -3,6 +3,7 @@ import { Phone, PhoneCall } from 'lucide-react'
 import type { FormEvent } from 'react'
 import { useState } from 'react'
 import { useAuth } from '../context/AuthContext'
+import { useDateFilter } from '../context/DateFilterContext'
 import { apiFetch } from '../lib/api'
 
 type Lead = { id: string; title: string }
@@ -28,6 +29,7 @@ export function TelecallerPage() {
   const [durationMinutes, setDurationMinutes] = useState('')
   const [nextFollowUpDate, setNextFollowUpDate] = useState('')
   const [selectedCallId, setSelectedCallId] = useState<string | null>(null)
+  const { dayParam, appendDay, isAll, isToday } = useDateFilter()
 
   const membership = me?.organizations.find((o) => o.organization.id === orgId)
   const isTelecaller = membership?.role === 'TELECALLER'
@@ -40,18 +42,21 @@ export function TelecallerPage() {
   })
 
   const summaryUserId = isTelecaller ? myUserId : null
+
   const summary = useQuery({
-    queryKey: ['tele-summary', orgId, summaryUserId],
+    queryKey: ['tele-summary', orgId, summaryUserId, dayParam],
     enabled: !!orgId,
-    refetchInterval: 30_000,
+    refetchInterval: isAll ? false : isToday ? 30_000 : false,
     queryFn: () => {
-      const qs = summaryUserId ? `?user_id=${summaryUserId}` : ''
+      const params = new URLSearchParams()
+      appendDay(params)
+      if (summaryUserId) params.set('user_id', summaryUserId)
       return apiFetch<{
         date: string
         total_calls: number
         by_outcome: Record<string, number>
-        calls: { id: string; lead_title: string | null; user_email: string | null; outcome: string; created_at: string }[]
-      }>(`/v1/orgs/${orgId}/telecaller/daily-summary${qs}`)
+        calls: { id: string; lead_title: string | null; logged_by: string | null; outcome: string; created_at: string }[]
+      }>(`/v1/orgs/${orgId}/telecaller/daily-summary?${params}`)
     },
   })
 
@@ -62,7 +67,7 @@ export function TelecallerPage() {
       apiFetch<{
         id: string
         lead_title: string | null
-        user_email: string | null
+        logged_by: string | null
         outcome: string
         notes: string | null
         duration_seconds: number | null
@@ -78,7 +83,16 @@ export function TelecallerPage() {
 
   const logCall = useMutation({
     mutationFn: () =>
-      apiFetch<{ id: string; attempt_number: number; outcome: string; created_at: string }>(
+      apiFetch<{
+        id: string
+        lead_id: string
+        attempt_number: number
+        outcome: string
+        created_at: string
+        logged_by: string | null
+        lead_stage: string
+        stage_changed: boolean
+      }>(
         `/v1/orgs/${orgId}/telecaller/calls`,
         {
           method: 'POST',
@@ -96,6 +110,9 @@ export function TelecallerPage() {
       setDurationMinutes('')
       setNextFollowUpDate('')
       void qc.invalidateQueries({ queryKey: ['tele-summary', orgId] })
+      void qc.invalidateQueries({ queryKey: ['leads', orgId] })
+      void qc.invalidateQueries({ queryKey: ['leads-select', orgId] })
+      if (leadId) void qc.invalidateQueries({ queryKey: ['lead-detail', orgId, leadId] })
     },
   })
 
@@ -179,6 +196,10 @@ export function TelecallerPage() {
                   <div className="stack" style={{ gap: '0.25rem', fontSize: '0.85rem' }}>
                     <div><strong>Outcome:</strong> {logCall.data.outcome}</div>
                     <div><strong>Attempt #:</strong> {logCall.data.attempt_number}</div>
+                    <div><strong>Logged by:</strong> {logCall.data.logged_by ?? me?.email ?? '—'}</div>
+                    {logCall.data.stage_changed && (
+                      <div><strong>Lead stage:</strong> Moved to Contacted · {OUTCOME_MAP[logCall.data.outcome]?.label ?? logCall.data.outcome}</div>
+                    )}
                     <div><strong>Logged at:</strong> {new Date(logCall.data.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</div>
                     {notes && <div><strong>Notes:</strong> {notes}</div>}
                     {durationMinutes && <div><strong>Duration:</strong> {durationMinutes} min</div>}
@@ -201,7 +222,12 @@ export function TelecallerPage() {
               {/* Outcome breakdown */}
               <div className="card">
                 <div style={{ fontWeight: 700, marginBottom: '1rem' }}>
-                  {isTelecaller ? 'My Today' : 'Today'} — {data.date}
+                  {isAll
+                    ? (isTelecaller ? 'All My Calls' : 'All Calls')
+                    : isTelecaller
+                      ? (isToday ? 'My Today' : 'My Calls')
+                      : (isToday ? 'Today' : 'Calls')}
+                  {!isAll && ` — ${data.date}`}
                 </div>
                 <div style={{ fontSize: '2.5rem', fontWeight: 800, color: '#0f172a', lineHeight: 1 }}>
                   {data.total_calls}
@@ -219,7 +245,9 @@ export function TelecallerPage() {
                     )
                   })}
                   {Object.keys(byOutcome).length === 0 && (
-                    <p className="muted small">No calls logged today.</p>
+                    <p className="muted small">
+                      {isAll ? 'No calls logged yet.' : isToday ? 'No calls logged today.' : 'No calls logged on this date.'}
+                    </p>
                   )}
                 </div>
               </div>
@@ -227,9 +255,9 @@ export function TelecallerPage() {
               {/* Recent calls */}
               {calls.length > 0 && (
                 <div className="card">
-                  <div style={{ fontWeight: 700, marginBottom: '0.75rem' }}>Recent Calls</div>
+                  <div style={{ fontWeight: 700, marginBottom: '0.75rem' }}>Call Logs</div>
                   <div className="stack" style={{ gap: '0.5rem' }}>
-                    {calls.slice(0, 10).map((c) => {
+                    {calls.map((c) => {
                       const meta = OUTCOME_MAP[c.outcome]
                       return (
                         <div
@@ -247,12 +275,14 @@ export function TelecallerPage() {
                         >
                           <div>
                             <div style={{ fontSize: '0.85rem', fontWeight: 600 }}>{c.lead_title ?? '—'}</div>
-                            <div className="muted small">{c.user_email}</div>
+                            <div className="muted small">Logged by {c.logged_by ?? 'AI Auto-Call'}</div>
                           </div>
                           <div style={{ textAlign: 'right' }}>
                             <span className={`badge ${meta?.color ?? 'badge-slate'}`}>{meta?.label ?? c.outcome}</span>
                             <div className="muted small" style={{ marginTop: '0.2rem' }}>
-                              {new Date(c.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                              {isAll
+                                ? new Date(c.created_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
+                                : new Date(c.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
                             </div>
                           </div>
                         </div>
@@ -313,8 +343,8 @@ export function TelecallerPage() {
                 </div>
 
                 <div>
-                  <div className="muted small">Caller</div>
-                  <div>{callDetail.data.user_email ?? 'AI Auto-Call'}</div>
+                  <div className="muted small">Logged by</div>
+                  <div>{callDetail.data.logged_by ?? callDetail.data.user_email ?? 'AI Auto-Call'}</div>
                 </div>
 
                 <div>

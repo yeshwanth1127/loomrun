@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { AnimatePresence, motion } from 'framer-motion'
 import {
   BarChart2,
   Building2,
@@ -7,16 +8,21 @@ import {
   Link2,
   LogOut,
   MessageCircle,
+  Moon,
   Palette,
   Phone,
   Smartphone,
+  Sun,
   Users,
   Zap,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { NavLink, Navigate, Outlet, useNavigate } from 'react-router-dom'
+import { NavLink, Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import { useTheme } from '../context/ThemeContext'
+import { DateFilterBar } from './DateFilterBar'
 import { apiFetch } from '../lib/api'
+import { isTelecallerRole, membershipForOrg } from '../lib/membership'
 
 const apiBase = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
@@ -26,14 +32,20 @@ type OrgBrandMeta = {
   updated_at: string
 }
 
-const NAV = [
+const WORKSPACE_NAV = [
   { to: '/app/leads',              icon: LayoutDashboard, label: 'Leads' },
   { to: '/app/telecaller',         icon: Phone,           label: 'Telecaller' },
   { to: '/app/leads/connections',  icon: Link2,           label: 'Integrations' },
   { to: '/app/quotations',         icon: FileText,        label: 'Quotations' },
+  { to: '/app/invoices',           icon: FileText,        label: 'Invoices' },
   { to: '/app/production',         icon: Zap,             label: 'Production' },
   { to: '/app/whatsapp',           icon: MessageCircle,   label: 'WhatsApp' },
-]
+] as const
+
+const TELECALLER_NAV = [
+  { to: '/app/leads',      icon: LayoutDashboard, label: 'Leads' },
+  { to: '/app/telecaller', icon: Phone,           label: 'Telecaller' },
+] as const
 
 const CEO_NAV = [
   { to: '/app/ceo', icon: BarChart2, label: 'CEO Dashboard' },
@@ -41,9 +53,13 @@ const CEO_NAV = [
 
 export function AppShell() {
   const { me, loading, orgId, setOrgId, logout } = useAuth()
+  const { isDark, toggleDark } = useTheme()
   const navigate = useNavigate()
-  const membership = me?.organizations.find((o) => o.organization.id === orgId)
+  const location = useLocation()
+  const membership = membershipForOrg(me, orgId)
   const isOwner = membership?.role === 'OWNER'
+  const isTelecaller = isTelecallerRole(membership)
+  const workspaceNav = isTelecaller ? TELECALLER_NAV : WORKSPACE_NAV
   const orgName = membership?.organization?.name ?? ''
 
   const brandMeta = useQuery({
@@ -127,7 +143,7 @@ export function AppShell() {
         <nav className="sidebar-nav">
           <div className="sidebar-section">
             <div className="sidebar-section-label">Workspace</div>
-            {NAV.map(({ to, icon: Icon, label }) => (
+            {workspaceNav.map(({ to, icon: Icon, label }) => (
               <NavLink
                 key={to}
                 to={to}
@@ -139,21 +155,23 @@ export function AppShell() {
             ))}
           </div>
 
-          <div className="sidebar-section" style={{ marginTop: '0.5rem' }}>
-            <div className="sidebar-section-label">Analytics</div>
-            {CEO_NAV.map(({ to, icon: Icon, label }) => (
-              <NavLink
-                key={to}
-                to={to}
-                className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
-              >
-                <Icon size={16} />
-                {label}
-              </NavLink>
-            ))}
-          </div>
+          {!isTelecaller && (
+            <div className="sidebar-section" style={{ marginTop: '0.5rem' }}>
+              <div className="sidebar-section-label">Analytics</div>
+              {CEO_NAV.map(({ to, icon: Icon, label }) => (
+                <NavLink
+                  key={to}
+                  to={to}
+                  className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
+                >
+                  <Icon size={16} />
+                  {label}
+                </NavLink>
+              ))}
+            </div>
+          )}
 
-          {(isOwner || me.is_super_admin) && (
+          {!isTelecaller && (isOwner || me.is_super_admin) && (
             <div className="sidebar-section" style={{ marginTop: '0.5rem' }}>
               <div className="sidebar-section-label">Settings</div>
               {isOwner && (
@@ -214,11 +232,14 @@ export function AppShell() {
             <div style={{ flex: 1, minWidth: 0 }}>
               <div className="user-email">{me.email}</div>
               {membership?.role && (
-                <div style={{ fontSize: '0.65rem', color: '#94a3b8', marginTop: '0.1rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                <div className="user-role">
                   {membership.role}
                 </div>
               )}
             </div>
+            <button type="button" className="btn-logout" onClick={() => toggleDark()} title={isDark ? 'Light mode' : 'Dark mode'}>
+              {isDark ? <Sun size={15} /> : <Moon size={15} />}
+            </button>
             <button type="button" className="btn-logout" onClick={() => logout()} title="Sign out">
               <LogOut size={15} />
             </button>
@@ -228,7 +249,19 @@ export function AppShell() {
 
       {/* ── Main ── */}
       <main className="main">
-        <Outlet />
+        <DateFilterBar />
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={location.pathname}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.12 }}
+            style={{ flex: 1, display: 'flex', flexDirection: 'column' }}
+          >
+            <Outlet />
+          </motion.div>
+        </AnimatePresence>
       </main>
     </div>
   )
