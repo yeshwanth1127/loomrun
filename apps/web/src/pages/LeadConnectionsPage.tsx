@@ -1,8 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, Copy, Globe, Users, X, Zap } from 'lucide-react'
-import { useState } from 'react'
+import { Check, Copy, Globe, RefreshCw, Users, X, Zap } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { apiFetch } from '../lib/api'
+
+const apiPublicBase = import.meta.env.VITE_API_PUBLIC_URL ?? import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
 // ── Brand Icons ───────────────────────────────────────────────────────────────
 
@@ -151,11 +154,24 @@ function OAuthModal({ conn, orgId, onClose, onConnected }: {
   const [error, setError] = useState('')
 
   const connect = useMutation({
-    mutationFn: () =>
-      apiFetch(`/v1/orgs/${orgId}/lead-connections/connect`, {
+    mutationFn: async () => {
+      if (conn.source_name === 'META_ADS') {
+        const returnUrl = `${window.location.origin}/app/leads/connections`
+        const params = new URLSearchParams({
+          base_url: apiPublicBase,
+          return_url: returnUrl,
+        })
+        const data = await apiFetch<{ url: string }>(
+          `/v1/orgs/${orgId}/meta/oauth-url?${params.toString()}`,
+        )
+        window.location.href = data.url
+        return
+      }
+      await apiFetch(`/v1/orgs/${orgId}/lead-connections/connect`, {
         method: 'POST',
         json: { source_name: conn.source_name, access_token: 'oauth_mock_token' },
-      }),
+      })
+    },
     onSuccess: () => { onConnected(); onClose() },
     onError: (e) => setError((e as Error).message),
   })
@@ -228,6 +244,11 @@ function ConnectionCard({ conn, orgId, onRefresh }: {
 }) {
   const [showModal, setShowModal] = useState(false)
 
+  const syncMeta = useMutation({
+    mutationFn: () => apiFetch<{ status: string }>(`/v1/orgs/${orgId}/meta/sync`, { method: 'POST' }),
+    onSuccess: onRefresh,
+  })
+
   const disconnect = useMutation({
     mutationFn: () =>
       apiFetch(`/v1/orgs/${orgId}/lead-connections/disconnect`, {
@@ -278,7 +299,16 @@ function ConnectionCard({ conn, orgId, onRefresh }: {
           )}
         </div>
 
-        {conn.status === 'connected' && conn.webhook_url && (
+          {conn.source_name === 'META_ADS' && conn.webhook_url && (
+            <div className="form-field">
+              <label className="input-label" style={{ marginBottom: '0.25rem' }}>
+                Webhook URL (paste into Meta Developer Console)
+              </label>
+              <WebhookUrlRow url={conn.webhook_url} />
+            </div>
+          )}
+
+          {conn.status === 'connected' && conn.webhook_url && conn.source_name !== 'META_ADS' && (
           <div className="form-field">
             <label className="input-label" style={{ marginBottom: '0.25rem' }}>Webhook URL</label>
             <WebhookUrlRow url={conn.webhook_url} />
@@ -289,25 +319,39 @@ function ConnectionCard({ conn, orgId, onRefresh }: {
           <span className={`status-pill ${conn.status}`}>
             {conn.status === 'connected' ? 'Connected' : 'Not Connected'}
           </span>
-          {conn.status === 'connected' ? (
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              disabled={disconnect.isPending}
-              onClick={() => void disconnect.mutateAsync()}
-            >
-              {disconnect.isPending ? 'Disconnecting…' : 'Disconnect'}
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="btn btn-sm"
-              disabled={connectManual.isPending}
-              onClick={handleConnect}
-            >
-              {connectManual.isPending ? 'Connecting…' : 'Connect'}
-            </button>
-          )}
+          <div className="row" style={{ gap: '0.5rem' }}>
+            {conn.status === 'connected' && conn.source_name === 'META_ADS' && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={syncMeta.isPending}
+                onClick={() => void syncMeta.mutateAsync()}
+                title="Import existing leads from Meta Lead Ad forms"
+              >
+                <RefreshCw size={14} style={{ marginRight: 4 }} />
+                {syncMeta.isPending ? 'Syncing…' : 'Sync leads'}
+              </button>
+            )}
+            {conn.status === 'connected' ? (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={disconnect.isPending}
+                onClick={() => void disconnect.mutateAsync()}
+              >
+                {disconnect.isPending ? 'Disconnecting…' : 'Disconnect'}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={connectManual.isPending}
+                onClick={handleConnect}
+              >
+                {connectManual.isPending ? 'Connecting…' : 'Connect'}
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -344,6 +388,26 @@ function ConnectionCard({ conn, orgId, onRefresh }: {
 export function LeadConnectionsPage() {
   const { orgId } = useAuth()
   const qc = useQueryClient()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [banner, setBanner] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
+
+  useEffect(() => {
+    const meta = searchParams.get('meta')
+    if (!meta) return
+    if (meta === 'success') {
+      const pages = searchParams.get('pages')
+      setBanner({
+        type: 'success',
+        message: pages
+          ? `Meta Ads connected — ${pages} Facebook Page${pages === '1' ? '' : 's'} linked.`
+          : 'Meta Ads connected successfully.',
+      })
+    } else if (meta === 'error') {
+      setBanner({ type: 'error', message: 'Meta authorisation failed. Please try again.' })
+    }
+    setSearchParams({}, { replace: true })
+    void qc.invalidateQueries({ queryKey: ['lead-connections', orgId] })
+  }, [searchParams, setSearchParams, qc, orgId])
 
   const q = useQuery({
     queryKey: ['lead-connections', orgId],
@@ -380,6 +444,22 @@ export function LeadConnectionsPage() {
             </span>
           </div>
         </div>
+
+        {banner && (
+          <div
+            className="card"
+            style={{
+              padding: '0.75rem 1rem',
+              background: banner.type === 'success' ? '#ecfdf5' : '#fef2f2',
+              border: `1px solid ${banner.type === 'success' ? '#a7f3d0' : '#fecaca'}`,
+              boxShadow: 'none',
+              color: banner.type === 'success' ? '#065f46' : '#991b1b',
+              fontSize: '0.875rem',
+            }}
+          >
+            {banner.message}
+          </div>
+        )}
 
         {q.isLoading && <p className="muted">Loading integrations…</p>}
         {q.error && <p className="error">{(q.error as Error).message}</p>}

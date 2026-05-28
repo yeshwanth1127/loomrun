@@ -1,8 +1,7 @@
+import asyncio
 import logging
 from datetime import datetime, timezone
 
-from arq import create_pool
-from arq.connections import RedisSettings
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -225,8 +224,16 @@ async def _run_pdf_generation(quotation_id: str) -> str | None:
         invoice_number=q.invoiceNumber,
         **brand_pdf_kwargs_from_org(q.organization),
     )
-    await prisma.quotation.update(where={"id": quotation_id}, data={"pdfUrl": rel})
+    await prisma.quotation.update(where={"id": quotation_id}, data={"pdfUrl": rel, "pdfJobId": None})
     return rel
+
+
+async def _generate_pdf_task(quotation_id: str) -> None:
+    try:
+        await _run_pdf_generation(quotation_id)
+    except Exception:
+        logger.exception("Background PDF generation failed for %s", quotation_id)
+        await prisma.quotation.update(where={"id": quotation_id}, data={"pdfJobId": None})
 
 
 @router.post("/orgs/{org_id}/quotations/{quotation_id}/generate-pdf")
@@ -237,15 +244,8 @@ async def generate_pdf(org_id: str, quotation_id: str, ctx: OrgContext = Depends
     if not q:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Quotation not found")
     await prisma.quotation.update(where={"id": quotation_id}, data={"pdfJobId": "queued"})
-    try:
-        pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
-        await pool.enqueue_job("generate_quotation_pdf_job", quotation_id)
-        await pool.close()
-        return {"status": "queued", "quotation_id": quotation_id}
-    except Exception as e:  # noqa: BLE001
-        logger.warning("ARQ enqueue failed, generating inline: %s", e)
-        rel = await _run_pdf_generation(quotation_id)
-        return {"status": "completed", "pdf_url": rel}
+    asyncio.create_task(_generate_pdf_task(quotation_id))
+    return {"status": "queued", "quotation_id": quotation_id}
 
 
 @router.patch("/orgs/{org_id}/quotations/{quotation_id}")
@@ -342,15 +342,8 @@ async def generate_invoice(
         },
     )
 
-    try:
-        pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
-        await pool.enqueue_job("generate_quotation_pdf_job", quotation_id)
-        await pool.close()
-        return {"status": "queued", "invoice_number": invoice_number, "quotation_id": quotation_id}
-    except Exception as e:
-        logger.warning("ARQ enqueue failed, generating inline: %s", e)
-        rel = await _run_pdf_generation(quotation_id)
-        return {"status": "completed", "invoice_number": invoice_number, "pdf_url": rel}
+    asyncio.create_task(_generate_pdf_task(quotation_id))
+    return {"status": "queued", "invoice_number": invoice_number, "quotation_id": quotation_id}
 
 
 @router.get("/orgs/{org_id}/quotations/{quotation_id}/pdf-file")

@@ -1,8 +1,8 @@
-from datetime import datetime, timedelta
+import asyncio
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from arq.connections import create_pool, RedisSettings
 
 from loomrun_api.config import settings
 from loomrun_api.date_filter import apply_created_at
@@ -104,6 +104,11 @@ def _serialize_lead(lead, *, with_last_call: bool = False, last_call=None) -> di
         "next_follow_up_at": lead.nextFollowUpAt.isoformat() if lead.nextFollowUpAt else None,
         "last_activity_at": lead.lastActivityAt.isoformat() if lead.lastActivityAt else None,
         "estimated_value": float(lead.estimatedValue) if lead.estimatedValue is not None else None,
+        "meta_campaign_id": lead.metaCampaignId,
+        "meta_campaign_name": lead.metaCampaignName,
+        "meta_adset_name": lead.metaAdsetName,
+        "meta_ad_name": lead.metaAdName,
+        "meta_form_name": lead.metaFormName,
         "created_at": lead.createdAt.isoformat(),
         "updated_at": lead.updatedAt.isoformat(),
     }
@@ -187,6 +192,39 @@ def _normalize_source(src: str) -> LeadSource:
     return mapping.get(src.lower().replace(" ", "_"), LeadSource.OTHER)
 
 
+@router.get("/orgs/{org_id}/leads/meta-campaigns")
+async def list_meta_campaigns(org_id: str, ctx: OrgContext = Depends(get_org_context)) -> dict:
+    leads = await prisma.lead.find_many(
+        where={"organizationId": ctx.organization_id, "source": LeadSource.META_ADS, "metaCampaignId": {"not": None}},
+        order={"createdAt": "desc"},
+    )
+    campaigns: dict[str, dict] = {}
+    for lead in leads:
+        cid = lead.metaCampaignId or "unknown"
+        if cid not in campaigns:
+            campaigns[cid] = {
+                "campaign_id": cid,
+                "campaign_name": lead.metaCampaignName or cid,
+                "leads_count": 0,
+                "adsets": {},
+            }
+        campaigns[cid]["leads_count"] += 1
+        adset_id = lead.metaAdsetId or "unknown"
+        adsets = campaigns[cid]["adsets"]
+        if adset_id not in adsets:
+            adsets[adset_id] = {
+                "adset_id": adset_id,
+                "adset_name": lead.metaAdsetName or adset_id,
+                "leads_count": 0,
+            }
+        adsets[adset_id]["leads_count"] += 1
+
+    result = []
+    for c in campaigns.values():
+        result.append({**c, "adsets": list(c["adsets"].values())})
+    return {"items": result}
+
+
 @router.get("/orgs/{org_id}/leads")
 async def list_leads(
     org_id: str,
@@ -198,6 +236,7 @@ async def list_leads(
     score_max: int | None = Query(None),
     search: str | None = Query(None),
     day: str | None = Query(None, description="YYYY-MM-DD or all"),
+    campaign_id: str | None = Query(None, description="Filter by Meta campaign ID"),
     ctx: OrgContext = Depends(get_org_context),
 ) -> dict:
     where: dict = {"organizationId": ctx.organization_id}
@@ -221,6 +260,8 @@ async def list_leads(
             {"company": {"contains": search, "mode": "insensitive"}},
             {"email": {"contains": search, "mode": "insensitive"}},
         ]
+    if campaign_id is not None:
+        where["metaCampaignId"] = campaign_id
     leads = await prisma.lead.find_many(where=where, order={"updatedAt": "desc"})
     latest_calls = await _latest_calls_by_lead(ctx.organization_id, [lead.id for lead in leads])
     return {
@@ -229,6 +270,15 @@ async def list_leads(
             for lead in leads
         ]
     }
+
+
+async def _delayed_auto_call(lead_id: str, org_id: str) -> None:
+    await asyncio.sleep(300)
+    try:
+        from loomrun_api.workers import check_lead_call_needed
+        await check_lead_call_needed({}, lead_id, org_id)
+    except Exception:
+        pass
 
 
 @router.post("/orgs/{org_id}/leads", status_code=status.HTTP_201_CREATED)
@@ -265,17 +315,7 @@ async def create_lead(org_id: str, body: LeadCreate, ctx: OrgContext = Depends(g
         }
     )
 
-    # Enqueue 5-minute auto-call check
-    try:
-        pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
-        await pool.enqueue_job(
-            "check_lead_call_needed",
-            lead.id,
-            ctx.organization_id,
-            _defer_by=timedelta(minutes=5),
-        )
-    except Exception:
-        pass  # Non-critical; auto-call can be triggered manually if needed
+    asyncio.create_task(_delayed_auto_call(lead.id, ctx.organization_id))
 
     return _serialize_lead(lead)
 

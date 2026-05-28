@@ -3,6 +3,7 @@ import secrets
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
+from loomrun_api.config import settings
 from loomrun_api.deps import OrgContext, get_org_context
 from loomrun_api.prisma_client import prisma
 
@@ -50,17 +51,23 @@ async def list_connections(org_id: str, ctx: OrgContext = Depends(get_org_contex
     )
     by_source = {c.sourceName: c for c in existing}
 
-    apiBase = "http://localhost:8000"
+    api_base = settings.public_api_url.rstrip("/")
     items = []
     for meta in ALL_SOURCES:
         sn = meta["source_name"]
         conn = by_source.get(sn)
+        if sn == "META_ADS":
+            webhook_url = f"{api_base}/v1/hooks/meta"
+        elif meta["method"] in ("webhook", "api_key"):
+            webhook_url = f"{api_base}/v1/hooks/leads/{org_id}/{sn.lower()}"
+        else:
+            webhook_url = None
         item = {
             **meta,
             "status": conn.status if conn else "disconnected",
             "leads_count": conn.leadsCount if conn else 0,
             "last_sync": conn.lastSync.isoformat() if conn and conn.lastSync else None,
-            "webhook_url": f"{apiBase}/v1/hooks/leads/{org_id}/{sn.lower()}" if meta["method"] in ("webhook", "api_key") else None,
+            "webhook_url": webhook_url,
             "connection_id": conn.id if conn else None,
         }
         items.append(item)

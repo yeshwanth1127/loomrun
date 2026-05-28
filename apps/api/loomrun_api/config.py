@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     storage_dir: Path = _REPO_ROOT / "storage"
     whatsapp_verify_token: str = ""
     whatsapp_access_token: str = ""
+    meta_app_id: str = ""
+    meta_app_secret: str = ""
+    meta_webhook_verify_token: str = "[REDACTED]"
+    # Public API base URL for webhook URLs shown in the UI (use ngrok URL when testing locally)
+    public_api_url: str = "http://localhost:8000"
     # Comma-separated emails (case-insensitive) granted is_super_admin on register/login
     super_admin_emails: str = ""
 

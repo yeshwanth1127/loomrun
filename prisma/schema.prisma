@@ -202,6 +202,16 @@ model Lead {
   nextFollowUpAt   DateTime?   @map("next_follow_up_at")
   lastActivityAt   DateTime?   @map("last_activity_at")
   estimatedValue   Decimal?    @map("estimated_value") @db.Decimal(12, 2)
+  metaLeadgenId    String?     @map("meta_leadgen_id")
+  metaPageId       String?     @map("meta_page_id")
+  metaFormId       String?     @map("meta_form_id")
+  metaAdId         String?     @map("meta_ad_id")
+  metaAdsetId      String?     @map("meta_adset_id")
+  metaCampaignId   String?     @map("meta_campaign_id")
+  metaCampaignName String?     @map("meta_campaign_name")
+  metaAdsetName    String?     @map("meta_adset_name")
+  metaAdName       String?     @map("meta_ad_name")
+  metaFormName     String?     @map("meta_form_name")
   createdAt        DateTime    @default(now()) @map("created_at")
   updatedAt        DateTime    @updatedAt @map("updated_at")
 
@@ -216,6 +226,7 @@ model Lead {
 
   @@index([organizationId, stage])
   @@index([organizationId, nextFollowUpAt])
+  @@index([organizationId, metaCampaignId])
   @@map("leads")
 }
 
