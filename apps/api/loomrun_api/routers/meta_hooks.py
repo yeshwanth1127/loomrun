@@ -8,6 +8,7 @@ from loomrun_api.config import settings
 from loomrun_api.meta_client import fetch_leadgen, map_lead_fields, parse_field_data, verify_webhook_signature
 from loomrun_api.prisma_client import prisma
 from loomrun_api.prisma_json import json_meta
+from loomrun_api.whatsapp_template_service import schedule_greeting
 from prisma.enums import LeadActivityType, LeadSource
 
 logger = logging.getLogger(__name__)
@@ -141,11 +142,15 @@ async def _process_leadgen(leadgen_id: str, page_id: str, raw_value: dict) -> No
         }
     )
 
+    # Do not advance lastSync here — that timestamp drives the connections UI and
+    # used to feed incremental Graph filters, which permanently skipped any lead
+    # missed before the watermark. Poll / Sync now own lastSync + leadsCount.
     await prisma.leadconnection.update_many(
         where={"organizationId": org_id, "sourceName": "META_ADS"},
-        data={"leadsCount": {"increment": 1}, "lastSync": datetime.now(timezone.utc)},
+        data={"leadsCount": {"increment": 1}},
     )
 
+    schedule_greeting(org_id, lead.id)
     logger.info("Created lead %s from Meta leadgen_id=%s org=%s campaign=%s", lead.id, leadgen_id, org_id, campaign_name)
 
 

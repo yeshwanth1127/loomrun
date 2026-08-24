@@ -6,6 +6,7 @@ from pydantic import BaseModel, EmailStr, Field
 
 from loomrun_api.config import settings
 from loomrun_api.deps import get_current_user_id
+from loomrun_api.entitlements import default_trial_ends_at, trial_payload
 from loomrun_api.prisma_client import prisma
 from loomrun_api.security import (
     create_access_token,
@@ -67,7 +68,12 @@ async def register(body: RegisterBody) -> dict:
     email_norm = str(body.email).lower().strip()
     is_super = email_norm in settings.super_admin_email_set
     org = await prisma.organization.create(
-        data={"name": body.organization_name, "slug": slug},
+        data={
+            "name": body.organization_name,
+            "slug": slug,
+            "plan": "free",
+            "trialEndsAt": default_trial_ends_at(),
+        },
     )
     user = await prisma.user.create(
         data={
@@ -84,6 +90,9 @@ async def register(body: RegisterBody) -> dict:
             "role": MembershipRole.OWNER,
         },
     )
+    from loomrun_api.document_template_defaults import seed_org_templates
+
+    await seed_org_templates(prisma, org.id)
     access = create_access_token(user.id)
     refresh = create_refresh_token(user.id)
     return {"access_token": access, "refresh_token": refresh, "token_type": "bearer"}
@@ -167,6 +176,7 @@ async def me(user_id: str = Depends(get_current_user_id)) -> dict:
                     "slug": org.slug,
                     "plan": org.plan,
                     "suspended": org.suspended,
+                    **trial_payload(org),
                 },
             }
         )

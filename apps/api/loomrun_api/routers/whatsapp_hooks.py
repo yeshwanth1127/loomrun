@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 
 from loomrun_api.config import settings
 from loomrun_api.prisma_client import prisma
+from loomrun_api.whatsapp_template_service import schedule_greeting
 from prisma.enums import LeadSource
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,7 @@ async def whatsapp_inbound_public(org_id: str, request: Request) -> dict[str, st
                             "source": LeadSource.WHATSAPP,
                         }
                     )
+                    schedule_greeting(org_id, lead.id)
                 thread = await prisma.whatsappthread.find_first(
                     where={"organizationId": org_id, "externalWaId": from_wa},
                 )

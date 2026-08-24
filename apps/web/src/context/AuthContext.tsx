@@ -7,14 +7,24 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import { apiFetch, clearTokens, setTokens } from '../lib/api'
-
-const base = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+import { apiFetch, clearTokens, refreshAccessToken, setTokens } from '../lib/api'
 
 export type OrgSummary = {
   membership_id: string
   role: string
-  organization: { id: string; name: string; slug: string; plan: string; suspended: boolean }
+  organization: {
+    id: string
+    name: string
+    slug: string
+    plan: string
+    suspended: boolean
+    is_trial?: boolean
+    trial_active?: boolean
+    trial_expired?: boolean
+    trial_ends_at?: string | null
+    trial_days?: number
+    days_left?: number | null
+  }
 }
 
 export type Me = {
@@ -30,7 +40,7 @@ type AuthState = {
   loading: boolean
   orgId: string | null
   setOrgId: (id: string | null) => void
-  login: (email: string, password: string) => Promise<void>
+  login: (email: string, password: string) => Promise<Me>
   register: (p: {
     email: string
     password: string
@@ -45,23 +55,6 @@ type AuthState = {
 const AuthContext = createContext<AuthState | null>(null)
 
 const ORG_KEY = 'loomrun_active_org'
-
-async function refreshTokens(): Promise<boolean> {
-  const refresh = localStorage.getItem('refresh_token')
-  if (!refresh) return false
-  const res = await fetch(`${base}/v1/auth/refresh`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ refresh_token: refresh }),
-  })
-  if (!res.ok) {
-    clearTokens()
-    return false
-  }
-  const data = (await res.json()) as { access_token: string; refresh_token: string }
-  setTokens(data.access_token, data.refresh_token)
-  return true
-}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [me, setMe] = useState<Me | null>(null)
@@ -94,7 +87,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setOrgId(null)
       }
     } catch {
-      const ok = await refreshTokens()
+      const ok = await refreshAccessToken()
       if (ok) {
         const m = await apiFetch<Me>('/v1/auth/me')
         setMe(m)
@@ -130,6 +123,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setMe(m)
       if (m.organizations.length) setOrgId(m.organizations[0].organization.id)
       else setOrgId(null)
+      return m
     },
     [setOrgId],
   )

@@ -1,7 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, Copy, Globe, RefreshCw, Users, X, Zap } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { Check, Copy, Globe, Mail, RefreshCw, Users, Workflow, X, Zap } from 'lucide-react'
+import { type ReactElement, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import { toast } from 'sonner'
+import {
+  GoogleIcon,
+  GoogleServiceCard,
+  WhatsAppConnectorCard,
+  type GoogleConnectionItem,
+} from '../components/MessagingConnectors'
 import { useAuth } from '../context/AuthContext'
 import { apiFetch } from '../lib/api'
 
@@ -17,40 +24,9 @@ function MetaIcon() {
   )
 }
 
-function GoogleIcon() {
-  return (
-    <svg width="22" height="22" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-      <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-      <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-      <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05"/>
-      <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-    </svg>
-  )
-}
-
-function WhatsAppIcon() {
-  return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="#25D366" xmlns="http://www.w3.org/2000/svg">
-      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
-    </svg>
-  )
-}
-
-function IndiaMARTIcon() {
-  return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <rect width="24" height="24" rx="4" fill="#F47B20"/>
-      <text x="3.5" y="16.5" fontFamily="Arial, sans-serif" fontWeight="800" fontSize="10" fill="#fff">IM</text>
-    </svg>
-  )
-}
-
-const SOURCE_ICONS: Record<string, JSX.Element> = {
+const SOURCE_ICONS: Record<string, ReactElement> = {
   META_ADS:   <MetaIcon />,
   GOOGLE_ADS: <GoogleIcon />,
-  INDIAMART:  <IndiaMARTIcon />,
-  WHATSAPP:   <WhatsAppIcon />,
-  WEBSITE:    <Globe size={22} color="#3b82f6" />,
   MANUAL:     <Users size={22} color="#8b5cf6" />,
 }
 
@@ -63,6 +39,10 @@ type ConnectionItem = {
   last_sync: string | null
   webhook_url: string | null
   connection_id: string | null
+  plan_locked?: boolean
+  required_plan?: string | null
+  meta_available?: number | null
+  sync_note?: string | null
 }
 
 const METHOD_LABELS: Record<string, string> = {
@@ -70,6 +50,44 @@ const METHOD_LABELS: Record<string, string> = {
   api_key: 'API Key + Webhook',
   webhook: 'Webhook / Form POST',
   built_in: 'Built-in',
+  provisioned: 'Auto-provisioned',
+}
+
+type ProvisionedWorkflow = {
+  template: string
+  n8n_id: string
+  name: string
+  webhook_path: string | null
+  editor_url: string | null
+}
+
+type AutomationItem = {
+  service_name: string
+  label: string
+  method: string
+  provider: string
+  description: string
+  capabilities: string[]
+  loomrun_events: string[]
+  status: 'connected' | 'disconnected'
+  connected_email: string | null
+  last_used: string | null
+  connection_id: string | null
+  organization_slug: string | null
+  organization_name: string | null
+  suggested_sender_email: string | null
+  workflows: ProvisionedWorkflow[]
+  needs_gmail_setup: boolean
+  automation_ready: boolean
+}
+
+function N8nIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="12" cy="12" r="10" fill="#EA4B71"/>
+      <text x="12" y="16" textAnchor="middle" fontFamily="Arial, sans-serif" fontWeight="800" fontSize="11" fill="#fff">n8</text>
+    </svg>
+  )
 }
 
 // ── API Key Modal ─────────────────────────────────────────────────────────────
@@ -235,6 +253,247 @@ function WebhookUrlRow({ url }: { url: string }) {
   )
 }
 
+// ── n8n Automation Setup Modal ────────────────────────────────────────────────
+
+function N8nSetupModal({ item, orgId, n8nUrl, onClose, onConnected }: {
+  item: AutomationItem
+  orgId: string
+  n8nUrl: string | null
+  onClose: () => void
+  onConnected: () => void
+}) {
+  const [senderEmail, setSenderEmail] = useState(
+    item.connected_email ?? item.suggested_sender_email ?? '',
+  )
+  const [error, setError] = useState('')
+  const orgLabel = item.organization_name ?? item.organization_slug ?? 'your organization'
+  const credName = item.organization_slug
+    ? `Gmail — ${item.organization_slug}`
+    : 'Gmail — org inbox'
+
+  const provision = useMutation({
+    mutationFn: () =>
+      apiFetch(`/v1/orgs/${orgId}/automation-connections/provision`, {
+        method: 'POST',
+        json: { sender_email: senderEmail.trim() },
+      }),
+    onSuccess: () => { onConnected(); onClose() },
+    onError: (e) => setError((e as Error).message),
+  })
+
+  return (
+    <div className="modal-wrap" onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="modal" style={{ maxWidth: 520 }}>
+        <div className="modal-header">
+          <div className="row" style={{ gap: '0.5rem' }}>
+            <N8nIcon />
+            <h2>Provision n8n for {orgLabel}</h2>
+          </div>
+          <button type="button" className="btn-logout" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className="modal-body stack" style={{ gap: '0.875rem' }}>
+          {!item.automation_ready && (
+            <div className="card" style={{ padding: '0.75rem 1rem', background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', fontSize: '0.85rem' }}>
+              Automations are not configured on the server yet. Your admin must set <code>N8N_API_URL</code>, <code>N8N_API_KEY</code>, and <code>N8N_WEBHOOK_URL</code> in the environment.
+            </div>
+          )}
+
+          <p className="muted" style={{ fontSize: '0.875rem', margin: 0 }}>
+            Loomrun will clone four n8n workflows for this org. Webhook routing is handled automatically by the server — you only need to connect Gmail in n8n.
+          </p>
+
+          <div
+            className="card"
+            style={{ background: '#f8fafc', padding: '1rem', fontSize: '0.8rem', color: '#64748b', lineHeight: 1.7 }}
+          >
+            <p style={{ fontWeight: 600, color: '#334155', marginTop: 0 }}>After provisioning</p>
+            <p>1. {n8nUrl ? <>Open <a href={n8nUrl} target="_blank" rel="noreferrer">n8n</a></> : 'Open n8n'} — you will see 4 new workflows named <strong>{orgLabel}</strong>.</p>
+            <p>2. Create Gmail OAuth credential <strong>{credName}</strong> and sign in as the sender email below.</p>
+            <p>3. Attach that credential to every <strong>Gmail</strong> node in each cloned workflow.</p>
+            <p style={{ marginBottom: 0 }}>4. Toggle each workflow <strong>Active</strong> after Gmail is connected (workflows stay inactive until then).</p>
+          </div>
+
+          <div className="form-field">
+            <label className="input-label">Sender Gmail address (this org)</label>
+            <input
+              className="input"
+              type="email"
+              placeholder="sales@yourcompany.com"
+              value={senderEmail}
+              onChange={(e) => setSenderEmail(e.target.value)}
+              style={{ width: '100%' }}
+              autoFocus
+              disabled={!item.automation_ready}
+            />
+            <p className="muted" style={{ fontSize: '0.75rem', marginTop: '0.35rem', marginBottom: 0 }}>
+              Authorize this exact Google account on the Gmail nodes in n8n.
+            </p>
+          </div>
+
+          {error && <p className="error">{error}</p>}
+        </div>
+        <div className="modal-footer">
+          <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
+          <button
+            type="button"
+            className="btn"
+            disabled={!senderEmail.trim() || !item.automation_ready || provision.isPending}
+            onClick={() => void provision.mutateAsync()}
+          >
+            {provision.isPending ? 'Cloning workflows…' : 'Clone workflows for this org'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Automation Card ───────────────────────────────────────────────────────────
+
+function AutomationCard({ item, orgId, n8nUrl, onRefresh }: {
+  item: AutomationItem
+  orgId: string
+  n8nUrl: string | null
+  onRefresh: () => void
+}) {
+  const [showModal, setShowModal] = useState(false)
+
+  const disconnect = useMutation({
+    mutationFn: () =>
+      apiFetch(`/v1/orgs/${orgId}/automation-connections/disconnect`, {
+        method: 'POST',
+        json: { service_name: item.service_name },
+      }),
+    onSuccess: onRefresh,
+  })
+
+  return (
+    <>
+      <div className="integration-card">
+        <div className="integration-card-header">
+          <div className="integration-icon">
+            <N8nIcon />
+          </div>
+          <div>
+            <div className="integration-name">{item.label}</div>
+            <div className="integration-method">{METHOD_LABELS[item.method] ?? item.method}</div>
+          </div>
+        </div>
+
+        <p className="muted" style={{ fontSize: '0.8rem', margin: 0, lineHeight: 1.5 }}>
+          {item.description}
+        </p>
+
+        <div className="integration-meta">
+          {item.connected_email && (
+            <span>
+              <Mail size={12} /> Sends from {item.connected_email}
+            </span>
+          )}
+          {item.last_used && (
+            <span>
+              Last event: {new Date(item.last_used).toLocaleDateString('en-IN')}
+            </span>
+          )}
+          {item.organization_slug && (
+            <span>Org: {item.organization_slug}</span>
+          )}
+        </div>
+
+        {item.workflows.length > 0 && (
+          <div className="form-field">
+            <label className="input-label" style={{ marginBottom: '0.35rem' }}>Cloned workflows ({item.workflows.length})</label>
+            <ul style={{ margin: 0, paddingLeft: '1.1rem', fontSize: '0.78rem', lineHeight: 1.6 }}>
+              {item.workflows.map((wf) => (
+                <li key={wf.n8n_id}>
+                  {wf.editor_url ? (
+                    <a href={wf.editor_url} target="_blank" rel="noreferrer">{wf.name}</a>
+                  ) : (
+                    wf.name
+                  )}
+                </li>
+              ))}
+            </ul>
+            {item.needs_gmail_setup && (
+              <p className="muted" style={{ fontSize: '0.75rem', marginTop: '0.5rem', marginBottom: 0 }}>
+                Open each workflow in n8n and attach your org Gmail credential to all Gmail nodes.
+              </p>
+            )}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+          {item.capabilities.map((cap) => (
+            <span
+              key={cap}
+              style={{
+                fontSize: '0.68rem',
+                fontWeight: 600,
+                background: '#eef2ff',
+                color: '#4338ca',
+                padding: '0.2rem 0.5rem',
+                borderRadius: '4px',
+              }}
+            >
+              {cap}
+            </span>
+          ))}
+        </div>
+
+        <div className="integration-card-footer">
+          <span className={`status-pill ${item.status}`}>
+            {item.status === 'connected' ? 'Connected' : 'Not Connected'}
+          </span>
+          <div className="row" style={{ gap: '0.5rem' }}>
+            {n8nUrl && (
+              <a href={n8nUrl} target="_blank" rel="noreferrer" className="btn btn-ghost btn-sm">
+                Open n8n
+              </a>
+            )}
+            {item.status === 'connected' ? (
+              <>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => setShowModal(true)}
+                >
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  disabled={disconnect.isPending}
+                  onClick={() => void disconnect.mutateAsync()}
+                >
+                  {disconnect.isPending ? 'Disconnecting…' : 'Disconnect'}
+                </button>
+              </>
+            ) : item.workflows.length === 0 ? (
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => setShowModal(true)}
+              >
+                Clone workflows
+              </button>
+            ) : null}
+          </div>
+        </div>
+      </div>
+
+      {showModal && (
+        <N8nSetupModal
+          item={item}
+          orgId={orgId}
+          n8nUrl={n8nUrl}
+          onClose={() => setShowModal(false)}
+          onConnected={onRefresh}
+        />
+      )}
+    </>
+  )
+}
+
 // ── Connection Card ───────────────────────────────────────────────────────────
 
 function ConnectionCard({ conn, orgId, onRefresh }: {
@@ -245,8 +504,36 @@ function ConnectionCard({ conn, orgId, onRefresh }: {
   const [showModal, setShowModal] = useState(false)
 
   const syncMeta = useMutation({
-    mutationFn: () => apiFetch<{ status: string }>(`/v1/orgs/${orgId}/meta/sync`, { method: 'POST' }),
-    onSuccess: onRefresh,
+    mutationFn: () =>
+      apiFetch<{
+        status: string
+        created?: number
+        skipped?: number
+        meta_available?: number
+        total_meta?: number
+        retention_note?: string
+      }>(`/v1/orgs/${orgId}/meta/sync`, { method: 'POST' }),
+    onSuccess: (res) => {
+      onRefresh()
+      const created = res.created ?? 0
+      const available = res.meta_available
+      const total = res.total_meta
+      if (created > 0) {
+        toast.success(`Imported ${created} new Meta lead${created === 1 ? '' : 's'}${total != null ? ` · ${total} total in Loomrun` : ''}`)
+      } else {
+        toast.success(
+          available != null
+            ? `Already up to date · Meta currently exposes ${available} Instant Form leads · ${total ?? conn.leads_count} in Loomrun`
+            : 'Already up to date',
+        )
+      }
+      if (available != null && total != null && total < 900) {
+        toast.message(
+          'Ads Manager lifetime lead totals can look higher (~1000+) because Meta only lets apps download Instant Form details for about 90 days.',
+        )
+      }
+    },
+    onError: (err) => toast.error((err as Error).message || 'Meta sync failed'),
   })
 
   const disconnect = useMutation({
@@ -290,14 +577,30 @@ function ConnectionCard({ conn, orgId, onRefresh }: {
 
         <div className="integration-meta">
           <span>
-            <Zap size={12} /> {conn.leads_count} lead{conn.leads_count !== 1 ? 's' : ''}
+            <Zap size={12} /> {conn.leads_count} lead{conn.leads_count !== 1 ? 's' : ''} in Loomrun
           </span>
+          {conn.source_name === 'META_ADS' && conn.meta_available != null && (
+            <span>Meta downloadable now: {conn.meta_available}</span>
+          )}
           {conn.last_sync && (
             <span>
-              Last sync: {new Date(conn.last_sync).toLocaleDateString('en-IN')}
+              Last sync: {new Date(conn.last_sync).toLocaleString('en-IN', {
+                day: 'numeric',
+                month: 'short',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+              })}
             </span>
           )}
         </div>
+
+          {conn.source_name === 'META_ADS' && conn.status === 'connected' && (
+            <p className="muted small" style={{ margin: '0.5rem 0 0' }}>
+              {conn.sync_note
+                ?? 'Meta Ads Manager lifetime “leads” can be higher than Instant Form downloads. Meta only shares lead details for about 90 days; Loomrun keeps everything it has already synced plus new webhook leads.'}
+            </p>
+          )}
 
           {conn.source_name === 'META_ADS' && conn.webhook_url && (
             <div className="form-field">
@@ -326,10 +629,10 @@ function ConnectionCard({ conn, orgId, onRefresh }: {
                 className="btn btn-ghost btn-sm"
                 disabled={syncMeta.isPending}
                 onClick={() => void syncMeta.mutateAsync()}
-                title="Import existing leads from Meta Lead Ad forms"
+                title="Pulls every Instant Form lead Meta still exposes (~90 days), dedupes against what you already have. New leads also arrive via webhook; poll runs every 10 minutes."
               >
                 <RefreshCw size={14} style={{ marginRight: 4 }} />
-                {syncMeta.isPending ? 'Syncing…' : 'Sync leads'}
+                {syncMeta.isPending ? 'Syncing…' : 'Sync now'}
               </button>
             )}
             {conn.status === 'connected' ? (
@@ -393,20 +696,35 @@ export function LeadConnectionsPage() {
 
   useEffect(() => {
     const meta = searchParams.get('meta')
-    if (!meta) return
-    if (meta === 'success') {
-      const pages = searchParams.get('pages')
-      setBanner({
-        type: 'success',
-        message: pages
-          ? `Meta Ads connected — ${pages} Facebook Page${pages === '1' ? '' : 's'} linked.`
-          : 'Meta Ads connected successfully.',
-      })
-    } else if (meta === 'error') {
-      setBanner({ type: 'error', message: 'Meta authorisation failed. Please try again.' })
+    const google = searchParams.get('google')
+    const service = searchParams.get('service')
+
+    if (meta) {
+      if (meta === 'success') {
+        const pages = searchParams.get('pages')
+        setBanner({
+          type: 'success',
+          message: pages
+            ? `Meta Ads connected — ${pages} Facebook Page${pages === '1' ? '' : 's'} linked.`
+            : 'Meta Ads connected successfully.',
+        })
+      } else if (meta === 'error') {
+        setBanner({ type: 'error', message: 'Meta authorisation failed. Please try again.' })
+      }
+      void qc.invalidateQueries({ queryKey: ['lead-connections', orgId] })
     }
-    setSearchParams({}, { replace: true })
-    void qc.invalidateQueries({ queryKey: ['lead-connections', orgId] })
+
+    if (google) {
+      const label = service === 'GMAIL' ? 'Gmail' : service === 'GOOGLE_CALENDAR' ? 'Google Calendar' : 'Google'
+      if (google === 'success') {
+        setBanner({ type: 'success', message: `${label} connected successfully.` })
+      } else {
+        setBanner({ type: 'error', message: `${label} connection failed. Please try again.` })
+      }
+      void qc.invalidateQueries({ queryKey: ['google-connections', orgId] })
+    }
+
+    if (meta || google) setSearchParams({}, { replace: true })
   }, [searchParams, setSearchParams, qc, orgId])
 
   const q = useQuery({
@@ -415,36 +733,61 @@ export function LeadConnectionsPage() {
     queryFn: () => apiFetch<{ items: ConnectionItem[] }>(`/v1/orgs/${orgId}/lead-connections`),
   })
 
+  const automationsQ = useQuery({
+    queryKey: ['automation-connections', orgId],
+    enabled: !!orgId,
+    queryFn: () => apiFetch<{ items: AutomationItem[]; n8n_url: string | null }>(
+      `/v1/orgs/${orgId}/automation-connections`,
+    ),
+  })
+
+  const googleQ = useQuery({
+    queryKey: ['google-connections', orgId],
+    enabled: !!orgId,
+    queryFn: () => apiFetch<{ items: GoogleConnectionItem[]; google_configured: boolean }>(
+      `/v1/orgs/${orgId}/google/connections`,
+    ),
+  })
+
   function refresh() {
     void qc.invalidateQueries({ queryKey: ['lead-connections', orgId] })
   }
 
+  function refreshAutomations() {
+    void qc.invalidateQueries({ queryKey: ['automation-connections', orgId] })
+  }
+
+  function refreshGoogle() {
+    void qc.invalidateQueries({ queryKey: ['google-connections', orgId] })
+  }
+
   if (!orgId) return (
-    <><div className="page-header"><h1>Lead Integrations</h1></div></>
+    <><div className="page-header"><h1>Integrations</h1></div></>
   )
 
   const items = q.data?.items ?? []
+  const automations = automationsQ.data?.items ?? []
+  const n8nUrl = automationsQ.data?.n8n_url ?? null
+  const automationItem: AutomationItem | undefined = automations[0]
+    ? { ...automations[0], workflows: automations[0].workflows ?? [] }
+    : undefined
+  const automationsForRender = automationItem ? [automationItem] : []
+  const googleItems = googleQ.data?.items ?? []
+  const googleConfigured = googleQ.data?.google_configured ?? false
   const connectedCount = items.filter((c) => c.status === 'connected').length
+  const automationsConnectedCount = automationsForRender.filter((c) => c.status === 'connected').length
+  const googleConnectedCount = googleItems.filter((c) => c.status === 'connected').length
 
   return (
     <>
       <div className="page-header">
-        <h1>Lead Integrations</h1>
+        <h1>Integrations</h1>
         <p>
-          {connectedCount} of {items.length} source{items.length !== 1 ? 's' : ''} connected · Manage how leads flow into Loomrun
+          {connectedCount} lead source{connectedCount !== 1 ? 's' : ''} · {googleConnectedCount} Google service{googleConnectedCount !== 1 ? 's' : ''} connected
         </p>
       </div>
 
-      <div className="page-body stack" style={{ gap: '1.5rem' }}>
-        <div className="card" style={{ padding: '1rem 1.25rem', background: '#eef2ff', border: '1px solid #c7d2fe', boxShadow: 'none' }}>
-          <div className="row" style={{ gap: '0.5rem' }}>
-            <Zap size={16} style={{ color: '#4f46e5', flexShrink: 0 }} />
-            <span style={{ fontSize: '0.875rem', color: '#3730a3' }}>
-              All connected sources feed into a single pipeline. Duplicate leads (same phone or email) are automatically merged — the new inquiry is logged as an activity.
-            </span>
-          </div>
-        </div>
-
+      <div className="page-body stack" style={{ gap: '2rem' }}>
         {banner && (
           <div
             className="card"
@@ -461,19 +804,85 @@ export function LeadConnectionsPage() {
           </div>
         )}
 
-        {q.isLoading && <p className="muted">Loading integrations…</p>}
-        {q.error && <p className="error">{(q.error as Error).message}</p>}
+        <section className="stack" style={{ gap: '1rem' }}>
+          <div>
+            <h2 style={{ fontSize: '1.05rem', fontWeight: 700, margin: 0 }}>Lead Sources</h2>
+            <p className="muted" style={{ fontSize: '0.85rem', marginTop: '0.25rem', marginBottom: 0 }}>
+              Connect ad platforms and channels to capture leads into your pipeline.
+            </p>
+          </div>
 
-        <div className="integration-grid">
-          {items.map((conn) => (
-            <ConnectionCard
-              key={conn.source_name}
-              conn={conn}
-              orgId={orgId}
-              onRefresh={refresh}
-            />
-          ))}
-        </div>
+          <div className="card" style={{ padding: '1rem 1.25rem' }}>
+            <div className="row" style={{ gap: '0.5rem' }}>
+              <Zap size={16} style={{ color: 'var(--primary)', flexShrink: 0 }} />
+              <span style={{ fontSize: '0.875rem', color: 'var(--muted-fg)' }}>
+                All connected sources feed into a single pipeline. Duplicate leads (same phone or email) are automatically merged — the new inquiry is logged as an activity.
+              </span>
+            </div>
+          </div>
+
+          {q.isLoading && <p className="muted">Loading lead integrations…</p>}
+          {q.error && <p className="error">{(q.error as Error).message}</p>}
+
+          <div className="integration-grid">
+            {items.map((conn) => (
+              <ConnectionCard
+                key={conn.source_name}
+                conn={conn}
+                orgId={orgId}
+                onRefresh={refresh}
+              />
+            ))}
+          </div>
+        </section>
+
+        <section className="stack" style={{ gap: '1rem' }}>
+          <div>
+            <h2 style={{ fontSize: '1.05rem', fontWeight: 700, margin: 0 }}>Messaging</h2>
+            <p className="muted" style={{ fontSize: '0.85rem', marginTop: '0.25rem', marginBottom: 0 }}>
+              Link the WhatsApp number your workspace sends messages, quotations, and invoices from.
+            </p>
+          </div>
+
+          <div className="integration-grid">
+            <WhatsAppConnectorCard orgId={orgId} />
+          </div>
+        </section>
+
+        <section className="stack" style={{ gap: '1rem' }}>
+          <div>
+            <h2 style={{ fontSize: '1.05rem', fontWeight: 700, margin: 0 }}>Google Services</h2>
+            <p className="muted" style={{ fontSize: '0.85rem', marginTop: '0.25rem', marginBottom: 0 }}>
+              Connect Gmail and Google Calendar to send emails and schedule meetings directly from Loomrun.
+            </p>
+          </div>
+
+          {!googleConfigured && !googleQ.isLoading && (
+            <div className="card" style={{ padding: '1rem 1.25rem', background: '#fef2f2', border: '1px solid #fecaca', boxShadow: 'none' }}>
+              <div className="row" style={{ gap: '0.5rem' }}>
+                <span style={{ fontSize: '0.875rem', color: '#991b1b' }}>
+                  Google OAuth is not configured. Your admin must set <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> in the server environment.
+                </span>
+              </div>
+            </div>
+          )}
+
+          {googleQ.isLoading && <p className="muted">Loading Google services…</p>}
+          {googleQ.error && <p className="error">{(googleQ.error as Error).message}</p>}
+
+          {googleConfigured && (
+            <div className="integration-grid">
+              {googleItems.map((item) => (
+                <GoogleServiceCard
+                  key={item.service_name}
+                  item={item}
+                  orgId={orgId}
+                  onRefresh={refreshGoogle}
+                />
+              ))}
+            </div>
+          )}
+        </section>
       </div>
     </>
   )

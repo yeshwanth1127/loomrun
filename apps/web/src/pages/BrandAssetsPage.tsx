@@ -23,6 +23,13 @@ type BrandPayload = {
   email: string | null
   website: string | null
   tax_id: string | null
+  bank_name?: string | null
+  bank_account_number?: string | null
+  bank_account_name?: string | null
+  bank_ifsc?: string | null
+  bank_swift?: string | null
+  bank_ad_code?: string | null
+  bank_branch?: string | null
   has_logo: boolean
   has_signature?: boolean
   has_upi_qr?: boolean
@@ -41,6 +48,13 @@ export function BrandAssetsPage() {
   const [email, setEmail] = useState('')
   const [website, setWebsite] = useState('')
   const [taxId, setTaxId] = useState('')
+  const [bankName, setBankName] = useState('')
+  const [bankAccountNumber, setBankAccountNumber] = useState('')
+  const [bankAccountName, setBankAccountName] = useState('')
+  const [bankIfsc, setBankIfsc] = useState('')
+  const [bankSwift, setBankSwift] = useState('')
+  const [bankAdCode, setBankAdCode] = useState('')
+  const [bankBranch, setBankBranch] = useState('')
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [signaturePreviewUrl, setSignaturePreviewUrl] = useState<string | null>(null)
   const [upiQrPreviewUrl, setUpiQrPreviewUrl] = useState<string | null>(null)
@@ -66,6 +80,13 @@ export function BrandAssetsPage() {
     setEmail(d.email ?? '')
     setWebsite(d.website ?? '')
     setTaxId(d.tax_id ?? '')
+    setBankName(d.bank_name ?? '')
+    setBankAccountNumber(d.bank_account_number ?? '')
+    setBankAccountName(d.bank_account_name ?? '')
+    setBankIfsc(d.bank_ifsc ?? '')
+    setBankSwift(d.bank_swift ?? '')
+    setBankAdCode(d.bank_ad_code ?? '')
+    setBankBranch(d.bank_branch ?? '')
   }, [brandQ.data])
 
   useEffect(() => {
@@ -154,6 +175,13 @@ export function BrandAssetsPage() {
           email: email.trim() || null,
           website: website.trim() || null,
           tax_id: taxId.trim() || null,
+          bank_name: bankName.trim() || null,
+          bank_account_number: bankAccountNumber.trim() || null,
+          bank_account_name: bankAccountName.trim() || null,
+          bank_ifsc: bankIfsc.trim() || null,
+          bank_swift: bankSwift.trim() || null,
+          bank_ad_code: bankAdCode.trim() || null,
+          bank_branch: bankBranch.trim() || null,
         },
       }),
     onSuccess: () => {
@@ -348,7 +376,7 @@ export function BrandAssetsPage() {
         </p>
       </div>
 
-      <div className="page-body" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem', alignItems: 'start' }}>
+      <div className="page-body page-grid-2">
         <div className="stack" style={{ gap: '1.25rem' }}>
           <div className="card stack">
             <div className="section-title row" style={{ alignItems: 'center', gap: '0.5rem' }}>
@@ -584,89 +612,161 @@ export function BrandAssetsPage() {
           </form>
         </div>
 
-        <div className="card stack">
-          <div className="section-title row" style={{ alignItems: 'center', gap: '0.5rem' }}>
-            <FileText size={18} />
-            Product Catalog
-          </div>
+        <div className="stack" style={{ gap: '1.25rem' }}>
+          <div className="card stack">
+            <div className="section-title row" style={{ alignItems: 'center', gap: '0.5rem' }}>
+              <FileText size={18} />
+              Product Catalog
+            </div>
 
-          <div>
-            <p className="muted small" style={{ marginBottom: '0.75rem' }}>
-              Upload any CSV export — we auto-detect columns (e.g. product name, price, rate, MRP, SKU).
-              Comma, semicolon, or tab separators work. Prices can include ₹, commas, or decimals.
-            </p>
-            <label className="btn btn-sm" style={{ cursor: uploadCatalog.isPending ? 'wait' : 'pointer' }}>
-              <Upload size={14} />
-              Upload CSV
-              <input
-                type="file"
-                accept=".csv"
-                hidden
-                disabled={uploadCatalog.isPending}
-                onChange={(e) => {
-                  const f = e.target.files?.[0]
-                  e.target.value = ''
-                  if (f) uploadCatalog.mutate(f)
-                }}
-              />
-            </label>
-            {uploadCatalog.isError && <p className="error small" style={{ marginTop: '0.5rem' }}>{(uploadCatalog.error as Error).message}</p>}
-            {uploadCatalog.isSuccess && !uploadCatalog.isPending && (
-              <div className="success small" style={{ marginTop: '0.5rem' }}>
-                Uploaded {(uploadCatalog.data as { items_created: number }).items_created} item(s).
-                {(uploadCatalog.data as { column_mapping?: Record<string, string> }).column_mapping && (
-                  <div style={{ marginTop: '0.5rem' }}>
-                    <strong>Detected columns:</strong>
-                    <ul style={{ marginTop: '0.25rem', paddingLeft: '1.25rem' }}>
-                      {Object.entries((uploadCatalog.data as { column_mapping: Record<string, string> }).column_mapping).map(([k, v]) => (
-                        <li key={k}>{k} → {v}</li>
+            <div>
+              <p className="muted small" style={{ marginBottom: '0.75rem' }}>
+                Upload any CSV export — we auto-detect columns (e.g. product name, price, rate, MRP, SKU).
+                Comma, semicolon, or tab separators work. Prices can include ₹, commas, or decimals.
+              </p>
+              <label className="btn btn-sm" style={{ cursor: uploadCatalog.isPending ? 'wait' : 'pointer' }}>
+                <Upload size={14} />
+                Upload CSV
+                <input
+                  type="file"
+                  accept=".csv"
+                  hidden
+                  disabled={uploadCatalog.isPending}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0]
+                    e.target.value = ''
+                    if (f) uploadCatalog.mutate(f)
+                  }}
+                />
+              </label>
+              {uploadCatalog.isError && <p className="error small" style={{ marginTop: '0.5rem' }}>{(uploadCatalog.error as Error).message}</p>}
+              {uploadCatalog.isSuccess && !uploadCatalog.isPending && (
+                <div className="success small" style={{ marginTop: '0.5rem' }}>
+                  Uploaded {(uploadCatalog.data as { items_created: number }).items_created} item(s).
+                  {(uploadCatalog.data as unknown as { column_mapping?: Record<string, string> }).column_mapping && (
+                    <div style={{ marginTop: '0.5rem' }}>
+                      <strong>Detected columns:</strong>
+                      <ul style={{ marginTop: '0.25rem', paddingLeft: '1.25rem' }}>
+                        {Object.entries((uploadCatalog.data as unknown as { column_mapping: Record<string, string> }).column_mapping).map(([k, v]) => (
+                          <li key={k}>{k} → {v}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {(uploadCatalog.data as unknown as { warnings?: string[] }).warnings?.length ? (
+                    <ul style={{ marginTop: '0.5rem', paddingLeft: '1.5rem', color: '#b45309' }}>
+                      {(uploadCatalog.data as unknown as { warnings: string[] }).warnings.map((w, i) => (
+                        <li key={i} style={{ fontSize: '0.85rem' }}>{w}</li>
                       ))}
                     </ul>
-                  </div>
-                )}
-                {(uploadCatalog.data as { warnings?: string[] }).warnings?.length ? (
-                  <ul style={{ marginTop: '0.5rem', paddingLeft: '1.5rem', color: '#b45309' }}>
-                    {(uploadCatalog.data as { warnings: string[] }).warnings.map((w, i) => (
-                      <li key={i} style={{ fontSize: '0.85rem' }}>{w}</li>
-                    ))}
-                  </ul>
-                ) : null}
-                {(uploadCatalog.data as { errors: string[] }).errors?.length > 0 && (
-                  <ul style={{ marginTop: '0.5rem', paddingLeft: '1.5rem' }}>
-                    {(uploadCatalog.data as { errors: string[] }).errors.map((err, i) => (
-                      <li key={i} style={{ fontSize: '0.85rem' }}>{err}</li>
-                    ))}
-                  </ul>
-                )}
+                  ) : null}
+                  {(uploadCatalog.data as { errors: string[] }).errors?.length > 0 && (
+                    <ul style={{ marginTop: '0.5rem', paddingLeft: '1.5rem' }}>
+                      {(uploadCatalog.data as { errors: string[] }).errors.map((err, i) => (
+                        <li key={i} style={{ fontSize: '0.85rem' }}>{err}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {catalogQ.data?.items && catalogQ.data.items.length > 0 && (
+              <div style={{ marginTop: '1rem' }}>
+                <div className="input-label" style={{ marginBottom: '0.5rem' }}>Items in catalog ({catalogQ.data.items.length})</div>
+                <div className="stack" style={{ gap: '0.5rem', maxHeight: '300px', overflow: 'auto' }}>
+                  {catalogQ.data.items.map((item) => (
+                    <div key={item.id} className="row spread" style={{ padding: '0.5rem', backgroundColor: '#f8fafc', borderRadius: '0.375rem', alignItems: 'center' }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 500, fontSize: '0.9rem' }}>{item.name}</div>
+                        {item.description && <div className="muted small">{item.description}</div>}
+                        <div className="muted small">₹{item.unit_price.toLocaleString('en-IN')}</div>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        disabled={deleteCatalogItem.isPending}
+                        onClick={() => deleteCatalogItem.mutate(item.id)}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
+            {catalogQ.isLoading && <p className="muted small">Loading catalog…</p>}
           </div>
 
-          {catalogQ.data?.items && catalogQ.data.items.length > 0 && (
-            <div style={{ marginTop: '1rem' }}>
-              <div className="input-label" style={{ marginBottom: '0.5rem' }}>Items in catalog ({catalogQ.data.items.length})</div>
-              <div className="stack" style={{ gap: '0.5rem', maxHeight: '300px', overflow: 'auto' }}>
-                {catalogQ.data.items.map((item) => (
-                  <div key={item.id} className="row spread" style={{ padding: '0.5rem', backgroundColor: '#f8fafc', borderRadius: '0.375rem', alignItems: 'center' }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 500, fontSize: '0.9rem' }}>{item.name}</div>
-                      {item.description && <div className="muted small">{item.description}</div>}
-                      <div className="muted small">₹{item.unit_price.toLocaleString('en-IN')}</div>
-                    </div>
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      disabled={deleteCatalogItem.isPending}
-                      onClick={() => deleteCatalogItem.mutate(item.id)}
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                ))}
+          <form className="card stack" onSubmit={onSubmit}>
+            <div className="section-title">Bank details</div>
+            <p className="muted small" style={{ marginTop: '-0.25rem' }}>
+              Used in the “Payment Instructions” section on quotation/invoice PDFs.
+            </p>
+            <div className="form-field">
+              <label className="input-label" htmlFor="bankName">
+                Bank name
+              </label>
+              <input id="bankName" className="input" value={bankName} onChange={(e) => setBankName(e.target.value)} placeholder="AXIS" />
+            </div>
+            <div className="form-field">
+              <label className="input-label" htmlFor="bankAccNo">
+                Account number
+              </label>
+              <input
+                id="bankAccNo"
+                className="input"
+                value={bankAccountNumber}
+                onChange={(e) => setBankAccountNumber(e.target.value)}
+                placeholder="9210…"
+              />
+            </div>
+            <div className="form-field">
+              <label className="input-label" htmlFor="bankAccName">
+                Account name
+              </label>
+              <input
+                id="bankAccName"
+                className="input"
+                value={bankAccountName}
+                onChange={(e) => setBankAccountName(e.target.value)}
+                placeholder={legalName || membership?.organization?.name || 'Company name'}
+              />
+            </div>
+            <div className="row" style={{ gap: '0.75rem', flexWrap: 'wrap' }}>
+              <div className="form-field" style={{ flex: 1, minWidth: 200 }}>
+                <label className="input-label" htmlFor="bankIfsc">
+                  IFSC
+                </label>
+                <input id="bankIfsc" className="input" value={bankIfsc} onChange={(e) => setBankIfsc(e.target.value)} placeholder="UTIB0000339" />
+              </div>
+              <div className="form-field" style={{ flex: 1, minWidth: 200 }}>
+                <label className="input-label" htmlFor="bankSwift">
+                  SWIFT (optional)
+                </label>
+                <input id="bankSwift" className="input" value={bankSwift} onChange={(e) => setBankSwift(e.target.value)} placeholder="AXISINBB…" />
               </div>
             </div>
-          )}
-          {catalogQ.isLoading && <p className="muted small">Loading catalog…</p>}
+            <div className="row" style={{ gap: '0.75rem', flexWrap: 'wrap' }}>
+              <div className="form-field" style={{ flex: 1, minWidth: 200 }}>
+                <label className="input-label" htmlFor="bankAdCode">
+                  AD code (optional)
+                </label>
+                <input id="bankAdCode" className="input" value={bankAdCode} onChange={(e) => setBankAdCode(e.target.value)} placeholder="6360…" />
+              </div>
+              <div className="form-field" style={{ flex: 1, minWidth: 200 }}>
+                <label className="input-label" htmlFor="bankBranch">
+                  Branch (optional)
+                </label>
+                <input id="bankBranch" className="input" value={bankBranch} onChange={(e) => setBankBranch(e.target.value)} placeholder="Pollachi" />
+              </div>
+            </div>
+            {save.isError && <p className="error small">{(save.error as Error).message}</p>}
+            {save.isSuccess && !save.isPending && <p className="success small">Saved.</p>}
+            <button type="submit" className="btn" disabled={save.isPending}>
+              Save bank details
+            </button>
+          </form>
         </div>
       </div>
     </>

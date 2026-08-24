@@ -1,10 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  Activity,
+  BarChart2,
   Building2,
   CalendarDays,
-  Shield,
+  CreditCard,
+  FileText,
+  MessageCircle,
+  Phone,
+  Plug,
+  TrendingUp,
   UserPlus,
   Users,
+  Zap,
 } from 'lucide-react'
 import { useState } from 'react'
 import { Navigate } from 'react-router-dom'
@@ -16,6 +24,7 @@ type AdminOrg = {
   name: string
   slug: string
   plan: string
+  extra_seats: number
   suspended: boolean
   created_at: string
   member_count: number
@@ -30,30 +39,125 @@ type AdminUser = {
   created_at: string
 }
 
+type PlatformAnalytics = {
+  generated_at: string
+  totals: {
+    users: number
+    super_admins: number
+    organizations: number
+    suspended_organizations: number
+    memberships: number
+    leads: number
+    quotations: number
+    production_orders: number
+    expenses: number
+    payments: number
+    calls: number
+    whatsapp_threads: number
+    outbound_messages: number
+    catalog_items: number
+    lead_connections: number
+    automation_connections: number
+    telephony_configs: number
+    active_subscriptions: number
+  }
+  growth: {
+    users_last_7d: number
+    users_last_30d: number
+    orgs_last_7d: number
+    orgs_last_30d: number
+    leads_last_7d: number
+    leads_last_24h: number
+  }
+  plans: {
+    counts: Record<string, number>
+    estimated_mrr_inr: number
+  }
+  series: {
+    daily: Array<{ date: string; users: number; organizations: number; leads: number }>
+  }
+  top_organizations: Array<{
+    id: string
+    name: string
+    slug: string
+    plan: string
+    suspended: boolean
+    created_at: string
+    members: number
+    leads: number
+    quotations: number
+    production_orders: number
+    calls: number
+  }>
+}
+
 const MEMBERSHIP_ROLES = ['VIEWER', 'SALES', 'TELECALLER', 'PRODUCTION', 'OWNER'] as const
+const PLAN_OPTIONS = ['free', 'growth', 'scale'] as const
 
 const PLAN_COLOR: Record<string, string> = {
-  FREE: 'badge-slate',
-  STARTER: 'badge-blue',
-  PRO: 'badge-indigo',
-  ENTERPRISE: 'badge-purple',
+  free: 'badge-slate',
+  growth: 'badge-blue',
+  scale: 'badge-indigo',
+}
+
+function formatInr(n: number): string {
+  return new Intl.NumberFormat('en-IN', {
+    style: 'currency',
+    currency: 'INR',
+    maximumFractionDigits: 0,
+  }).format(n)
+}
+
+function MiniBars({
+  series,
+  field,
+}: {
+  series: PlatformAnalytics['series']['daily']
+  field: 'users' | 'organizations' | 'leads'
+}) {
+  const max = Math.max(1, ...series.map((d) => d[field]))
+  return (
+    <div className="row" style={{ gap: 3, alignItems: 'flex-end', height: 56 }}>
+      {series.map((d) => {
+        const h = Math.max(2, Math.round((d[field] / max) * 52))
+        return (
+          <div
+            key={d.date}
+            title={`${d.date}: ${d[field]}`}
+            style={{
+              width: 10,
+              height: h,
+              borderRadius: 3,
+              background: 'var(--primary)',
+              opacity: 0.55 + (d[field] / max) * 0.45,
+            }}
+          />
+        )
+      })}
+    </div>
+  )
 }
 
 function OrgCard({
   org,
   onSuspendChange,
+  onPlanChange,
+  onExtraSeatsChange,
   onJoin,
   joinPending,
-  suspendPending,
+  patchPending,
 }: {
   org: AdminOrg
   onSuspendChange: (id: string, val: boolean) => void
+  onPlanChange: (id: string, plan: string) => void
+  onExtraSeatsChange: (id: string, extraSeats: number) => void
   onJoin: (id: string) => void
   joinPending: boolean
-  suspendPending: boolean
+  patchPending: boolean
 }) {
   const initials = org.name.slice(0, 2).toUpperCase()
   const date = new Date(org.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+  const planKey = (org.plan || 'free').toLowerCase()
 
   return (
     <div className="org-card">
@@ -65,7 +169,7 @@ function OrgCard({
             <div className="org-slug">{org.slug}</div>
           </div>
         </div>
-        <span className={`badge ${PLAN_COLOR[org.plan] ?? 'badge-slate'}`}>{org.plan}</span>
+        <span className={`badge ${PLAN_COLOR[planKey] ?? 'badge-slate'}`}>{planKey}</span>
       </div>
 
       <div className="org-stats">
@@ -83,6 +187,41 @@ function OrgCard({
         </div>
       </div>
 
+      <div className="stack" style={{ gap: '0.65rem', marginTop: '0.75rem' }}>
+        <div className="form-field">
+          <label className="input-label">Plan</label>
+          <select
+            className="select"
+            value={PLAN_OPTIONS.includes(planKey as (typeof PLAN_OPTIONS)[number]) ? planKey : 'free'}
+            disabled={patchPending}
+            onChange={(e) => onPlanChange(org.id, e.target.value)}
+            style={{ width: '100%' }}
+          >
+            {PLAN_OPTIONS.map((p) => (
+              <option key={p} value={p}>{p}</option>
+            ))}
+          </select>
+        </div>
+        <div className="form-field">
+          <label className="input-label">Extra seats</label>
+          <input
+            className="input"
+            type="number"
+            min={0}
+            max={500}
+            value={org.extra_seats ?? 0}
+            disabled={patchPending}
+            onBlur={(e) => {
+              const n = Number(e.target.value)
+              if (!Number.isNaN(n) && n >= 0 && n !== (org.extra_seats ?? 0)) {
+                onExtraSeatsChange(org.id, n)
+              }
+            }}
+            style={{ width: '100%' }}
+          />
+        </div>
+      </div>
+
       <div className="org-card-footer">
         <div className="row" style={{ gap: '0.5rem' }}>
           {org.suspended && <span className="badge badge-red">Suspended</span>}
@@ -92,7 +231,7 @@ function OrgCard({
               <input
                 type="checkbox"
                 checked={org.suspended}
-                disabled={suspendPending}
+                disabled={patchPending}
                 onChange={(e) => onSuspendChange(org.id, e.target.checked)}
               />
               <span className="toggle-slider" />
@@ -106,7 +245,7 @@ function OrgCard({
           onClick={() => onJoin(org.id)}
         >
           <UserPlus size={13} />
-          Join as viewer
+          Join as owner
         </button>
       </div>
     </div>
@@ -120,6 +259,13 @@ export function AdminPage() {
   const [addEmail, setAddEmail] = useState('')
   const [addRole, setAddRole] = useState<string>('VIEWER')
 
+  const analyticsQ = useQuery({
+    queryKey: ['admin', 'analytics'],
+    queryFn: () => apiFetch<PlatformAnalytics>('/v1/admin/analytics'),
+    enabled: !!me?.is_super_admin,
+    refetchInterval: 60_000,
+  })
+
   const orgsQ = useQuery({
     queryKey: ['admin', 'organizations'],
     queryFn: () => apiFetch<{ items: AdminOrg[] }>('/v1/admin/organizations'),
@@ -128,21 +274,31 @@ export function AdminPage() {
 
   const usersQ = useQuery({
     queryKey: ['admin', 'users'],
-    queryFn: () => apiFetch<{ items: AdminUser[]; total: number }>('/v1/admin/users'),
+    queryFn: () => apiFetch<{ items: AdminUser[]; total: number }>('/v1/admin/users?take=200'),
     enabled: !!me?.is_super_admin,
   })
 
   const patchOrg = useMutation({
-    mutationFn: (p: { id: string; suspended: boolean }) =>
-      apiFetch(`/v1/admin/organizations/${p.id}`, { method: 'PATCH', json: { suspended: p.suspended } }),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['admin', 'organizations'] }),
+    mutationFn: (p: { id: string; suspended?: boolean; plan?: string; extra_seats?: number }) =>
+      apiFetch(`/v1/admin/organizations/${p.id}`, {
+        method: 'PATCH',
+        json: {
+          ...(p.suspended !== undefined ? { suspended: p.suspended } : {}),
+          ...(p.plan !== undefined ? { plan: p.plan } : {}),
+          ...(p.extra_seats !== undefined ? { extra_seats: p.extra_seats } : {}),
+        },
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['admin'] })
+      void reloadMe()
+    },
   })
 
   const patchUser = useMutation({
     mutationFn: (p: { id: string; is_super_admin: boolean }) =>
       apiFetch(`/v1/admin/users/${p.id}`, { method: 'PATCH', json: { is_super_admin: p.is_super_admin } }),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['admin', 'users'] })
+      void qc.invalidateQueries({ queryKey: ['admin'] })
       void reloadMe()
     },
   })
@@ -155,7 +311,7 @@ export function AdminPage() {
       }),
     onSuccess: () => {
       setAddEmail('')
-      void qc.invalidateQueries({ queryKey: ['admin', 'organizations'] })
+      void qc.invalidateQueries({ queryKey: ['admin'] })
       void reloadMe()
     },
   })
@@ -167,49 +323,205 @@ export function AdminPage() {
   })
 
   if (!me) return null
-  if (!me.is_super_admin) return <Navigate to="/app/leads" replace />
+  if (!me.is_super_admin) return <Navigate to="/app" replace />
 
   const orgs = orgsQ.data?.items ?? []
   const users = usersQ.data?.items ?? []
-
-  const totalLeads = orgs.reduce((s, o) => s + o.lead_count, 0)
-  const totalMembers = orgs.reduce((s, o) => s + o.member_count, 0)
-  const suspendedOrgs = orgs.filter((o) => o.suspended).length
+  const a = analyticsQ.data
+  const t = a?.totals
+  const g = a?.growth
+  const planCounts = a?.plans.counts ?? {}
 
   return (
     <>
       <div className="page-header">
         <h1>Platform Admin</h1>
-        <p>Manage organizations, users, and platform-wide settings</p>
+        <p>SaaS analytics across all organizations, users, and product activity</p>
       </div>
 
       <div className="page-body stack" style={{ gap: '2rem' }}>
-        {/* Summary metrics */}
+        {analyticsQ.error && <p className="error">{(analyticsQ.error as Error).message}</p>}
+
+        {/* Primary KPIs */}
         <div className="metrics-grid">
           <div className="metric-card indigo">
             <div className="metric-icon indigo"><Building2 size={18} /></div>
             <div className="metric-label">Organizations</div>
-            <div className="metric-value">{orgs.length}</div>
-            {suspendedOrgs > 0 && <div className="metric-sub">{suspendedOrgs} suspended</div>}
+            <div className="metric-value">{t?.organizations ?? '—'}</div>
+            <div className="metric-sub">
+              {(t?.suspended_organizations ?? 0) > 0 ? `${t?.suspended_organizations} suspended · ` : ''}
+              +{g?.orgs_last_7d ?? 0} this week
+            </div>
           </div>
           <div className="metric-card blue">
             <div className="metric-icon blue"><Users size={18} /></div>
-            <div className="metric-label">Total members</div>
-            <div className="metric-value">{totalMembers}</div>
+            <div className="metric-label">Platform users</div>
+            <div className="metric-value">{t?.users ?? '—'}</div>
+            <div className="metric-sub">
+              {t?.super_admins ?? 0} super admins · +{g?.users_last_7d ?? 0} this week
+            </div>
           </div>
           <div className="metric-card green">
-            <div className="metric-icon green"><Shield size={18} /></div>
+            <div className="metric-icon green"><Activity size={18} /></div>
             <div className="metric-label">Total leads</div>
-            <div className="metric-value">{totalLeads}</div>
+            <div className="metric-value">{t?.leads ?? '—'}</div>
+            <div className="metric-sub">
+              {g?.leads_last_24h ?? 0} last 24h · +{g?.leads_last_7d ?? 0} this week
+            </div>
           </div>
           <div className="metric-card purple">
-            <div className="metric-icon purple"><Users size={18} /></div>
-            <div className="metric-label">Platform users</div>
-            <div className="metric-value">{usersQ.data?.total ?? '—'}</div>
+            <div className="metric-icon purple"><CreditCard size={18} /></div>
+            <div className="metric-label">Est. MRR</div>
+            <div className="metric-value" style={{ fontSize: '1.35rem' }}>
+              {a ? formatInr(a.plans.estimated_mrr_inr) : '—'}
+            </div>
+            <div className="metric-sub">{t?.active_subscriptions ?? 0} active subscriptions</div>
           </div>
         </div>
 
-        {/* Orgs grid */}
+        {/* Product volume */}
+        <section>
+          <div className="section-title" style={{ marginBottom: '1rem' }}>
+            <BarChart2 size={16} style={{ marginRight: 6 }} />
+            Platform volume
+          </div>
+          <div className="metrics-grid">
+            <div className="metric-card">
+              <div className="metric-label"><Users size={14} /> Memberships</div>
+              <div className="metric-value">{t?.memberships ?? '—'}</div>
+            </div>
+            <div className="metric-card">
+              <div className="metric-label"><FileText size={14} /> Quotations</div>
+              <div className="metric-value">{t?.quotations ?? '—'}</div>
+            </div>
+            <div className="metric-card">
+              <div className="metric-label"><Zap size={14} /> Production orders</div>
+              <div className="metric-value">{t?.production_orders ?? '—'}</div>
+            </div>
+            <div className="metric-card">
+              <div className="metric-label"><Phone size={14} /> Calls</div>
+              <div className="metric-value">{t?.calls ?? '—'}</div>
+            </div>
+            <div className="metric-card">
+              <div className="metric-label"><MessageCircle size={14} /> WhatsApp threads</div>
+              <div className="metric-value">{t?.whatsapp_threads ?? '—'}</div>
+            </div>
+            <div className="metric-card">
+              <div className="metric-label"><Plug size={14} /> Integrations</div>
+              <div className="metric-value">
+                {(t?.lead_connections ?? 0) + (t?.automation_connections ?? 0) + (t?.telephony_configs ?? 0)}
+              </div>
+              <div className="metric-sub">
+                leads {t?.lead_connections ?? 0} · automation {t?.automation_connections ?? 0} · telephony {t?.telephony_configs ?? 0}
+              </div>
+            </div>
+            <div className="metric-card">
+              <div className="metric-label">Payments / expenses</div>
+              <div className="metric-value">{(t?.payments ?? 0) + (t?.expenses ?? 0)}</div>
+              <div className="metric-sub">{t?.payments ?? 0} payments · {t?.expenses ?? 0} expenses</div>
+            </div>
+            <div className="metric-card">
+              <div className="metric-label">Catalog items</div>
+              <div className="metric-value">{t?.catalog_items ?? '—'}</div>
+              <div className="metric-sub">{t?.outbound_messages ?? 0} outbound messages</div>
+            </div>
+          </div>
+        </section>
+
+        {/* Plans + growth charts */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.25rem' }}>
+          <div className="card">
+            <div className="section-title" style={{ marginBottom: '0.85rem' }}>
+              <CreditCard size={15} style={{ marginRight: 6 }} />
+              Plans
+            </div>
+            <div className="stack" style={{ gap: '0.55rem' }}>
+              {(['free', 'growth', 'scale'] as const).map((p) => (
+                <div key={p} className="row" style={{ justifyContent: 'space-between' }}>
+                  <span className={`badge ${PLAN_COLOR[p]}`}>{p}</span>
+                  <strong>{planCounts[p] ?? 0}</strong>
+                </div>
+              ))}
+              {Object.entries(planCounts)
+                .filter(([k]) => !['free', 'growth', 'scale'].includes(k))
+                .map(([k, v]) => (
+                  <div key={k} className="row" style={{ justifyContent: 'space-between' }}>
+                    <span className="badge badge-slate">{k}</span>
+                    <strong>{v}</strong>
+                  </div>
+                ))}
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="section-title" style={{ marginBottom: '0.85rem' }}>
+              <TrendingUp size={15} style={{ marginRight: 6 }} />
+              New users (14d)
+            </div>
+            {a ? <MiniBars series={a.series.daily} field="users" /> : <p className="muted small">Loading…</p>}
+            <p className="muted small" style={{ marginTop: '0.65rem' }}>+{g?.users_last_30d ?? 0} in last 30 days</p>
+          </div>
+
+          <div className="card">
+            <div className="section-title" style={{ marginBottom: '0.85rem' }}>
+              <Building2 size={15} style={{ marginRight: 6 }} />
+              New orgs (14d)
+            </div>
+            {a ? <MiniBars series={a.series.daily} field="organizations" /> : <p className="muted small">Loading…</p>}
+            <p className="muted small" style={{ marginTop: '0.65rem' }}>+{g?.orgs_last_30d ?? 0} in last 30 days</p>
+          </div>
+
+          <div className="card">
+            <div className="section-title" style={{ marginBottom: '0.85rem' }}>
+              <Activity size={15} style={{ marginRight: 6 }} />
+              New leads (14d)
+            </div>
+            {a ? <MiniBars series={a.series.daily} field="leads" /> : <p className="muted small">Loading…</p>}
+            <p className="muted small" style={{ marginTop: '0.65rem' }}>+{g?.leads_last_7d ?? 0} in last 7 days</p>
+          </div>
+        </div>
+
+        {/* Top orgs table */}
+        <section>
+          <div className="section-title" style={{ marginBottom: '1rem' }}>Top organizations by activity</div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Organization</th>
+                  <th>Plan</th>
+                  <th>Members</th>
+                  <th>Leads</th>
+                  <th>Quotations</th>
+                  <th>Orders</th>
+                  <th>Calls</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(a?.top_organizations ?? []).map((o) => (
+                  <tr key={o.id}>
+                    <td>
+                      <div style={{ fontWeight: 600 }}>{o.name}</div>
+                      <div className="muted small">{o.slug}{o.suspended ? ' · suspended' : ''}</div>
+                    </td>
+                    <td><span className={`badge ${PLAN_COLOR[(o.plan || 'free').toLowerCase()] ?? 'badge-slate'}`}>{(o.plan || 'free').toLowerCase()}</span></td>
+                    <td>{o.members}</td>
+                    <td>{o.leads}</td>
+                    <td>{o.quotations}</td>
+                    <td>{o.production_orders}</td>
+                    <td>{o.calls}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {analyticsQ.isLoading && <p className="muted" style={{ padding: '1rem' }}>Loading analytics…</p>}
+            {!analyticsQ.isLoading && (a?.top_organizations.length ?? 0) === 0 && (
+              <div className="empty-state"><p>No organization activity yet</p></div>
+            )}
+          </div>
+        </section>
+
+        {/* Org management */}
         <section>
           <div className="section-title" style={{ marginBottom: '1rem' }}>
             Organizations
@@ -222,9 +534,11 @@ export function AdminPage() {
                 key={o.id}
                 org={o}
                 onSuspendChange={(id, val) => patchOrg.mutate({ id, suspended: val })}
+                onPlanChange={(id, plan) => patchOrg.mutate({ id, plan })}
+                onExtraSeatsChange={(id, extra_seats) => patchOrg.mutate({ id, extra_seats })}
                 onJoin={(id) => joinSupport.mutate(id)}
                 joinPending={joinSupport.isPending}
-                suspendPending={patchOrg.isPending}
+                patchPending={patchOrg.isPending}
               />
             ))}
           </div>
@@ -236,7 +550,6 @@ export function AdminPage() {
           )}
         </section>
 
-        {/* Add membership */}
         <section>
           <div className="section-title">Add Membership</div>
           <div className="card" style={{ maxWidth: 640 }}>
@@ -286,7 +599,6 @@ export function AdminPage() {
           </div>
         </section>
 
-        {/* Users table */}
         <section>
           <div className="section-title" style={{ marginBottom: '1rem' }}>
             All Users

@@ -1,14 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Download, FileText, Mail, MessageCircle, Plus } from 'lucide-react'
+import { Check, Download, FileText, Mail, MessageCircle, Plus, Trash2 } from 'lucide-react'
 import type { FormEvent } from 'react'
-import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useDateFilter } from '../context/DateFilterContext'
 import { apiFetch } from '../lib/api'
+import { LeadSearchSelect, type LeadOption } from '../components/LeadSearchSelect'
+import { RowActions } from '../components/RowActions'
 import { toast } from 'sonner'
 
-type Lead = { id: string; title: string; phone?: string | null; email?: string | null }
+type Lead = { id: string; title: string; phone?: string | null; email?: string | null; company?: string | null }
 type CatalogItem = {
   id: string
   name: string
@@ -28,9 +30,17 @@ type Quotation = {
   lead_phone: string | null
   lead_email: string | null
   pdf_url: string | null
+  template_id: string | null
   sent_at: string | null
   invoiced_at: string | null
   lines: { id?: string; description: string; quantity: number; unit_price: number; line_total: number }[]
+}
+
+type DocTemplate = {
+  id: string
+  name: string
+  doc_type: string
+  is_default: boolean
 }
 
 type LineDraft = { description: string; quantity: string; unit_price: string }
@@ -47,10 +57,16 @@ const emptyLine = (): LineDraft => ({ description: '', quantity: '1', unit_price
 
 const base = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
-async function downloadPdf(orgId: string, quotationId: string, number: string) {
+async function downloadPdf(
+  orgId: string,
+  quotationId: string,
+  filename: string,
+  variant: 'quotation' | 'invoice' = 'quotation',
+) {
   try {
+    const params = new URLSearchParams({ variant })
     const response = await fetch(
-      `${base}/v1/orgs/${orgId}/quotations/${quotationId}/pdf-file`,
+      `${base}/v1/orgs/${orgId}/quotations/${quotationId}/pdf-file?${params}`,
       {
         headers: { Authorization: `Bearer ${localStorage.getItem('access_token') ?? ''}` },
       }
@@ -62,7 +78,7 @@ async function downloadPdf(orgId: string, quotationId: string, number: string) {
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `quotation-${number}.pdf`
+    link.download = `${filename}.pdf`
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
@@ -76,14 +92,39 @@ export function QuotationsPage() {
   const { orgId } = useAuth()
   const { dayParam, appendDay, isAll } = useDateFilter()
   const qc = useQueryClient()
+  const location = useLocation()
+  const navigate = useNavigate()
   const [showForm, setShowForm] = useState(false)
   const [leadId, setLeadId] = useState('')
+  const [selectedLead, setSelectedLead] = useState<LeadOption | null>(null)
   const [lines, setLines] = useState<LineDraft[]>([emptyLine()])
-  const [sendError, setSendError] = useState<string | null>(null)
-  const [sendNotice, setSendNotice] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editLeadId, setEditLeadId] = useState('')
   const [editLines, setEditLines] = useState<LineDraft[]>([emptyLine()])
+  const [templateId, setTemplateId] = useState('')
+
+  useEffect(() => {
+    const state = location.state as { leadId?: string; openForm?: boolean } | null
+    if (!state?.leadId) return
+    setLeadId(state.leadId)
+    if (state.openForm) setShowForm(true)
+    navigate(location.pathname, { replace: true, state: null })
+  }, [location, navigate])
+  const [pdfTemplateByQuotation, setPdfTemplateByQuotation] = useState<Record<string, string>>({})
+  // Last action result per quotation, shown inline beside that row's Actions dropdown.
+  const [rowStatus, setRowStatus] = useState<
+    Record<string, { text: string; detail?: string; ok: boolean }>
+  >({})
+
+  const markRow = (id: string, text: string, ok = true, detail?: string) =>
+    setRowStatus((prev) => ({ ...prev, [id]: { text, ok, detail } }))
+
+  const clearRow = (id: string) =>
+    setRowStatus((prev) => {
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
 
   const leadsQ = useQuery({
     queryKey: ['leads-select', orgId],
@@ -96,6 +137,18 @@ export function QuotationsPage() {
     enabled: !!orgId,
     queryFn: () => apiFetch<{ items: CatalogItem[] }>(`/v1/orgs/${orgId}/catalog`),
   })
+
+  const templatesQ = useQuery({
+    queryKey: ['document-templates', orgId, 'QUOTATION'],
+    enabled: !!orgId,
+    queryFn: () =>
+      apiFetch<{ items: DocTemplate[]; default_quotation_template_id: string | null }>(
+        `/v1/orgs/${orgId}/document-templates?doc_type=QUOTATION`
+      ),
+  })
+
+  const quotationTemplates = templatesQ.data?.items ?? []
+  const defaultTemplateId = templatesQ.data?.default_quotation_template_id ?? ''
 
   const q = useQuery({
     queryKey: ['quotations', orgId, dayParam],
@@ -110,30 +163,66 @@ export function QuotationsPage() {
   const catalogItems = catalogQ.data?.items ?? []
 
   const create = useMutation({
-    mutationFn: () =>
-      apiFetch(`/v1/orgs/${orgId}/quotations`, {
+    mutationFn: async (mode: 'draft' | 'finalize') => {
+      const created = await apiFetch<{ id: string; number: string }>(`/v1/orgs/${orgId}/quotations`, {
         method: 'POST',
         json: {
           lead_id: leadId,
+          template_id: templateId || null,
           lines: lines.map((l) => ({
             description: l.description,
             quantity: Number(l.quantity),
             unit_price: Number(l.unit_price),
           })),
         },
-      }),
-    onSuccess: () => {
+      })
+      if (mode === 'finalize') {
+        await apiFetch(`/v1/orgs/${orgId}/quotations/${created.id}/generate-pdf`, {
+          method: 'POST',
+          json: { template_id: templateId || null },
+        })
+      }
+      return { created, mode }
+    },
+    onSuccess: ({ created, mode }) => {
       setLeadId('')
+      setSelectedLead(null)
       setLines([emptyLine()])
       setShowForm(false)
+      if (mode === 'finalize') {
+        markRow(created.id, 'PDF generating…')
+        toast.success(`Quotation ${created.number} created — PDF generating`)
+      } else {
+        markRow(created.id, 'Saved as draft')
+        toast.success(`Draft ${created.number} saved`)
+      }
       void qc.invalidateQueries({ queryKey: ['quotations', orgId] })
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || 'Failed to create quotation')
     },
   })
 
+  function canSubmitForm() {
+    return !!leadId && lines.every((l) => l.description && l.unit_price)
+  }
+
+  function submitCreate(mode: 'draft' | 'finalize') {
+    if (!canSubmitForm() || create.isPending) return
+    void create.mutateAsync(mode)
+  }
+
   const genPdf = useMutation({
-    mutationFn: (id: string) =>
-      apiFetch(`/v1/orgs/${orgId}/quotations/${id}/generate-pdf`, { method: 'POST' }),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['quotations', orgId] }),
+    mutationFn: ({ id, template_id }: { id: string; template_id?: string | null }) =>
+      apiFetch(`/v1/orgs/${orgId}/quotations/${id}/generate-pdf`, {
+        method: 'POST',
+        json: { template_id: template_id || null },
+      }),
+    onSuccess: (_data, vars) => {
+      markRow(vars.id, 'PDF generated')
+      void qc.invalidateQueries({ queryKey: ['quotations', orgId] })
+    },
+    onError: (err: Error, vars) => markRow(vars.id, err.message || 'PDF failed', false),
   })
 
   const send = useMutation({
@@ -146,59 +235,91 @@ export function QuotationsPage() {
         message?: string
       }>(`/v1/orgs/${orgId}/quotations/${id}/send`, {
         method: 'POST',
-        json: { channel },
+        json: { channel, doc_type: 'quotation' },
       }),
     onSuccess: (data) => {
-      setSendError(null)
       const via = data.channel === 'whatsapp' ? 'WhatsApp' : 'Email'
-      setSendNotice(
-        data.message ?? `Sent via ${via}. Lead stage: ${data.lead_stage.replace(/_/g, ' ')}`
+      markRow(
+        data.id,
+        `Sent via ${via}`,
+        true,
+        data.message ?? `Lead stage: ${data.lead_stage.replace(/_/g, ' ')}`
+      )
+      void qc.invalidateQueries({ queryKey: ['quotations', orgId] })
+      void qc.invalidateQueries({ queryKey: ['leads', orgId] })
+      void qc.invalidateQueries({ queryKey: ['leads-select', orgId] })
+    },
+    onError: (err: Error, vars) => markRow(vars.id, err.message || 'Send failed', false),
+  })
+
+  const edit = useMutation({
+    mutationFn: () =>
+      apiFetch<{ id: string; message?: string; lead_stage?: string }>(
+        `/v1/orgs/${orgId}/quotations/${editingId}`,
+        {
+          method: 'PATCH',
+          json: {
+            lead_id: editLeadId,
+            lines: editLines.map((l) => ({
+              description: l.description,
+              quantity: Number(l.quantity),
+              unit_price: Number(l.unit_price),
+            })),
+          },
+        },
+      ),
+    onSuccess: (data) => {
+      if (editingId) {
+        markRow(
+          editingId,
+          data.lead_stage === 'NEGOTIATION'
+            ? 'Updated · lead → Negotiation'
+            : 'Draft updated — regenerate PDF',
+        )
+      }
+      setEditingId(null)
+      setEditLeadId('')
+      setEditLines([emptyLine()])
+      toast.success(
+        data.message ??
+          (data.lead_stage === 'NEGOTIATION'
+            ? 'Quotation updated — lead moved to Negotiation'
+            : 'Draft updated — generate PDF when ready'),
       )
       void qc.invalidateQueries({ queryKey: ['quotations', orgId] })
       void qc.invalidateQueries({ queryKey: ['leads', orgId] })
       void qc.invalidateQueries({ queryKey: ['leads-select', orgId] })
     },
     onError: (err: Error) => {
-      setSendNotice(null)
-      setSendError(err.message)
-    },
-  })
-
-  const edit = useMutation({
-    mutationFn: () =>
-      apiFetch(`/v1/orgs/${orgId}/quotations/${editingId}`, {
-        method: 'PATCH',
-        json: {
-          lead_id: editLeadId,
-          lines: editLines.map((l) => ({
-            description: l.description,
-            quantity: Number(l.quantity),
-            unit_price: Number(l.unit_price),
-          })),
-        },
-      }),
-    onSuccess: () => {
-      setEditingId(null)
-      setEditLeadId('')
-      setEditLines([emptyLine()])
-      toast.success('Quotation updated')
-      void qc.invalidateQueries({ queryKey: ['quotations', orgId] })
-    },
-    onError: (err: Error) => {
+      if (editingId) markRow(editingId, err.message || 'Update failed', false)
       toast.error(err.message)
     },
   })
 
   const genInvoice = useMutation({
     mutationFn: (id: string) =>
-      apiFetch(`/v1/orgs/${orgId}/quotations/${id}/generate-invoice`, { method: 'POST' }),
-    onSuccess: () => {
-      toast.success('Invoice generated')
+      apiFetch<{ invoice_number: string }>(`/v1/orgs/${orgId}/quotations/${id}/generate-invoice`, { method: 'POST' }),
+    onSuccess: (data, id) => {
+      markRow(id, `Invoice ${data.invoice_number} created`)
+      toast.success(`Invoice ${data.invoice_number} created — PDF generating…`)
       void qc.invalidateQueries({ queryKey: ['quotations', orgId] })
+      void qc.invalidateQueries({ queryKey: ['invoices', orgId] })
     },
-    onError: (err: Error) => {
+    onError: (err: Error, id) => {
+      markRow(id, err.message || 'Convert failed', false)
       toast.error(err.message)
     },
+  })
+
+  const deleteQuotation = useMutation({
+    mutationFn: (id: string) =>
+      apiFetch(`/v1/orgs/${orgId}/quotations/${id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      toast.success('Deleted')
+      void qc.invalidateQueries({ queryKey: ['quotations', orgId] })
+      void qc.invalidateQueries({ queryKey: ['invoices', orgId] })
+    },
+    onError: (err: Error) => toast.error(err.message || 'Failed to delete'),
   })
 
   if (!orgId) return (
@@ -267,8 +388,6 @@ export function QuotationsPage() {
     setEditLines(editLines.map((l, idx) => (idx === i ? { ...l, [field]: val } : l)))
   }
 
-  const selectedLead = leads.find((l) => l.id === leadId)
-
   return (
     <>
       <div className="page-header">
@@ -289,9 +408,6 @@ export function QuotationsPage() {
           </button>
         </div>
 
-        {sendNotice && <p className="success">{sendNotice}</p>}
-        {sendError && <p className="error">{sendError}</p>}
-
         {showForm && (
           <div className="card">
             <div style={{ fontWeight: 700, marginBottom: '1rem' }}>New Quotation</div>
@@ -299,15 +415,41 @@ export function QuotationsPage() {
               className="stack"
               onSubmit={(e: FormEvent) => {
                 e.preventDefault()
-                if (leadId && lines.every((l) => l.description && l.unit_price)) void create.mutateAsync()
+                submitCreate('finalize')
               }}
             >
+              {quotationTemplates.length > 0 && (
+                <div className="form-field">
+                  <label className="input-label">PDF template</label>
+                  <select
+                    className="select"
+                    value={templateId || defaultTemplateId}
+                    onChange={(e) => setTemplateId(e.target.value)}
+                    style={{ minWidth: 240 }}
+                  >
+                    {quotationTemplates.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                        {t.is_default ? ' (default)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               <div className="form-field">
                 <label className="input-label">Lead *</label>
-                <select className="select" value={leadId} onChange={(e) => setLeadId(e.target.value)} style={{ minWidth: 240 }} required>
-                  <option value="">Select lead…</option>
-                  {leads.map((l) => <option key={l.id} value={l.id}>{l.title}</option>)}
-                </select>
+                {orgId && (
+                  <LeadSearchSelect
+                    orgId={orgId}
+                    value={leadId}
+                    required
+                    onChange={(id, lead) => {
+                      setLeadId(id)
+                      setSelectedLead(lead)
+                    }}
+                  />
+                )}
               </div>
 
               <div>
@@ -417,11 +559,32 @@ export function QuotationsPage() {
               )}
 
               {create.error && <p className="error">{(create.error as Error).message}</p>}
-              <div className="row">
-                <button type="submit" className="btn" disabled={create.isPending}>
-                  {create.isPending ? 'Creating…' : 'Create quotation'}
+              <div className="row" style={{ gap: '0.5rem', flexWrap: 'wrap' }}>
+                <button
+                  type="submit"
+                  className="btn"
+                  disabled={create.isPending || !canSubmitForm()}
+                >
+                  {create.isPending && create.variables === 'finalize'
+                    ? 'Creating…'
+                    : 'Create quotation'}
                 </button>
-                <button type="button" className="btn btn-ghost" onClick={() => setShowForm(false)}>Cancel</button>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  disabled={create.isPending || !canSubmitForm()}
+                  onClick={() => submitCreate('draft')}
+                >
+                  {create.isPending && create.variables === 'draft' ? 'Saving…' : 'Save as draft'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  disabled={create.isPending}
+                  onClick={() => setShowForm(false)}
+                >
+                  Cancel
+                </button>
               </div>
             </form>
           </div>
@@ -452,7 +615,14 @@ export function QuotationsPage() {
                       <td>
                         <div className="row" style={{ gap: '0.4rem' }}>
                           <FileText size={14} style={{ color: '#6366f1' }} />
-                          <span style={{ fontWeight: 600, fontFamily: 'ui-monospace, monospace', fontSize: '0.82rem' }}>{x.number}</span>
+                          <div className="stack" style={{ gap: '0.15rem' }}>
+                            <span style={{ fontWeight: 600, fontFamily: 'ui-monospace, monospace', fontSize: '0.82rem' }}>
+                              {x.invoice_number ?? x.number}
+                            </span>
+                            {x.invoice_number && (
+                              <span className="muted small">from {x.number}</span>
+                            )}
+                          </div>
                         </div>
                       </td>
                       <td className="muted">{leadName}</td>
@@ -462,83 +632,183 @@ export function QuotationsPage() {
                         {x.sent_at ? new Date(x.sent_at).toLocaleDateString('en-IN') : '—'}
                       </td>
                       <td>
-                        <div className="stack" style={{ gap: '0.35rem', alignItems: 'flex-start' }}>
-                          {!x.pdf_url ? (
-                            <button
-                              type="button"
-                              className="btn btn-ghost btn-sm"
-                              disabled={genPdf.isPending}
-                              onClick={() => genPdf.mutate(x.id)}
-                            >
-                              Generate PDF
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              className="btn btn-ghost btn-sm"
-                              onClick={() => downloadPdf(orgId, x.id, x.number)}
-                            >
-                              <Download size={13} />
-                              PDF
-                            </button>
-                          )}
-                          {canSend && (
-                            <div className="row" style={{ gap: '0.35rem', flexWrap: 'wrap' }}>
-                              <button
-                                type="button"
-                                className="btn btn-sm"
-                                style={{ background: '#25d366' }}
-                                disabled={send.isPending}
-                                title="Mark as sent via WhatsApp"
-                                onClick={() => send.mutate({ id: x.id, channel: 'whatsapp' })}
-                              >
-                                <MessageCircle size={13} />
-                                {send.isPending ? 'Sending…' : 'WhatsApp'}
-                              </button>
-                              <button
-                                type="button"
-                                className="btn btn-sm"
-                                style={{ background: '#6366f1' }}
-                                disabled={send.isPending}
-                                title="Mark as sent via email"
-                                onClick={() => send.mutate({ id: x.id, channel: 'email' })}
-                              >
-                                <Mail size={13} />
-                                {send.isPending ? 'Sending…' : 'Email'}
-                              </button>
-                            </div>
-                          )}
-                          {x.status === 'SENT' && !x.invoice_number && (
-                            <div className="row" style={{ gap: '0.35rem', flexWrap: 'wrap' }}>
-                              <button
-                                type="button"
-                                className="btn btn-sm"
-                                style={{ background: '#10b981' }}
-                                disabled={genInvoice.isPending}
-                                onClick={() => genInvoice.mutate(x.id)}
-                              >
-                                Quotation Accepted
-                              </button>
-                              <button
-                                type="button"
-                                className="btn btn-ghost btn-sm"
-                                onClick={() => openEdit(x)}
-                              >
-                                Edit & Resend
-                              </button>
-                            </div>
-                          )}
+                        <div className="row" style={{ gap: '0.5rem', alignItems: 'center' }}>
                           {x.invoice_number && (
-                            <span className="badge badge-green">Invoice #{x.invoice_number.split('-')[1]}</span>
+                            <span className="badge badge-green">
+                              Invoice · {x.invoiced_at ? new Date(x.invoiced_at).toLocaleDateString('en-IN') : x.invoice_number}
+                            </span>
                           )}
-                          {x.status === 'DRAFT' && (
-                            <button
-                              type="button"
-                              className="btn btn-ghost btn-sm"
-                              onClick={() => openEdit(x)}
+                          <RowActions>
+                            {(close) => (
+                              <>
+                                {!x.pdf_url ? (
+                                  <>
+                                    {quotationTemplates.length > 0 && (
+                                      <select
+                                        className="select"
+                                        style={{ width: '100%', fontSize: '0.8rem' }}
+                                        value={pdfTemplateByQuotation[x.id] ?? x.template_id ?? defaultTemplateId}
+                                        onChange={(e) =>
+                                          setPdfTemplateByQuotation((prev) => ({
+                                            ...prev,
+                                            [x.id]: e.target.value,
+                                          }))
+                                        }
+                                      >
+                                        {quotationTemplates.map((t) => (
+                                          <option key={t.id} value={t.id}>
+                                            {t.name}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    )}
+                                    <button
+                                      type="button"
+                                      className="btn btn-ghost btn-sm"
+                                      disabled={genPdf.isPending}
+                                      onClick={() => {
+                                        genPdf.mutate({
+                                          id: x.id,
+                                          template_id:
+                                            pdfTemplateByQuotation[x.id] ?? x.template_id ?? defaultTemplateId,
+                                        })
+                                        close()
+                                      }}
+                                    >
+                                      <FileText size={13} />
+                                      Generate PDF
+                                    </button>
+                                  </>
+                                ) : (
+                                  <>
+                                    <button
+                                      type="button"
+                                      className="btn btn-ghost btn-sm"
+                                      onClick={() => {
+                                        downloadPdf(orgId, x.id, x.number, 'quotation')
+                                        close()
+                                      }}
+                                    >
+                                      <Download size={13} />
+                                      Download Quotation
+                                    </button>
+                                    {x.invoice_number && (
+                                      <button
+                                        type="button"
+                                        className="btn btn-ghost btn-sm"
+                                        onClick={() => {
+                                          downloadPdf(orgId, x.id, x.invoice_number!, 'invoice')
+                                          close()
+                                        }}
+                                      >
+                                        <Download size={13} />
+                                        Download Invoice
+                                      </button>
+                                    )}
+                                    <button
+                                      type="button"
+                                      className="btn btn-ghost btn-sm"
+                                      disabled={send.isPending || !x.lead_email}
+                                      title={
+                                        x.lead_email
+                                          ? `Send quotation to ${x.lead_email}`
+                                          : 'This lead has no email address'
+                                      }
+                                      onClick={() => {
+                                        send.mutate({ id: x.id, channel: 'email' })
+                                        close()
+                                      }}
+                                    >
+                                      <Mail size={13} />
+                                      {send.isPending
+                                        ? 'Sending…'
+                                        : x.status === 'SENT'
+                                          ? 'Resend by email'
+                                          : 'Email quotation'}
+                                    </button>
+                                  </>
+                                )}
+                                {canSend && (
+                                  <button
+                                    type="button"
+                                    className="btn btn-ghost btn-sm"
+                                    disabled={send.isPending}
+                                    onClick={() => {
+                                      send.mutate({ id: x.id, channel: 'whatsapp' })
+                                      close()
+                                    }}
+                                  >
+                                    <MessageCircle size={13} />
+                                    {send.isPending ? 'Sending…' : 'Send on WhatsApp'}
+                                  </button>
+                                )}
+                                {!x.invoice_number && !!x.pdf_url && (
+                                  <button
+                                    type="button"
+                                    className="btn btn-ghost btn-sm"
+                                    disabled={genInvoice.isPending}
+                                    onClick={() => {
+                                      genInvoice.mutate(x.id)
+                                      close()
+                                    }}
+                                  >
+                                    <FileText size={13} />
+                                    {genInvoice.isPending ? 'Converting…' : 'Convert to invoice'}
+                                  </button>
+                                )}
+                                {!x.invoice_number && (
+                                  <button
+                                    type="button"
+                                    className="btn btn-ghost btn-sm"
+                                    onClick={() => {
+                                      openEdit(x)
+                                      close()
+                                    }}
+                                  >
+                                    {x.pdf_url
+                                      ? x.status === 'SENT'
+                                        ? 'Edit & Resend'
+                                        : 'Edit quotation'
+                                      : 'Edit draft'}
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  className="btn btn-ghost btn-sm btn-danger"
+                                  disabled={deleteQuotation.isPending}
+                                  onClick={() => {
+                                    const label = x.invoice_number
+                                      ? `invoice ${x.invoice_number}`
+                                      : `quotation ${x.number}`
+                                    if (
+                                      window.confirm(`Delete ${label}? This cannot be undone.`)
+                                    ) {
+                                      deleteQuotation.mutate(x.id)
+                                    }
+                                    close()
+                                  }}
+                                >
+                                  <Trash2 size={13} />
+                                  Delete
+                                </button>
+                              </>
+                            )}
+                          </RowActions>
+                          {rowStatus[x.id] && (
+                            <span
+                              className={`badge ${rowStatus[x.id].ok ? 'badge-green' : 'badge-red'}`}
+                              title={rowStatus[x.id].detail ?? rowStatus[x.id].text}
+                              onClick={() => clearRow(x.id)}
+                              style={{
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 4,
+                              }}
                             >
-                              Edit
-                            </button>
+                              {rowStatus[x.id].ok && <Check size={12} />}
+                              {rowStatus[x.id].text}
+                            </span>
                           )}
                         </div>
                       </td>
@@ -571,10 +841,14 @@ export function QuotationsPage() {
             >
               <div className="form-field">
                 <label className="input-label">Lead *</label>
-                <select className="select" value={editLeadId} onChange={(e) => setEditLeadId(e.target.value)} required>
-                  <option value="">Select lead…</option>
-                  {leads.map((l) => <option key={l.id} value={l.id}>{l.title}</option>)}
-                </select>
+                {orgId && (
+                  <LeadSearchSelect
+                    orgId={orgId}
+                    value={editLeadId}
+                    required
+                    onChange={(id) => setEditLeadId(id)}
+                  />
+                )}
               </div>
 
               <div>

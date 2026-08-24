@@ -1,3 +1,4 @@
+import { motion } from 'framer-motion'
 import type { FormEvent } from 'react'
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
@@ -10,22 +11,33 @@ export function LoginPage() {
   const [password, setPassword] = useState('')
   const [err, setErr] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
-  const [focusedField, setFocusedField] = useState<string | null>(null)
 
   return (
-    <div className="login-container">
-      <div className="login-content">
-        <div className="login-card">
-          {/* Header Section */}
+    <div className="login-split">
+      <div className="login-brand">
+        <div className="login-brand-inner">
+          <div className="brand-logo-wrap">
+            <span className="brand-logo-text">Loomrun</span>
+          </div>
+          <div className="brand-accent-line" />
+          <p className="brand-tagline">
+            Operations platform for garment manufacturers — from first enquiry to final dispatch.
+          </p>
+        </div>
+      </div>
+
+      <div className="login-panel">
+        <motion.div
+          className="login-panel-inner"
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
+        >
           <div className="login-header">
-            <div className="login-logo-wrapper">
-              <div className="login-logo">L</div>
-            </div>
-            <h1 className="login-title">Welcome back</h1>
-            <p className="login-subtitle">Sign in to manage your textile operations</p>
+            <h1 className="login-title">Sign in</h1>
+            <p className="login-subtitle">Continue to your workspace</p>
           </div>
 
-          {/* Form Section */}
           <form
             className="login-form"
             onSubmit={async (e: FormEvent) => {
@@ -33,8 +45,8 @@ export function LoginPage() {
               setErr(null)
               setLoading(true)
               try {
-                await login(email, password)
-                nav('/')
+                const user = await login(email, password)
+                nav(user.is_super_admin ? '/platform' : '/')
               } catch (ex) {
                 setErr((ex as Error).message)
               } finally {
@@ -42,9 +54,8 @@ export function LoginPage() {
               }
             }}
           >
-            {/* Email Field */}
-            <div className={`login-field ${focusedField === 'email' ? 'focused' : ''}`}>
-              <label htmlFor="email" className="login-label">Email address</label>
+            <div className="login-field">
+              <label htmlFor="email" className="login-label">Email</label>
               <input
                 id="email"
                 type="email"
@@ -52,15 +63,12 @@ export function LoginPage() {
                 placeholder="name@company.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                onFocus={() => setFocusedField('email')}
-                onBlur={() => setFocusedField(null)}
                 required
                 className="login-input"
               />
             </div>
 
-            {/* Password Field */}
-            <div className={`login-field ${focusedField === 'password' ? 'focused' : ''}`}>
+            <div className="login-field">
               <label htmlFor="password" className="login-label">Password</label>
               <input
                 id="password"
@@ -69,14 +77,11 @@ export function LoginPage() {
                 placeholder="••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                onFocus={() => setFocusedField('password')}
-                onBlur={() => setFocusedField(null)}
                 required
                 className="login-input"
               />
             </div>
 
-            {/* Error Message */}
             {err && (
               <div className="login-error-message">
                 <span className="error-icon">⚠</span>
@@ -84,11 +89,10 @@ export function LoginPage() {
               </div>
             )}
 
-            {/* Submit Button */}
             <button
               type="submit"
               disabled={loading}
-              className={`login-button ${loading ? 'loading' : ''}`}
+              className="login-button"
             >
               {loading ? (
                 <>
@@ -100,33 +104,27 @@ export function LoginPage() {
               )}
             </button>
 
-            {/* Divider */}
             <div className="login-divider">
               <span>or</span>
             </div>
 
-            {/* Links Section */}
             <div className="login-links">
               <p className="login-link-text">
-                No account? <Link to="/register" className="login-link-primary">Create workspace</Link>
+                No account?{' '}
+                <Link to="/register" className="login-link-primary">Create workspace</Link>
               </p>
               <p className="login-link-text">
-                <Link to="/register-super-admin" className="login-link-secondary">Register as Super Admin</Link>
+                <Link to="/register-super-admin" className="login-link-secondary">
+                  Register as Super Admin
+                </Link>
               </p>
             </div>
           </form>
 
-          {/* Footer */}
           <div className="login-footer">
             <p className="login-footer-text">© 2024 Loomrun. All rights reserved.</p>
           </div>
-        </div>
-      </div>
-
-      {/* Background Decoration */}
-      <div className="login-background">
-        <div className="gradient-blob blob-1"></div>
-        <div className="gradient-blob blob-2"></div>
+        </motion.div>
       </div>
     </div>
   )

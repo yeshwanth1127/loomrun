@@ -62,6 +62,24 @@ class VoiceAdapter(ABC):
         """
         pass
 
+    async def initiate_click_to_call(
+        self,
+        agent_phone: str,
+        customer_phone: str,
+        status_callback: str,
+    ) -> str:
+        """
+        Server-side click-to-call: provider calls the agent first, then bridges
+        to the customer. Providers that support browser WebRTC (e.g. Twilio)
+        do not need to implement this.
+
+        Returns:
+            Call SID / identifier from the provider
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support server-side click-to-call"
+        )
+
 
 class AICallAdapter(ABC):
     """Abstract base class for AI call providers (automated fallback)."""

@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from prisma import Prisma
 from prisma.enums import CallOutcome, LeadActivityType, LeadStage
 
+from loomrun_api.call_outcomes import outcome_label
 from loomrun_api.prisma_client import prisma as default_prisma
 from loomrun_api.prisma_json import json_meta
 
@@ -22,12 +23,17 @@ async def sync_lead_after_call(
     logged_by: str | None = None,
     db: Prisma | None = None,
 ) -> LeadStage:
-    """Record call activity and move NEW leads to CONTACTED (persisted on the lead)."""
+    """Record call activity and move NEW leads to CONTACTED (persisted on the lead).
+
+    Telecaller disposition codes are stored on the call log / activity body only —
+    they are not mirrored onto the Leads board UI.
+    """
     client = db or default_prisma
     now = datetime.now(timezone.utc)
     outcome_name = enum_str(outcome)
+    label = outcome_label(outcome)
 
-    call_body = f"Call attempt {attempt}: {outcome_name}"
+    call_body = f"Call attempt {attempt}: {label}"
     if notes:
         call_body += f" — {notes}"
     if logged_by:
@@ -39,11 +45,12 @@ async def sync_lead_after_call(
             "userId": user_id,
             "type": LeadActivityType.CALL,
             "body": call_body,
+            "metadata": json_meta({"outcome": outcome_name, "attempt": attempt}),
         }
     )
 
     if lead_stage == LeadStage.NEW:
-        stage_note = outcome_name + (f" — {notes}" if notes else "")
+        stage_note = label + (f" — {notes}" if notes else "")
         by_suffix = f" (logged by {logged_by})" if logged_by else ""
         await client.lead.update(
             where={"id": lead_id},

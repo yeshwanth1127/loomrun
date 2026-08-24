@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from loomrun_api.config import settings
-from loomrun_api.deps import OrgContext, get_org_context
+from loomrun_api.deps import OrgContext, require_roles
 from loomrun_api.prisma_client import prisma
 
 router = APIRouter()
@@ -12,9 +12,6 @@ router = APIRouter()
 ALL_SOURCES = [
     {"source_name": "META_ADS",   "label": "Meta Ads (FB/IG)",       "method": "oauth"},
     {"source_name": "GOOGLE_ADS", "label": "Google Ads",              "method": "oauth"},
-    {"source_name": "INDIAMART",  "label": "IndiaMART",               "method": "api_key"},
-    {"source_name": "WHATSAPP",   "label": "WhatsApp Business",       "method": "api_key"},
-    {"source_name": "WEBSITE",    "label": "Website / Landing Page",  "method": "webhook"},
     {"source_name": "MANUAL",     "label": "Manual / Referral",       "method": "built_in"},
 ]
 
@@ -45,10 +42,14 @@ class DisconnectPayload(BaseModel):
 
 
 @router.get("/orgs/{org_id}/lead-connections")
-async def list_connections(org_id: str, ctx: OrgContext = Depends(get_org_context)) -> dict:
+async def list_connections(org_id: str, ctx: OrgContext = Depends(require_roles("OWNER"))) -> dict:
+    from loomrun_api.entitlements import get_org_entitlements
+
     existing = await prisma.leadconnection.find_many(
         where={"organizationId": ctx.organization_id}
     )
+    org = ctx.organization or await prisma.organization.find_unique(where={"id": ctx.organization_id})
+    ents = get_org_entitlements(org) if org else None
     by_source = {c.sourceName: c for c in existing}
 
     api_base = settings.public_api_url.rstrip("/")
@@ -62,6 +63,14 @@ async def list_connections(org_id: str, ctx: OrgContext = Depends(get_org_contex
             webhook_url = f"{api_base}/v1/hooks/leads/{org_id}/{sn.lower()}"
         else:
             webhook_url = None
+        locked = False
+        required_plan = None
+        if sn == "GOOGLE_ADS":
+            locked = not bool(ents and ents.google_ads)
+            required_plan = "scale"
+        elif sn == "META_ADS":
+            locked = not bool(ents and ents.meta_lead_ads)
+            required_plan = "growth"
         item = {
             **meta,
             "status": conn.status if conn else "disconnected",
@@ -69,16 +78,39 @@ async def list_connections(org_id: str, ctx: OrgContext = Depends(get_org_contex
             "last_sync": conn.lastSync.isoformat() if conn and conn.lastSync else None,
             "webhook_url": webhook_url,
             "connection_id": conn.id if conn else None,
+            "plan_locked": locked,
+            "required_plan": required_plan,
         }
+        if sn == "META_ADS" and conn and isinstance(conn.credentials, dict):
+            stats = conn.credentials.get("sync_stats")
+            if isinstance(stats, dict):
+                item["meta_available"] = stats.get("meta_available")
+                item["sync_note"] = stats.get("retention_note")
         items.append(item)
     return {"items": items}
 
 
 @router.post("/orgs/{org_id}/lead-connections/connect", status_code=status.HTTP_200_OK)
-async def connect_source(org_id: str, body: ConnectPayload, ctx: OrgContext = Depends(get_org_context)) -> dict:
+async def connect_source(org_id: str, body: ConnectPayload, ctx: OrgContext = Depends(require_roles("OWNER"))) -> dict:
+    from loomrun_api.entitlements import FEATURE_UPGRADE_HINTS, get_org_entitlements
+
     valid_sources = {s["source_name"] for s in ALL_SOURCES}
     if body.source_name not in valid_sources:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Unknown source")
+
+    org = ctx.organization or await prisma.organization.find_unique(where={"id": ctx.organization_id})
+    if org:
+        ents = get_org_entitlements(org)
+        if body.source_name == "GOOGLE_ADS" and not ents.google_ads:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                detail=f"FEATURE_LOCKED: {FEATURE_UPGRADE_HINTS['google_ads']}",
+            )
+        if body.source_name == "META_ADS" and not ents.meta_lead_ads:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                detail=f"FEATURE_LOCKED: {FEATURE_UPGRADE_HINTS['meta_lead_ads']}",
+            )
 
     # MANUAL is always connected
     if body.source_name == "MANUAL":
@@ -124,7 +156,7 @@ async def connect_source(org_id: str, body: ConnectPayload, ctx: OrgContext = De
 
 
 @router.post("/orgs/{org_id}/lead-connections/disconnect", status_code=status.HTTP_200_OK)
-async def disconnect_source(org_id: str, body: DisconnectPayload, ctx: OrgContext = Depends(get_org_context)) -> dict:
+async def disconnect_source(org_id: str, body: DisconnectPayload, ctx: OrgContext = Depends(require_roles("OWNER"))) -> dict:
     existing = await prisma.leadconnection.find_first(
         where={"organizationId": ctx.organization_id, "sourceName": body.source_name}
     )

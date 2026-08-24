@@ -7,6 +7,7 @@ from pydantic import BaseModel, EmailStr, Field
 
 from loomrun_api.config import settings
 from loomrun_api.deps import OrgContext, get_current_user_id, get_org_context, require_roles
+from loomrun_api.entitlements import EXTRA_USER_PRICE_INR, default_trial_ends_at, max_seats_for_org
 from loomrun_api.prisma_client import prisma
 from loomrun_api.security import hash_password
 from prisma.enums import MembershipRole
@@ -62,6 +63,13 @@ class BrandUpdateBody(BaseModel):
     email: EmailStr | None = None
     website: str | None = Field(default=None, max_length=300)
     tax_id: str | None = Field(default=None, max_length=120)
+    bank_name: str | None = Field(default=None, max_length=120)
+    bank_account_number: str | None = Field(default=None, max_length=80)
+    bank_account_name: str | None = Field(default=None, max_length=160)
+    bank_ifsc: str | None = Field(default=None, max_length=40)
+    bank_swift: str | None = Field(default=None, max_length=40)
+    bank_ad_code: str | None = Field(default=None, max_length=40)
+    bank_branch: str | None = Field(default=None, max_length=120)
 
 
 def _clean_opt(max_len: int, value: str | None) -> str | None:
@@ -106,6 +114,8 @@ async def create_organization(body: CreateOrgBody, user_id: str = Depends(get_cu
         data={
             "name": body.name,
             "slug": slug,
+            "plan": "free",
+            "trialEndsAt": default_trial_ends_at(),
             "memberships": {"create": {"userId": user_id, "role": MembershipRole.OWNER}},
         }
     )
@@ -167,6 +177,20 @@ async def create_org_member(
             detail="Role must be SALES, TELECALLER, PRODUCTION, or VIEWER",
         )
     oid = ctx.organization_id
+    org = await prisma.organization.find_unique(where={"id": oid})
+    if not org:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Organization not found")
+    member_count = await prisma.membership.count(where={"organizationId": oid})
+    seat_limit = max_seats_for_org(org=org)
+    if member_count >= seat_limit:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Seat limit reached ({seat_limit} users on your plan). "
+                f"Additional users are ₹{EXTRA_USER_PRICE_INR}/user/month — "
+                "upgrade or ask a platform admin to add extra seats."
+            ),
+        )
     existing_user = await prisma.user.find_unique(where={"email": body.email})
     if existing_user:
         existing_m = await prisma.membership.find_first(
@@ -215,7 +239,16 @@ async def get_org_brand(org_id: str, ctx: OrgContext = Depends(get_org_context))
         "email": org.brandEmail,
         "website": org.brandWebsite,
         "tax_id": org.brandTaxId,
+        "bank_name": getattr(org, "brandBankName", None),
+        "bank_account_number": getattr(org, "brandBankAccountNumber", None),
+        "bank_account_name": getattr(org, "brandBankAccountName", None),
+        "bank_ifsc": getattr(org, "brandBankIfsc", None),
+        "bank_swift": getattr(org, "brandBankSwift", None),
+        "bank_ad_code": getattr(org, "brandBankAdCode", None),
+        "bank_branch": getattr(org, "brandBankBranch", None),
         "has_logo": bool(org.brandLogoUrl),
+        "has_signature": bool(org.brandSignatureUrl),
+        "has_upi_qr": bool(org.brandUpiQrUrl),
         "updated_at": org.updatedAt.isoformat(),
     }
 
@@ -242,6 +275,20 @@ async def update_org_brand(
         data["brandWebsite"] = _clean_opt(300, dump["website"])
     if "tax_id" in dump:
         data["brandTaxId"] = _clean_opt(120, dump["tax_id"])
+    if "bank_name" in dump:
+        data["brandBankName"] = _clean_opt(120, dump["bank_name"])
+    if "bank_account_number" in dump:
+        data["brandBankAccountNumber"] = _clean_opt(80, dump["bank_account_number"])
+    if "bank_account_name" in dump:
+        data["brandBankAccountName"] = _clean_opt(160, dump["bank_account_name"])
+    if "bank_ifsc" in dump:
+        data["brandBankIfsc"] = _clean_opt(40, dump["bank_ifsc"])
+    if "bank_swift" in dump:
+        data["brandBankSwift"] = _clean_opt(40, dump["bank_swift"])
+    if "bank_ad_code" in dump:
+        data["brandBankAdCode"] = _clean_opt(40, dump["bank_ad_code"])
+    if "bank_branch" in dump:
+        data["brandBankBranch"] = _clean_opt(120, dump["bank_branch"])
     if data:
         await prisma.organization.update(where={"id": oid}, data=data)
     org = await prisma.organization.find_unique(where={"id": oid})
@@ -254,7 +301,16 @@ async def update_org_brand(
         "email": org.brandEmail,
         "website": org.brandWebsite,
         "tax_id": org.brandTaxId,
+        "bank_name": getattr(org, "brandBankName", None),
+        "bank_account_number": getattr(org, "brandBankAccountNumber", None),
+        "bank_account_name": getattr(org, "brandBankAccountName", None),
+        "bank_ifsc": getattr(org, "brandBankIfsc", None),
+        "bank_swift": getattr(org, "brandBankSwift", None),
+        "bank_ad_code": getattr(org, "brandBankAdCode", None),
+        "bank_branch": getattr(org, "brandBankBranch", None),
         "has_logo": bool(org.brandLogoUrl),
+        "has_signature": bool(org.brandSignatureUrl),
+        "has_upi_qr": bool(org.brandUpiQrUrl),
         "updated_at": org.updatedAt.isoformat(),
     }
 

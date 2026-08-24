@@ -3,7 +3,9 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import { Toaster } from 'sonner'
+import 'lenis/dist/lenis.css'
 import App from './App.tsx'
+import { AgentActivityProvider } from './context/AgentActivityContext.tsx'
 import { AuthProvider } from './context/AuthContext.tsx'
 import { DateFilterProvider } from './context/DateFilterContext.tsx'
 import { ThemeProvider } from './context/ThemeContext.tsx'
@@ -22,8 +24,19 @@ createRoot(document.getElementById('root')!).render(
         <BrowserRouter>
           <AuthProvider>
             <DateFilterProvider>
-              <App />
-              <Toaster richColors position="top-right" />
+              <AgentActivityProvider>
+                <App />
+                <Toaster
+                  richColors
+                  position="top-right"
+                  toastOptions={{
+                    style: {
+                      fontFamily: 'Inter, system-ui, sans-serif',
+                      borderRadius: '14px',
+                    },
+                  }}
+                />
+              </AgentActivityProvider>
             </DateFilterProvider>
           </AuthProvider>
         </BrowserRouter>

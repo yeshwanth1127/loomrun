@@ -68,6 +68,11 @@ enum QuotationStatus {
   EXPIRED
 }
 
+enum DocumentType {
+  QUOTATION
+  INVOICE
+}
+
 enum ProductionStage {
   PENDING
   FABRIC_CHECK
@@ -90,6 +95,16 @@ enum PaymentStatus {
   PAID
 }
 
+enum ProductionActivityType {
+  ORDER_CREATED
+  STAGE_CHANGED
+  DELAY_TOGGLED
+  PAYMENT_RECORDED
+  EXPENSE_RECORDED
+  BUDGET_SET
+  NAME_CHANGED
+}
+
 enum OutboundChannel {
   WHATSAPP
   SMS
@@ -103,6 +118,14 @@ enum OutboundMessageStatus {
   FAILED
 }
 
+enum WhatsAppTemplateCategory {
+  QUOTATION
+  INVOICE
+  FOLLOW_UP
+  THANK_YOU
+  GREETING
+}
+
 enum CallOutcome {
   CONNECTED
   NO_ANSWER
@@ -111,6 +134,12 @@ enum CallOutcome {
   NOT_INTERESTED
   CALLBACK_SCHEDULED
   QUALIFIED
+  // Telecaller disposition codes (logged on call records; not shown on Leads board)
+  CONNECTED_INTERESTED
+  CONNECTED_NOT_INTERESTED
+  RINGING_NO_RESPONSE
+  SWITCHED_OFF
+  ORDER_CONFIRMED
 }
 
 model User {
@@ -123,10 +152,15 @@ model User {
   updatedAt     DateTime @updatedAt @map("updated_at")
 
   memberships        Membership[]
+  qlixToolGrants     QlixToolGrant[]
   leadActivities     LeadActivity[]       @relation("LeadActivityActor")
   assignedLeads      Lead[]               @relation("LeadAssignee")
   telecallerCalls    TelecallerCallLog[]
-  quotationsCreated  Quotation[]          @relation("QuotationAuthor")
+  quotationsCreated     Quotation[]          @relation("QuotationAuthor")
+  productionActivities  ProductionActivity[] @relation("ProductionActivityActor")
+  expensesCreated       Expense[]            @relation("ExpenseCreator")
+  aiPendingActions      AiPendingAction[]
+  aiConversations       AiConversation[]
 
   @@map("users")
 }
@@ -136,6 +170,8 @@ model Organization {
   name             String
   slug             String   @unique
   plan             String   @default("free")
+  extraSeats       Int      @default(0) @map("extra_seats")
+  trialEndsAt      DateTime? @map("trial_ends_at")
   suspended        Boolean  @default(false)
   stripeCustomerId String?  @map("stripe_customer_id")
   brandLogoUrl     String?  @map("brand_logo_url")
@@ -147,6 +183,16 @@ model Organization {
   brandEmail       String?  @map("brand_email")
   brandWebsite     String?  @map("brand_website")
   brandTaxId       String?  @map("brand_tax_id")
+  brandBankName          String? @map("brand_bank_name")
+  brandBankAccountNumber String? @map("brand_bank_account_number")
+  brandBankAccountName   String? @map("brand_bank_account_name")
+  brandBankIfsc          String? @map("brand_bank_ifsc")
+  brandBankSwift         String? @map("brand_bank_swift")
+  brandBankAdCode        String? @map("brand_bank_ad_code")
+  brandBankBranch        String? @map("brand_bank_branch")
+  defaultQuotationTemplateId String? @map("default_quotation_template_id")
+  defaultInvoiceTemplateId   String? @map("default_invoice_template_id")
+  autoGreetNewLeads Boolean @default(true) @map("auto_greet_new_leads")
   createdAt        DateTime @default(now()) @map("created_at")
   updatedAt        DateTime @updatedAt @map("updated_at")
 
@@ -157,11 +203,28 @@ model Organization {
   payments          Payment[]
   subscriptions     Subscription[]
   whatsappThreads   WhatsAppThread[]
+  whatsappConnection WhatsAppConnection?
+  whatsappTemplates WhatsAppTemplate[]
   outboundMessages  OutboundMessage[]
   telecallerCalls   TelecallerCallLog[]
-  leadConnections   LeadConnection[]
+  leadConnections      LeadConnection[]
+  automationConnections AutomationConnection[]
   telephonyConfigs  TelephonyConfig[]
+  telephonyUsages   TelephonyUsage[]
   catalogItems      CatalogItem[]
+  documentTemplates DocumentTemplate[]
+  productionActivities ProductionActivity[]
+  expenses          Expense[]
+  usageDaily        UsageDaily[]
+  aiPendingActions  AiPendingAction[]
+  aiOrgMemory       AiOrgMemory?
+  aiConversations   AiConversation[]
+  qlixConnection    QlixConnection?
+  qlixSyncQueue     QlixSyncQueue[]
+  qlixDocuments     QlixDocument[]
+  qlixToolGrants    QlixToolGrant[]
+  defaultQuotationTemplate DocumentTemplate? @relation("OrgDefaultQuotationTemplate", fields: [defaultQuotationTemplateId], references: [id], onDelete: SetNull)
+  defaultInvoiceTemplate   DocumentTemplate? @relation("OrgDefaultInvoiceTemplate", fields: [defaultInvoiceTemplateId], references: [id], onDelete: SetNull)
 
   @@map("organizations")
 }
@@ -212,6 +275,7 @@ model Lead {
   metaAdsetName    String?     @map("meta_adset_name")
   metaAdName       String?     @map("meta_ad_name")
   metaFormName     String?     @map("meta_form_name")
+  indiamartQueryId String?     @map("indiamart_query_id")
   createdAt        DateTime    @default(now()) @map("created_at")
   updatedAt        DateTime    @updatedAt @map("updated_at")
 
@@ -219,14 +283,17 @@ model Lead {
   assignee     User?        @relation("LeadAssignee", fields: [assigneeId], references: [id])
   activities   LeadActivity[]
   quotations   Quotation[]
-  production   ProductionOrder?
+  production           ProductionOrder?
+  productionActivities ProductionActivity[]
   threads      WhatsAppThread[]
   outbound     OutboundMessage[]
   calls        TelecallerCallLog[]
+  expenses     Expense[]
 
   @@index([organizationId, stage])
   @@index([organizationId, nextFollowUpAt])
   @@index([organizationId, metaCampaignId])
+  @@index([organizationId, indiamartQueryId])
   @@map("leads")
 }
 
@@ -262,18 +329,42 @@ model Quotation {
   sentAt         DateTime?        @map("sent_at")
   invoicedAt     DateTime?        @map("invoiced_at")
   pdfJobId       String?          @map("pdf_job_id")
+  templateId     String?          @map("template_id")
   createdAt      DateTime         @default(now()) @map("created_at")
   updatedAt      DateTime         @updatedAt @map("updated_at")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   lead         Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
   author       User?        @relation("QuotationAuthor", fields: [authorId], references: [id])
+  template     DocumentTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
   lines        QuotationLine[]
   productionOrders ProductionOrder[]
 
   @@unique([organizationId, number])
   @@index([organizationId, status])
   @@map("quotations")
+}
+
+model DocumentTemplate {
+  id             String       @id @default(cuid())
+  organizationId String?      @map("organization_id")
+  name           String
+  slug           String
+  docType        DocumentType @map("doc_type")
+  isDefault      Boolean      @default(false) @map("is_default")
+  isSystem       Boolean      @default(false) @map("is_system")
+  layout         Json
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  quotations   Quotation[]
+  orgsDefaultQuotation Organization[] @relation("OrgDefaultQuotationTemplate")
+  orgsDefaultInvoice   Organization[] @relation("OrgDefaultInvoiceTemplate")
+
+  @@unique([organizationId, slug, docType])
+  @@index([organizationId, docType])
+  @@map("document_templates")
 }
 
 model QuotationLine {
@@ -296,8 +387,10 @@ model ProductionOrder {
   organizationId String           @map("organization_id")
   leadId         String           @unique @map("lead_id")
   quotationId    String?          @map("quotation_id")
+  name           String?
   stage          ProductionStage  @default(PENDING)
   delayFlag      Boolean          @default(false) @map("delay_flag")
+  budgetCents    Int?             @map("budget_cents")
   stageEnteredAt DateTime         @default(now()) @map("stage_entered_at")
   createdAt      DateTime         @default(now()) @map("created_at")
   updatedAt      DateTime         @updatedAt @map("updated_at")
@@ -306,9 +399,58 @@ model ProductionOrder {
   lead         Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
   quotation    Quotation?   @relation(fields: [quotationId], references: [id])
   payments     Payment[]
+  expenses     Expense[]
+  activities   ProductionActivity[]
 
   @@index([organizationId, stage])
   @@map("production_orders")
+}
+
+model Expense {
+  id                String          @id @default(cuid())
+  organizationId    String          @map("organization_id")
+  productionOrderId String?         @map("production_order_id")
+  leadId            String?         @map("lead_id")
+  category          String
+  subcategory       String?
+  amountCents       Int             @map("amount_cents")
+  description       String?
+  vendor            String?
+  incurredAt        DateTime        @default(now()) @map("incurred_at")
+  createdById       String?         @map("created_by_id")
+  createdAt         DateTime        @default(now()) @map("created_at")
+  updatedAt         DateTime        @updatedAt @map("updated_at")
+
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  productionOrder ProductionOrder? @relation(fields: [productionOrderId], references: [id], onDelete: Cascade)
+  lead            Lead?            @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  createdBy       User?            @relation("ExpenseCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, incurredAt])
+  @@index([productionOrderId])
+  @@index([leadId])
+  @@map("expenses")
+}
+
+model ProductionActivity {
+  id                String                 @id @default(cuid())
+  organizationId    String                 @map("organization_id")
+  productionOrderId String                 @map("production_order_id")
+  leadId            String                 @map("lead_id")
+  userId            String?                @map("user_id")
+  type              ProductionActivityType
+  body              String
+  metadata          Json?
+  createdAt         DateTime               @default(now()) @map("created_at")
+
+  organization    Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  productionOrder ProductionOrder @relation(fields: [productionOrderId], references: [id], onDelete: Cascade)
+  lead            Lead            @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  user            User?           @relation("ProductionActivityActor", fields: [userId], references: [id])
+
+  @@index([organizationId, leadId, createdAt])
+  @@index([productionOrderId, createdAt])
+  @@map("production_activities")
 }
 
 model Payment {
@@ -328,13 +470,15 @@ model Payment {
 }
 
 model Subscription {
-  id                   String   @id @default(cuid())
-  organizationId       String   @map("organization_id")
-  stripeSubscriptionId String?  @map("stripe_subscription_id")
-  planKey              String   @map("plan_key")
-  status               String   @default("inactive")
-  createdAt            DateTime @default(now()) @map("created_at")
-  updatedAt            DateTime @updatedAt @map("updated_at")
+  id                   String    @id @default(cuid())
+  organizationId       String    @map("organization_id")
+  stripeSubscriptionId String?   @map("stripe_subscription_id")
+  planKey              String    @map("plan_key")
+  status               String    @default("inactive")
+  currentPeriodEnd     DateTime? @map("current_period_end")
+  seatCount            Int?      @map("seat_count")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
@@ -371,6 +515,36 @@ model WhatsAppMessage {
 
   @@index([threadId])
   @@map("whatsapp_messages")
+}
+
+model WhatsAppConnection {
+  id              String    @id @default(cuid())
+  organizationId  String    @unique @map("organization_id")
+  status          String    @default("disconnected") // connecting | connected | disconnected
+  phoneNumber     String?   @map("phone_number")
+  lastConnectedAt DateTime? @map("last_connected_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("whatsapp_connections")
+}
+
+model WhatsAppTemplate {
+  id             String                   @id @default(cuid())
+  organizationId String                   @map("organization_id")
+  category       WhatsAppTemplateCategory
+  name           String
+  body           String
+  isDefault      Boolean                  @default(false) @map("is_default")
+  createdAt      DateTime                 @default(now()) @map("created_at")
+  updatedAt      DateTime                 @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, category])
+  @@map("whatsapp_templates")
 }
 
 model OutboundMessage {
@@ -412,6 +586,24 @@ model LeadConnection {
   @@map("lead_connections")
 }
 
+model AutomationConnection {
+  id             String    @id @default(cuid())
+  organizationId String    @map("organization_id")
+  serviceName    String    @map("service_name")
+  status         String    @default("disconnected")
+  credentials    Json?
+  connectedEmail String?   @map("connected_email")
+  lastUsed       DateTime? @map("last_used")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, serviceName])
+  @@index([organizationId])
+  @@map("automation_connections")
+}
+
 model TelecallerCallLog {
   id              String      @id @default(cuid())
   organizationId  String      @map("organization_id")
@@ -429,9 +621,10 @@ model TelecallerCallLog {
   callSource      String      @default("HUMAN") @map("call_source")
   createdAt       DateTime    @default(now()) @map("created_at")
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  lead         Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  user         User?        @relation(fields: [userId], references: [id])
+  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lead           Lead               @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  user           User?              @relation(fields: [userId], references: [id])
+  usageRecords   TelephonyUsage[]
 
   @@index([organizationId, createdAt])
   @@index([leadId])
@@ -445,15 +638,41 @@ model TelephonyConfig {
   providerName   String    @map("provider_name")
   status         String    @default("disconnected")
   isActive       Boolean   @default(false) @map("is_active")
+  provisioned    Boolean   @default(false)
+  phoneNumber    String?   @map("phone_number")
+  subaccountSid  String?   @map("subaccount_sid")
+  externalRefs   Json?     @map("external_refs")
   credentials    Json?
   createdAt      DateTime  @default(now()) @map("created_at")
   updatedAt      DateTime  @updatedAt @map("updated_at")
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  usageRecords   TelephonyUsage[]
 
   @@unique([organizationId, providerType, providerName])
   @@index([organizationId, providerType])
   @@map("telephony_configs")
+}
+
+model TelephonyUsage {
+  id              String   @id @default(cuid())
+  organizationId  String   @map("organization_id")
+  configId        String?  @map("config_id")
+  callLogId       String?  @map("call_log_id")
+  provider        String
+  direction       String   @default("outbound")
+  callSid         String?  @map("call_sid")
+  durationSeconds Int      @default(0) @map("duration_seconds")
+  providerCost    Decimal  @default(0) @map("provider_cost") @db.Decimal(10, 4)
+  billedCost      Decimal  @default(0) @map("billed_cost") @db.Decimal(10, 4)
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  config       TelephonyConfig?  @relation(fields: [configId], references: [id], onDelete: SetNull)
+  callLog      TelecallerCallLog? @relation(fields: [callLogId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@map("telephony_usage")
 }
 
 model CatalogItem {
@@ -470,4 +689,209 @@ model CatalogItem {
 
   @@index([organizationId])
   @@map("catalog_items")
+}
+
+model UsageDaily {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  day            DateTime @db.Date
+  metric         String
+  count          Int      @default(0)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, day, metric])
+  @@index([organizationId, day])
+  @@map("usage_daily")
+}
+
+model AiPendingAction {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  userId         String   @map("user_id")
+  tool           String
+  payload        Json
+  summary        String
+  status         String   @default("pending")
+  /// Set when the approval originated from a Qlix JIT request; Confirm/Cancel
+  /// then decide in Qlix instead of executing the tool locally.
+  jitRequestId   String?  @map("jit_request_id")
+  qlixRunId      String?  @map("qlix_run_id")
+  expiresAt      DateTime @map("expires_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, userId, status])
+  @@index([expiresAt])
+  @@map("ai_pending_actions")
+}
+
+/// Persistent per-organization memory for Loomrun AI (facts learned from chat).
+model AiOrgMemory {
+  id              String    @id @default(cuid())
+  organizationId  String    @unique @map("organization_id")
+  /// Short narrative summary of what we know about this org.
+  summary         String    @default("") @db.Text
+  /// Key/value facts, e.g. { "org_owner": "Ravi", "org_goal": "Scale exports", "industry": "apparel" }
+  facts           Json
+  lastExtractedAt DateTime? @map("last_extracted_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("ai_org_memories")
+}
+
+/// A Loomrun AI chat thread (persisted so history survives refresh and is date-queryable).
+model AiConversation {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  userId         String   @map("user_id")
+  title          String   @default("New chat")
+  /// Qlix-side conversation this thread maps to, once the org is on Qlix.
+  qlixConversationId String? @map("qlix_conversation_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages     AiMessage[]
+
+  @@index([organizationId, updatedAt])
+  @@index([organizationId, createdAt])
+  @@index([organizationId, userId])
+  @@map("ai_conversations")
+}
+
+model AiMessage {
+  id             String   @id @default(cuid())
+  conversationId String   @map("conversation_id")
+  role           String
+  content        String   @db.Text
+  model          String?
+  metadata       Json?
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  conversation AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@map("ai_messages")
+}
+
+/// One Qlix workspace per Loomrun org: agent + AI Brain + MCP tool binding.
+/// Provisioned in one click; `credentials` holds the Fernet-encrypted qlix_live_* key.
+model QlixConnection {
+  id             String    @id @default(cuid())
+  organizationId String    @unique @map("organization_id")
+  /// disconnected | provisioning | connected | error
+  status         String    @default("disconnected")
+  /// Fernet blob: { "api_key": "qlix_live_..." }
+  credentials    Json?
+  qlixOrgId      String?   @map("qlix_org_id")
+  agentId        String?   @map("agent_id")
+  collectionId   String?   @map("collection_id")
+  mcpServerId    String?   @map("mcp_server_id")
+  /// Highest provisioning step completed, so a retry resumes instead of duplicating.
+  provisionStep  String?   @map("provision_step")
+  /// Backfill progress for the initial knowledge load.
+  backfillState  Json?     @map("backfill_state")
+  backfillDoneAt DateTime? @map("backfill_done_at")
+  lastSyncedAt   DateTime? @map("last_synced_at")
+  lastSweepAt    DateTime? @map("last_sweep_at")
+  lastError      String?   @db.Text @map("last_error")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@map("qlix_connections")
+}
+
+/// Outbox of CRM records whose Brain document is stale.
+/// Writes enqueue here instead of calling Qlix inline, so saving a lead never
+/// waits on the network and a Qlix outage only backs the queue up.
+model QlixSyncQueue {
+  id             String    @id @default(cuid())
+  organizationId String    @map("organization_id")
+  /// lead | quotation | production_order | catalog_item | expense | org_profile | team | pipeline | memory
+  entityType     String    @map("entity_type")
+  /// Record id, or a fixed key like "summary" for rollup documents.
+  entityId       String    @map("entity_id")
+  /// upsert | delete
+  op             String    @default("upsert")
+  /// pending | done | failed
+  status         String    @default("pending")
+  attempts       Int       @default(0)
+  lastError      String?   @db.Text @map("last_error")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  /// Coalescing key: re-marking a record already queued updates that row
+  /// rather than adding a second push for the same change.
+  @@unique([organizationId, entityType, entityId, status])
+  @@index([status, createdAt])
+  @@index([organizationId, status])
+  @@map("qlix_sync_queue")
+}
+
+/// A standing approval: once a user approves a write tool, the same tool runs
+/// without asking again until this expires (24h), so routine work does not
+/// re-prompt for every action. Revoking a row takes the permission back.
+model QlixToolGrant {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  /// Loomrun tool name, e.g. "create_lead".
+  tool           String
+  /// Who granted it — shown in the UI so an org can see who allowed what.
+  userId         String?  @map("user_id")
+  expiresAt      DateTime @map("expires_at")
+  /// Counts how often the standing approval has been used, so the UI can show
+  /// what it actually authorised rather than just that it exists.
+  useCount       Int      @default(0) @map("use_count")
+  lastUsedAt     DateTime? @map("last_used_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, tool])
+  @@index([organizationId, expiresAt])
+  @@map("qlix_tool_grants")
+}
+
+/// A document the user uploaded into their org's Brain (not auto-synced CRM records).
+model QlixDocument {
+  id             String    @id @default(cuid())
+  organizationId String    @map("organization_id")
+  userId         String?   @map("user_id")
+  title          String
+  fileName       String    @map("file_name")
+  mimeType       String    @map("mime_type")
+  sizeBytes      Int       @map("size_bytes")
+  /// Relative path under settings.storage_dir, same convention as brand assets.
+  storagePath    String    @map("storage_path")
+  /// Qlix document id, once ingest has accepted it.
+  qlixDocumentId String?   @map("qlix_document_id")
+  externalId     String    @map("external_id")
+  /// uploading | pending | ready | failed
+  status         String    @default("uploading")
+  lastError      String?   @db.Text @map("last_error")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, externalId])
+  @@index([organizationId, createdAt])
+  @@map("qlix_documents")
 }

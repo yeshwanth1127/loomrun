@@ -4,6 +4,7 @@ import type { FormEvent } from 'react'
 import { useState } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { apiFetch } from '../lib/api'
+import type { SubscriptionInfo } from '../lib/entitlements'
 
 type Member = {
   membership_id: string
@@ -41,6 +42,12 @@ export function TeamPage() {
     queryFn: () => apiFetch<{ items: Member[] }>(`/v1/orgs/${orgId}/members`),
   })
 
+  const subQ = useQuery({
+    queryKey: ['subscription', orgId],
+    enabled: !!orgId && isOwner,
+    queryFn: () => apiFetch<SubscriptionInfo>(`/v1/orgs/${orgId}/subscription`),
+  })
+
   const create = useMutation({
     mutationFn: () =>
       apiFetch(`/v1/orgs/${orgId}/members`, {
@@ -50,6 +57,7 @@ export function TeamPage() {
     onSuccess: () => {
       setEmail(''); setPassword(''); setName('')
       void qc.invalidateQueries({ queryKey: ['org-members', orgId] })
+      void qc.invalidateQueries({ queryKey: ['subscription', orgId] })
     },
   })
 
@@ -77,7 +85,12 @@ export function TeamPage() {
     <>
       <div className="page-header">
         <h1>Team</h1>
-        <p>{members.length} member{members.length !== 1 ? 's' : ''} · {membership?.organization?.name}</p>
+        <p>
+          {members.length} member{members.length !== 1 ? 's' : ''} · {membership?.organization?.name}
+          {subQ.data && (
+            <> · {subQ.data.seats.used}/{subQ.data.seats.limit} seats</>
+          )}
+        </p>
       </div>
 
       <div className="page-body stack" style={{ gap: '1.5rem' }}>

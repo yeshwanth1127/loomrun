@@ -3,23 +3,26 @@ import { AnimatePresence, motion } from 'framer-motion'
 import {
   Calendar,
   Check,
+  ChevronDown,
   Columns,
+  Mail,
   MessageCircle,
   Phone,
   Plus,
   Send,
   Table2,
+  Upload,
   X,
 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { DragEvent, FormEvent } from 'react'
-import { NavLink } from 'react-router-dom'
+import { NavLink, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useAuth } from '../context/AuthContext'
 import { useDateFilter } from '../context/DateFilterContext'
 import { KanbanSkeleton, TableSkeleton } from '../components/ui/Skeleton'
-import { isTelecallerRole, membershipForOrg } from '../lib/membership'
-import { apiFetch } from '../lib/api'
+import { isOwnerRole, membershipForOrg } from '../lib/membership'
+import { apiFetch, apiUpload } from '../lib/api'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -61,16 +64,6 @@ type Activity = {
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const STAGES = ['NEW', 'CONTACTED', 'QUALIFICATION', 'QUOTATION', 'NEGOTIATION', 'SAMPLE', 'WON', 'LOST']
-
-const CALL_OUTCOME_LABELS: Record<string, string> = {
-  CONNECTED: 'Connected',
-  NO_ANSWER: 'No answer',
-  BUSY: 'Busy',
-  WRONG_NUMBER: 'Wrong number',
-  NOT_INTERESTED: 'Not interested',
-  CALLBACK_SCHEDULED: 'Callback scheduled',
-  QUALIFIED: 'Qualified',
-}
 
 const STAGE_LABELS: Record<string, string> = {
   NEW: 'New',
@@ -177,10 +170,13 @@ function LeadDetailDrawer({ lead, orgId, onClose, onStageChange }: {
   onStageChange: (stage: string) => void
 }) {
   const qc = useQueryClient()
+  const navigate = useNavigate()
   const [activityType, setActivityType] = useState('NOTE')
   const [activityBody, setActivityBody] = useState('')
   const [editingField, setEditingField] = useState<string | null>(null)
   const [editValues, setEditValues] = useState<Partial<Lead>>({})
+  const [shareOpen, setShareOpen] = useState(false)
+  const shareRef = useRef<HTMLDivElement>(null)
 
   const detailQ = useQuery({
     queryKey: ['lead-detail', orgId, lead.id],
@@ -189,6 +185,22 @@ function LeadDetailDrawer({ lead, orgId, onClose, onStageChange }: {
   })
 
   const detail = detailQ.data ?? lead
+
+  useEffect(() => {
+    if (!shareOpen) return
+    function onDocClick(e: MouseEvent) {
+      if (!shareRef.current?.contains(e.target as Node)) setShareOpen(false)
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setShareOpen(false)
+    }
+    document.addEventListener('mousedown', onDocClick)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDocClick)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [shareOpen])
 
   const addActivity = useMutation({
     mutationFn: () =>
@@ -214,6 +226,59 @@ function LeadDetailDrawer({ lead, orgId, onClose, onStageChange }: {
     },
   })
 
+  const sendQuote = useMutation({
+    mutationFn: async (channel: 'whatsapp' | 'email') => {
+      if (channel === 'whatsapp' && !detail.phone) {
+        throw new Error('This lead has no phone number')
+      }
+      if (channel === 'email' && !detail.email) {
+        throw new Error('This lead has no email address')
+      }
+
+      const { items } = await apiFetch<{
+        items: Array<{
+          id: string
+          lead_id: string
+          pdf_url: string | null
+          number: string
+          status: string
+        }>
+      }>(`/v1/orgs/${orgId}/quotations?day=all`)
+
+      const forLead = items.filter((q) => q.lead_id === lead.id)
+      const ready = forLead.find((q) => !!q.pdf_url)
+      if (!ready) {
+        const draft = forLead.find((q) => !q.pdf_url)
+        navigate('/app/quotations')
+        if (draft) {
+          throw new Error(
+            `Quotation ${draft.number} is still a draft — open Actions → Generate PDF before sending`,
+          )
+        }
+        throw new Error('No quotation for this lead yet — create one on Quotations')
+      }
+
+      return apiFetch<{ message?: string; channel: string }>(
+        `/v1/orgs/${orgId}/quotations/${ready.id}/send`,
+        {
+          method: 'POST',
+          json: { channel, doc_type: 'quotation' },
+        },
+      )
+    },
+    onSuccess: (data) => {
+      setShareOpen(false)
+      const via = data.channel === 'whatsapp' ? 'WhatsApp' : 'Email'
+      toast.success(data.message ?? `Quotation sent via ${via}`)
+      void qc.invalidateQueries({ queryKey: ['lead-detail', orgId, lead.id] })
+      void qc.invalidateQueries({ queryKey: ['leads', orgId] })
+      void qc.invalidateQueries({ queryKey: ['quotations', orgId] })
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || 'Failed to send quotation')
+    },
+  })
+
   const sc = scoreClass(detail.lead_score)
 
   return (
@@ -225,7 +290,7 @@ function LeadDetailDrawer({ lead, orgId, onClose, onStageChange }: {
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem', flex: 1, minWidth: 0 }}>
             <ScoreRing score={detail.lead_score} />
             <div style={{ minWidth: 0, flex: 1 }}>
-              <div style={{ fontWeight: 700, fontSize: '1rem', color: '#0f172a', marginBottom: '0.25rem' }}>
+              <div style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--foreground)', marginBottom: '0.25rem' }}>
                 {detail.title}
               </div>
               <div className="row" style={{ gap: '0.4rem', flexWrap: 'wrap' }}>
@@ -258,9 +323,52 @@ function LeadDetailDrawer({ lead, orgId, onClose, onStageChange }: {
                 <MessageCircle size={13} /> WhatsApp
               </a>
             )}
-            <button type="button" className="quick-action-btn primary">
-              <Send size={13} /> Send Quote
-            </button>
+            <div className="quick-action-dropdown" ref={shareRef}>
+              <button
+                type="button"
+                className="quick-action-btn primary"
+                aria-haspopup="menu"
+                aria-expanded={shareOpen}
+                disabled={sendQuote.isPending}
+                onClick={() => setShareOpen((v) => !v)}
+              >
+                <Send size={13} />
+                {sendQuote.isPending ? 'Sending…' : 'Send Quote'}
+                <ChevronDown size={13} />
+              </button>
+              {shareOpen && (
+                <div className="quick-action-menu" role="menu">
+                  <button
+                    type="button"
+                    className="quick-action-menu-item"
+                    role="menuitem"
+                    disabled={sendQuote.isPending || !detail.phone}
+                    title={
+                      detail.phone
+                        ? `Send quotation on WhatsApp to ${detail.phone}`
+                        : 'This lead has no phone number'
+                    }
+                    onClick={() => sendQuote.mutate('whatsapp')}
+                  >
+                    <MessageCircle size={13} /> WhatsApp
+                  </button>
+                  <button
+                    type="button"
+                    className="quick-action-menu-item"
+                    role="menuitem"
+                    disabled={sendQuote.isPending || !detail.email}
+                    title={
+                      detail.email
+                        ? `Email quotation to ${detail.email}`
+                        : 'This lead has no email address'
+                    }
+                    onClick={() => sendQuote.mutate('email')}
+                  >
+                    <Mail size={13} /> Email
+                  </button>
+                </div>
+              )}
+            </div>
             <div style={{ position: 'relative' }}>
               <select
                 className="select"
@@ -555,6 +663,131 @@ function AddLeadModal({ orgId, onClose, onCreated }: {
   )
 }
 
+const SAMPLE_LEADS_CSV = `name,phone,email,company,city,source,stage,product,quantity,notes,value,date
+Rahul Sharma,9876543210,rahul@acme.com,Acme Textiles,Surat,IndiaMART,Quoted,Polo t-shirts,500,Repeat buyer,25000,2024-08-15
+Priya Patel,9123456789,priya@example.com,Patel Exports,Mumbai,WhatsApp,New,Uniforms,200,,12000,2024-09-01
+`
+
+type CsvImportResult = {
+  created: number
+  skipped: number
+  errors: string[]
+  warnings: string[]
+  column_mapping: Record<string, string>
+}
+
+function ImportCsvModal({ orgId, onClose, onImported }: {
+  orgId: string
+  onClose: () => void
+  onImported: () => void
+}) {
+  const [file, setFile] = useState<File | null>(null)
+  const [result, setResult] = useState<CsvImportResult | null>(null)
+
+  const upload = useMutation({
+    mutationFn: (f: File) =>
+      apiUpload<CsvImportResult>(`/v1/orgs/${orgId}/leads/upload-csv`, f),
+    onSuccess: (data) => {
+      setResult(data)
+      if (data.created > 0) {
+        toast.success(`${data.created} lead${data.created === 1 ? '' : 's'} imported`)
+        onImported()
+      } else if (data.skipped > 0) {
+        toast.message('No new leads — existing matches were skipped')
+      }
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+
+  function downloadSample() {
+    const blob = new Blob([SAMPLE_LEADS_CSV], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'loomrun-leads-sample.csv'
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  return (
+    <div className="modal-wrap" onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="modal" style={{ maxWidth: 520 }}>
+        <div className="modal-header">
+          <h2>Import leads from CSV</h2>
+          <button type="button" className="btn-logout" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className="modal-body stack" style={{ gap: '0.75rem' }}>
+          <p className="muted small" style={{ margin: 0 }}>
+            Upload an old spreadsheet export. Columns are detected automatically
+            (name, phone, email, company, city, source, stage, product, notes, value, date).
+            Existing leads with the same phone or email are skipped. Historical imports
+            do not send WhatsApp greetings.
+          </p>
+          <p className="muted small" style={{ margin: 0 }}>
+            If the file includes a date column, those dates are kept — switch the date
+            filter to All to see older leads.
+          </p>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={downloadSample} style={{ alignSelf: 'flex-start' }}>
+            Download sample CSV
+          </button>
+          <label className="btn btn-sm" style={{ cursor: upload.isPending ? 'wait' : 'pointer', alignSelf: 'flex-start' }}>
+            <Upload size={14} />
+            {file ? file.name : 'Choose CSV file'}
+            <input
+              type="file"
+              accept=".csv,text/csv"
+              hidden
+              disabled={upload.isPending}
+              onChange={(e) => {
+                const f = e.target.files?.[0] ?? null
+                e.target.value = ''
+                setFile(f)
+                setResult(null)
+              }}
+            />
+          </label>
+          {result && (
+            <div className="small" style={{ marginTop: '0.25rem' }}>
+              <p style={{ margin: 0 }}>
+                Imported {result.created}
+                {result.skipped ? ` · skipped ${result.skipped} duplicate${result.skipped === 1 ? '' : 's'}` : ''}
+              </p>
+              {result.column_mapping && Object.keys(result.column_mapping).length > 0 && (
+                <ul style={{ marginTop: '0.5rem', paddingLeft: '1.25rem' }}>
+                  {Object.entries(result.column_mapping).map(([k, v]) => (
+                    <li key={k}>{k} → {v}</li>
+                  ))}
+                </ul>
+              )}
+              {result.warnings?.length ? (
+                <ul style={{ marginTop: '0.5rem', paddingLeft: '1.25rem', color: 'var(--warning)' }}>
+                  {result.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                </ul>
+              ) : null}
+              {result.errors?.length ? (
+                <ul style={{ marginTop: '0.5rem', paddingLeft: '1.25rem' }} className="error">
+                  {result.errors.slice(0, 12).map((err, i) => <li key={i}>{err}</li>)}
+                </ul>
+              ) : null}
+            </div>
+          )}
+        </div>
+        <div className="modal-footer">
+          <button type="button" className="btn btn-ghost" onClick={onClose}>Close</button>
+          <button
+            type="button"
+            className="btn"
+            disabled={!file || upload.isPending}
+            onClick={() => file && upload.mutate(file)}
+          >
+            {upload.isPending ? 'Importing…' : 'Import'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Kanban Card ───────────────────────────────────────────────────────────────
 
 function KanbanCard({ lead, onDragStart, onDragEnd, onClick }: {
@@ -575,7 +808,7 @@ function KanbanCard({ lead, onDragStart, onDragEnd, onClick }: {
       tabIndex={0}
       onKeyDown={(e) => { if (e.key === 'Enter') onClick() }}
     >
-      <div style={{ fontWeight: 600, fontSize: '0.85rem', color: '#0f172a', marginBottom: '0.4rem', lineHeight: 1.3 }}>
+      <div style={{ fontWeight: 600, fontSize: '0.85rem', color: 'var(--foreground)', marginBottom: '0.4rem', lineHeight: 1.3 }}>
         {lead.title}
       </div>
       <div className="row" style={{ gap: '0.35rem', marginBottom: '0.4rem', flexWrap: 'wrap' }}>
@@ -586,12 +819,6 @@ function KanbanCard({ lead, onDragStart, onDragEnd, onClick }: {
       </div>
       {lead.product_interest && (
         <div className="muted" style={{ fontSize: '0.75rem', marginBottom: '0.35rem' }}>{lead.product_interest}</div>
-      )}
-      {lead.last_call_outcome && (
-        <div className="muted" style={{ fontSize: '0.72rem', marginBottom: '0.35rem' }}>
-          Last call: {CALL_OUTCOME_LABELS[lead.last_call_outcome] ?? lead.last_call_outcome}
-          {lead.last_call_logged_by ? ` · ${lead.last_call_logged_by}` : ''}
-        </div>
       )}
       <div className="row" style={{ gap: '0.5rem', justifyContent: 'space-between', marginTop: '0.25rem' }}>
         {lead.next_follow_up_at ? (
@@ -773,10 +1000,11 @@ function TableView({ leads, orgId, onSelectLead, onStageChange }: {
 export function LeadsPage() {
   const { orgId, me } = useAuth()
   const { dayParam, appendDay, isAll } = useDateFilter()
-  const isTelecaller = isTelecallerRole(membershipForOrg(me, orgId))
+  const isOwner = isOwnerRole(membershipForOrg(me, orgId))
   const qc = useQueryClient()
   const [view, setView] = useState<'board' | 'table'>('board')
   const [showAddModal, setShowAddModal] = useState(false)
+  const [showImportModal, setShowImportModal] = useState(false)
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null)
   const [filters, setFilters] = useState({
     source: '',
@@ -827,7 +1055,7 @@ export function LeadsPage() {
   const leads = q.data?.items ?? []
 
   return (
-    <>
+    <div className={view === 'board' ? 'leads-page leads-page--board' : 'leads-page'}>
       {/* Header */}
       <div className="page-header">
         <div className="row spread" style={{ paddingBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
@@ -840,10 +1068,15 @@ export function LeadsPage() {
             </p>
           </div>
           <div className="row" style={{ gap: '0.5rem' }}>
-            {!isTelecaller && (
-              <NavLink to="/app/leads/connections" className="btn btn-ghost btn-sm">
-                Integrations
-              </NavLink>
+            {isOwner && (
+              <>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowImportModal(true)}>
+                  <Upload size={15} /> Import CSV
+                </button>
+                <NavLink to="/app/leads/connections" className="btn btn-ghost btn-sm">
+                  Integrations
+                </NavLink>
+              </>
             )}
             <button type="button" className="btn" onClick={() => setShowAddModal(true)}>
               <Plus size={15} /> Add Lead
@@ -925,7 +1158,7 @@ export function LeadsPage() {
       </div>
 
       {/* Body */}
-      <div className="page-body" style={{ padding: view === 'board' ? '1.25rem 1.5rem' : '1.5rem 2rem' }}>
+      <div className={view === 'board' ? 'page-body page-body--board' : 'page-body'}>
         {q.isLoading && (view === 'board' ? <KanbanSkeleton /> : <TableSkeleton rows={8} />)}
 
         {!q.isLoading && leads.length === 0 && (
@@ -971,6 +1204,23 @@ export function LeadsPage() {
         )}
       </AnimatePresence>
 
+      <AnimatePresence>
+        {showImportModal && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            transition={{ duration: 0.15 }}
+          >
+            <ImportCsvModal
+              orgId={orgId}
+              onClose={() => setShowImportModal(false)}
+              onImported={() => void qc.invalidateQueries({ queryKey: ['leads', orgId] })}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Lead Detail Drawer */}
       <AnimatePresence>
         {selectedLead && (
@@ -989,6 +1239,6 @@ export function LeadsPage() {
           </motion.div>
         )}
       </AnimatePresence>
-    </>
+    </div>
   )
 }

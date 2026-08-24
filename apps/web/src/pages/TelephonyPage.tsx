@@ -1,233 +1,309 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronRight, Copy, Check, Loader } from 'lucide-react'
+import { Loader, Phone, PhoneCall, Zap } from 'lucide-react'
 import { useState } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { apiFetch } from '../lib/api'
+
 
 type Provider = {
   provider_name: string
   label: string
   provider_type: string
-  credential_fields: string[]
   cost_per_min: number
   docs_url: string
   status: 'connected' | 'disconnected'
   is_active: boolean
+  provisioned: boolean
+  phone_number: string | null
 }
 
-const PROVIDER_ICONS: Record<string, string> = {
-  TWILIO: '📞',
-  PLIVO: '📱',
-  EXOTEL: '🇮🇳',
-  TELNYX: '📡',
-  VONAGE: '🔊',
-  VAPI: '🤖',
-  RETELL: '🎙️',
-  BLAND: '💬',
+type UsageData = {
+  month: string
+  total_calls: number
+  total_duration_minutes: number
+  total_billed_cost: number
+  by_provider: Record<string, { calls: number; duration_seconds: number; billed_cost: number }>
 }
+
+const MANAGED_PROVIDERS = ['TWILIO', 'VAPI']
 
 export function TelephonyPage() {
   const { orgId } = useAuth()
   const qc = useQueryClient()
-  const [selectedProvider, setSelectedProvider] = useState<Provider | null>(null)
-  const [credentialValues, setCredentialValues] = useState<Record<string, string>>({})
-  const [copied, setCopied] = useState(false)
+  const [provisionTarget, setProvisionTarget] = useState<string | null>(null)
 
-  const q = useQuery({
+  const providersQ = useQuery({
     queryKey: ['telephony-providers', orgId],
     enabled: !!orgId,
     queryFn: () => apiFetch<{ providers: Provider[] }>(`/v1/orgs/${orgId}/telephony/providers`),
   })
 
-  const connectProvider = useMutation({
-    mutationFn: (p: Provider) =>
-      apiFetch(`/v1/orgs/${orgId}/telephony/providers/connect`, {
+  const usageQ = useQuery({
+    queryKey: ['telephony-usage', orgId],
+    enabled: !!orgId,
+    queryFn: () => apiFetch<UsageData>(`/v1/orgs/${orgId}/telephony/usage`),
+  })
+
+  const provision = useMutation({
+    mutationFn: (provider: string) =>
+      apiFetch(`/v1/orgs/${orgId}/telephony/provision`, {
         method: 'POST',
-        json: {
-          provider_name: p.provider_name,
-          credentials: credentialValues,
-        },
+        json: { provider },
       }),
     onSuccess: () => {
+      setProvisionTarget(null)
       void qc.invalidateQueries({ queryKey: ['telephony-providers', orgId] })
-      setSelectedProvider(null)
-      setCredentialValues({})
+      void qc.invalidateQueries({ queryKey: ['telephony-usage', orgId] })
     },
   })
 
-  const setActive = useMutation({
-    mutationFn: (provider_name: string) =>
-      apiFetch(`/v1/orgs/${orgId}/telephony/providers/set-active`, {
-        method: 'POST',
-        json: { provider_name },
-      }),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['telephony-providers', orgId] }),
-  })
 
-  const disconnect = useMutation({
-    mutationFn: (provider_name: string) =>
-      apiFetch(`/v1/orgs/${orgId}/telephony/providers/disconnect`, {
-        method: 'POST',
-        json: { provider_name },
-      }),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['telephony-providers', orgId] }),
-  })
-
-  if (!orgId) return <div className="page-header"><h1>Telephony</h1><p className="muted">Select an organization.</p></div>
-
-  const providers = q.data?.providers ?? []
-  const voiceProviders = providers.filter((p) => p.provider_type === 'VOICE')
-  const aiProviders = providers.filter((p) => p.provider_type === 'AI_CALL')
-
-  function ProviderCard({ provider }: { provider: Provider }) {
-    const isActive = provider.is_active
-    const isConnected = provider.status === 'connected'
-
-    return (
-      <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <span style={{ fontSize: '1.5rem' }}>{PROVIDER_ICONS[provider.provider_name] || '🔌'}</span>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 600, color: '#0f172a' }}>{provider.label}</div>
-            <div className="muted small" style={{ marginTop: '0.2rem' }}>
-              ${provider.cost_per_min.toFixed(3)}/min
-            </div>
-          </div>
-          {isActive && <span className="badge badge-green">Active</span>}
-        </div>
-
-        {isConnected ? (
-          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              className="btn btn-sm"
-              disabled={isActive || setActive.isPending}
-              onClick={() => setActive.mutate(provider.provider_name)}
-            >
-              {setActive.isPending ? '...' : 'Set as Active'}
-            </button>
-            <button
-              type="button"
-              className="btn btn-sm btn-ghost"
-              disabled={disconnect.isPending}
-              onClick={() => disconnect.mutate(provider.provider_name)}
-            >
-              {disconnect.isPending ? '...' : 'Disconnect'}
-            </button>
-            <a href={provider.docs_url} target="_blank" rel="noreferrer" className="btn btn-sm btn-ghost">
-              Docs <ChevronRight size={12} />
-            </a>
-          </div>
-        ) : (
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <button
-              type="button"
-              className="btn btn-sm"
-              onClick={() => {
-                setSelectedProvider(provider)
-                setCredentialValues({})
-              }}
-            >
-              Configure
-            </button>
-            <a href={provider.docs_url} target="_blank" rel="noreferrer" className="btn btn-sm btn-ghost">
-              Docs <ChevronRight size={12} />
-            </a>
-          </div>
-        )}
-      </div>
-    )
+  if (!orgId) {
+    return <div className="page-header"><h1>Telephony</h1><p className="muted">Select an organization.</p></div>
   }
+
+  const providers = providersQ.data?.providers ?? []
+  const twilio = providers.find((p) => p.provider_name === 'TWILIO')
+  const vapi = providers.find((p) => p.provider_name === 'VAPI')
+  const usage = usageQ.data
+
+  const isProvisioned = (p?: Provider) => p?.provisioned && p.status === 'connected'
 
   return (
     <>
       <div className="page-header">
-        <h1>Telephony Settings</h1>
-        <p style={{ marginTop: '0.5rem', marginBottom: 0 }}>Configure voice and AI call providers</p>
+        <h1>Telephony</h1>
+        <p style={{ marginTop: '0.5rem', marginBottom: 0 }}>
+          Platform-managed voice calling and AI auto-calls
+        </p>
       </div>
 
-      <div className="page-body stack" style={{ gap: '2rem' }}>
-        {/* Voice Providers Section */}
-        <div>
-          <h2 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '1rem' }}>Voice Provider (Human Calls)</h2>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
-            {voiceProviders.map((p) => (
-              <ProviderCard key={p.provider_name} provider={p} />
-            ))}
-          </div>
-        </div>
+      <div className="page-body stack" style={{ gap: '1.5rem' }}>
 
-        {/* AI Providers Section */}
-        <div>
-          <h2 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '1rem' }}>AI Call Provider (Auto Fallback)</h2>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
-            {aiProviders.map((p) => (
-              <ProviderCard key={p.provider_name} provider={p} />
-            ))}
-          </div>
-        </div>
-      </div>
+        {/* Status cards */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
 
-      {/* Credential Modal */}
-      {selectedProvider && (
-        <div className="modal-wrap" onClick={(e) => { if (e.target === e.currentTarget) setSelectedProvider(null) }}>
-          <div className="modal">
-            <div className="modal-header">
-              <h2>Configure {selectedProvider.label}</h2>
-              <button
-                type="button"
-                className="btn-logout"
-                onClick={() => setSelectedProvider(null)}
-              >
-                ✕
-              </button>
+          {/* Twilio */}
+          <div className="card">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
+              <Phone size={20} style={{ color: '#6366f1' }} />
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 700 }}>Browser Calls</div>
+                <div className="muted small">Twilio · Human dialer</div>
+              </div>
+              {isProvisioned(twilio) ? (
+                <span className="badge badge-green">Active</span>
+              ) : (
+                <span className="badge badge-slate">Not provisioned</span>
+              )}
             </div>
-            <form
-              className="modal-body stack"
-              onSubmit={(e) => {
-                e.preventDefault()
-                connectProvider.mutate(selectedProvider)
-              }}
-            >
-              <p className="muted small">Enter your {selectedProvider.label} credentials below.</p>
-              {selectedProvider.credential_fields.map((field) => (
-                <div key={field} className="form-field">
-                  <label className="input-label">{field.replace(/_/g, ' ').toUpperCase()}</label>
-                  <input
-                    className="input"
-                    type={field.includes('token') || field.includes('key') || field.includes('secret') ? 'password' : 'text'}
-                    placeholder={`Enter ${field}`}
-                    value={credentialValues[field] ?? ''}
-                    onChange={(e) => setCredentialValues((v) => ({ ...v, [field]: e.target.value }))}
-                    required
-                    style={{ width: '100%' }}
-                  />
+
+            {isProvisioned(twilio) ? (
+              <div className="stack" style={{ gap: '0.5rem' }}>
+                <div className="row spread">
+                  <span className="muted small">Phone number</span>
+                  <span style={{ fontWeight: 600, fontSize: '0.9rem' }}>{twilio?.phone_number ?? '—'}</span>
                 </div>
-              ))}
-              <a href={selectedProvider.docs_url} target="_blank" rel="noreferrer" className="small muted">
-                Where do I find these? →
-              </a>
-            </form>
-            <div className="modal-footer">
-              <button
-                type="button"
-                className="btn btn-ghost"
-                onClick={() => setSelectedProvider(null)}
-              >
-                Cancel
-              </button>
+                <div className="row spread">
+                  <span className="muted small">Provider</span>
+                  <span style={{ fontSize: '0.85rem' }}>Twilio subaccount</span>
+                </div>
+              </div>
+            ) : (
+              <div>
+                <p className="muted small" style={{ marginBottom: '0.75rem' }}>
+                  Provision to get a dedicated phone number for browser-based calls.
+                </p>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={provision.isPending && provisionTarget === 'TWILIO'}
+                  onClick={() => { setProvisionTarget('TWILIO'); void provision.mutateAsync('TWILIO') }}
+                  style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+                >
+                  {provision.isPending && provisionTarget === 'TWILIO' ? (
+                    <><Loader size={13} className="spin" /> Provisioning…</>
+                  ) : 'Provision Twilio'}
+                </button>
+                {provision.isError && provisionTarget === 'TWILIO' && (
+                  <p className="error" style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
+                    {(provision.error as Error).message}
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* VAPI */}
+          <div className="card">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
+              <Zap size={20} style={{ color: '#8b5cf6' }} />
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 700 }}>AI Auto-Calls</div>
+                <div className="muted small">VAPI · AI voice agent</div>
+              </div>
+              {isProvisioned(vapi) ? (
+                <span className="badge badge-green">Active</span>
+              ) : (
+                <span className="badge badge-slate">Not provisioned</span>
+              )}
+            </div>
+
+            {isProvisioned(vapi) ? (
+              <div className="stack" style={{ gap: '0.5rem' }}>
+                <div className="row spread">
+                  <span className="muted small">Outbound number</span>
+                  <span style={{ fontWeight: 600, fontSize: '0.9rem' }}>{vapi?.phone_number ?? '—'}</span>
+                </div>
+                <div className="row spread">
+                  <span className="muted small">Provider</span>
+                  <span style={{ fontSize: '0.85rem' }}>VAPI assistant</span>
+                </div>
+              </div>
+            ) : (
+              <div>
+                <p className="muted small" style={{ marginBottom: '0.75rem' }}>
+                  Requires Twilio to be provisioned first. Provisions an AI voice assistant using your Twilio number.
+                </p>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={(provision.isPending && provisionTarget === 'VAPI') || !isProvisioned(twilio)}
+                  onClick={() => { setProvisionTarget('VAPI'); void provision.mutateAsync('VAPI') }}
+                  style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+                >
+                  {provision.isPending && provisionTarget === 'VAPI' ? (
+                    <><Loader size={13} className="spin" /> Provisioning…</>
+                  ) : 'Provision VAPI'}
+                </button>
+                {!isProvisioned(twilio) && (
+                  <p className="muted small" style={{ marginTop: '0.4rem' }}>Provision Twilio first.</p>
+                )}
+                {provision.isError && provisionTarget === 'VAPI' && (
+                  <p className="error" style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
+                    {(provision.error as Error).message}
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Exotel — platform-managed, provisioned from master .env credentials */}
+          {(() => {
+            const exotel = providers.find((p) => p.provider_name === 'EXOTEL')
+            const provisioned = exotel?.provisioned && exotel.status === 'connected'
+            return (
+              <div className="card">
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
+                  <PhoneCall size={20} style={{ color: '#0ea5e9' }} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 700 }}>Exotel · Click-to-Call</div>
+                    <div className="muted small">Indian numbers · Platform managed</div>
+                  </div>
+                  {provisioned
+                    ? <span className="badge badge-green">Active</span>
+                    : <span className="badge badge-slate">Not provisioned</span>}
+                </div>
+
+                {provisioned ? (
+                  <div className="stack" style={{ gap: '0.5rem' }}>
+                    <div className="row spread">
+                      <span className="muted small">ExoPhone number</span>
+                      <span style={{ fontWeight: 600, fontSize: '0.9rem' }}>{exotel?.phone_number ?? '—'}</span>
+                    </div>
+                    <div className="row spread">
+                      <span className="muted small">Mode</span>
+                      <span style={{ fontSize: '0.85rem' }}>Server-side click-to-call</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <p className="muted small" style={{ marginBottom: '0.75rem' }}>
+                      Enable Exotel click-to-call for this org. Uses the platform Exotel account — no credentials needed from users.
+                    </p>
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      disabled={provision.isPending && provisionTarget === 'EXOTEL'}
+                      onClick={() => { setProvisionTarget('EXOTEL'); void provision.mutateAsync('EXOTEL') }}
+                      style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+                    >
+                      {provision.isPending && provisionTarget === 'EXOTEL'
+                        ? <><Loader size={13} className="spin" /> Provisioning…</>
+                        : 'Provision Exotel'}
+                    </button>
+                    {provision.isError && provisionTarget === 'EXOTEL' && (
+                      <p className="error" style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
+                        {(provision.error as Error).message}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })()}
+
+          {/* Provision Both */}
+          {!isProvisioned(twilio) && (
+            <div className="card" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', gap: '0.75rem', textAlign: 'center', background: '#fafafa', border: '2px dashed #e2e8f0' }}>
+              <div style={{ fontWeight: 700 }}>Provision Everything</div>
+              <p className="muted small">Set up Twilio + VAPI in one click.</p>
               <button
                 type="button"
                 className="btn"
-                disabled={connectProvider.isPending || Object.keys(credentialValues).length === 0}
-                onClick={() => connectProvider.mutate(selectedProvider)}
+                disabled={provision.isPending && provisionTarget === 'all'}
+                onClick={() => { setProvisionTarget('all'); void provision.mutateAsync('all') }}
+                style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
               >
-                {connectProvider.isPending ? 'Saving...' : 'Save Credentials'}
+                {provision.isPending && provisionTarget === 'all' ? (
+                  <><Loader size={14} className="spin" /> Provisioning…</>
+                ) : 'Provision All'}
               </button>
             </div>
-          </div>
+          )}
         </div>
-      )}
+
+        {/* Usage */}
+        {(isProvisioned(twilio) || isProvisioned(vapi)) && (
+          <div className="card">
+            <div style={{ fontWeight: 700, marginBottom: '1rem' }}>
+              Usage — {usage?.month ?? '…'}
+            </div>
+            {usageQ.isLoading ? (
+              <p className="muted small">Loading…</p>
+            ) : usage ? (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '1rem' }}>
+                <div>
+                  <div style={{ fontSize: '2rem', fontWeight: 800, color: '#0f172a' }}>{usage.total_calls}</div>
+                  <div className="muted small">total calls</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '2rem', fontWeight: 800, color: '#0f172a' }}>{usage.total_duration_minutes.toFixed(1)}</div>
+                  <div className="muted small">minutes</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '2rem', fontWeight: 800, color: '#0f172a' }}>₹{(usage.total_billed_cost * 83).toFixed(0)}</div>
+                  <div className="muted small">billed this month</div>
+                </div>
+                {Object.entries(usage.by_provider).map(([prov, stats]) => (
+                  <div key={prov} style={{ padding: '0.75rem', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                    <div style={{ fontWeight: 600, fontSize: '0.85rem', marginBottom: '0.35rem' }}>{prov}</div>
+                    <div className="muted small">{stats.calls} calls · {Math.round(stats.duration_seconds / 60)} min</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="muted small">No calls this month.</p>
+            )}
+          </div>
+        )}
+
+        {/* Other providers note */}
+        <div style={{ padding: '0.75rem 1rem', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '0.85rem', color: '#64748b' }}>
+          Other providers (Plivo, Exotel, Telnyx, Vonage, Retell, Bland) are available for BYO configuration — contact support.
+        </div>
+
+      </div>
     </>
   )
 }

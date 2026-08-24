@@ -1,6 +1,7 @@
 """Twilio voice provider adapter."""
 
 from typing import Any
+
 from twilio.jwt.access_token import AccessToken
 from twilio.jwt.access_token.grants import VoiceGrant
 
@@ -8,40 +9,41 @@ from loomrun_api.telephony.adapters.base import CallResult, VoiceAdapter
 
 
 class TwilioAdapter(VoiceAdapter):
-    """Twilio voice provider implementation."""
 
     async def get_browser_token(self, identity: str) -> str:
-        """Generate Twilio access token for browser WebRTC SDK."""
+        """Generate a Twilio Access Token for the browser Voice SDK."""
         account_sid = self.credentials.get("account_sid")
-        auth_token = self.credentials.get("auth_token")
+        api_key_sid = self.credentials.get("api_key_sid")
+        api_key_secret = self.credentials.get("api_key_secret")
+        twiml_app_sid = self.credentials.get("twiml_app_sid")
 
-        if not account_sid or not auth_token:
-            raise ValueError("Missing Twilio account_sid or auth_token")
+        if not all([account_sid, api_key_sid, api_key_secret]):
+            raise ValueError("Missing Twilio credentials: account_sid, api_key_sid, api_key_secret")
 
-        token = AccessToken(account_sid, account_sid, identity)
-        token.add_grant(VoiceGrant())
-        return token.to_jwt().decode("utf-8")
+        token = AccessToken(account_sid, api_key_sid, api_key_secret, identity=identity, ttl=3600)
+        grant = VoiceGrant(outgoing_application_sid=twiml_app_sid, incoming_allow=True)
+        token.add_grant(grant)
+        jwt = token.to_jwt()
+        return jwt.decode("utf-8") if isinstance(jwt, bytes) else jwt
 
     async def build_twiml(self, to_number: str) -> str:
-        """Build TwiML for dialing a number with recording enabled."""
-        phone_number = self.credentials.get("phone_number")
-
-        if not phone_number:
-            raise ValueError("Missing Twilio phone_number")
-
-        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+        phone_number = self.credentials.get("phone_number", "")
+        return f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Dial record="record-from-answer" recordingStatusCallback="/v1/telecaller/webhooks/twilio">
-        {to_number}
-    </Dial>
+  <Dial callerId="{phone_number}" record="record-from-answer-dual">
+    {to_number}
+  </Dial>
 </Response>"""
-        return twiml
 
     async def parse_webhook(self, payload: dict[str, Any]) -> CallResult:
-        """Parse Twilio call-completed webhook."""
-        # TODO: Parse Twilio webhook payload
+        status_map = {
+            "completed": "CONNECTED",
+            "no-answer": "NO_ANSWER",
+            "busy": "BUSY",
+            "failed": "NO_ANSWER",
+        }
         return CallResult(
             call_id=payload.get("CallSid", ""),
-            duration_seconds=int(payload.get("RecordingDuration", 0)),
-            transcript=None,  # Will be fetched from Twilio Transcriptions API
+            duration_seconds=int(payload.get("CallDuration", 0) or 0),
+            outcome=status_map.get(payload.get("CallStatus", ""), "CONNECTED"),
         )

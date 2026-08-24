@@ -1,8 +1,9 @@
-import { useQuery } from '@tanstack/react-query'
-import { Download, FileText, Mail, MessageCircle } from 'lucide-react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Download, FileText, Mail, MessageCircle, Trash2 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useDateFilter } from '../context/DateFilterContext'
 import { apiFetch } from '../lib/api'
+import { RowActions } from '../components/RowActions'
 import { toast } from 'sonner'
 
 const base = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
@@ -23,10 +24,16 @@ type Invoice = {
   lines: { description: string; quantity: number; unit_price: number; line_total: number }[]
 }
 
-async function downloadPdf(orgId: string, quotationId: string, number: string) {
+async function downloadPdf(
+  orgId: string,
+  quotationId: string,
+  filename: string,
+  variant: 'quotation' | 'invoice',
+) {
   try {
+    const params = new URLSearchParams({ variant })
     const response = await fetch(
-      `${base}/v1/orgs/${orgId}/quotations/${quotationId}/pdf-file`,
+      `${base}/v1/orgs/${orgId}/quotations/${quotationId}/pdf-file?${params}`,
       {
         headers: { Authorization: `Bearer ${localStorage.getItem('access_token') ?? ''}` },
       }
@@ -38,7 +45,7 @@ async function downloadPdf(orgId: string, quotationId: string, number: string) {
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `invoice-${number}.pdf`
+    link.download = `${filename}.pdf`
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
@@ -51,6 +58,7 @@ async function downloadPdf(orgId: string, quotationId: string, number: string) {
 export function InvoicesPage() {
   const { orgId } = useAuth()
   const { dayParam, appendDay, isAll } = useDateFilter()
+  const qc = useQueryClient()
 
   const q = useQuery({
     queryKey: ['invoices', orgId, dayParam],
@@ -60,6 +68,43 @@ export function InvoicesPage() {
       appendDay(params)
       return apiFetch<{ items: Invoice[] }>(`/v1/orgs/${orgId}/quotations?${params}`)
     },
+  })
+
+  const deleteInvoice = useMutation({
+    mutationFn: (id: string) =>
+      apiFetch(`/v1/orgs/${orgId}/quotations/${id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      toast.success('Deleted')
+      void qc.invalidateQueries({ queryKey: ['invoices', orgId] })
+      void qc.invalidateQueries({ queryKey: ['quotations', orgId] })
+    },
+    onError: (err: Error) => toast.error(err.message || 'Failed to delete'),
+  })
+
+  const sendEmail = useMutation({
+    mutationFn: (id: string) =>
+      apiFetch<{ message?: string }>(`/v1/orgs/${orgId}/quotations/${id}/send`, {
+        method: 'POST',
+        json: { channel: 'email', doc_type: 'invoice' },
+      }),
+    onSuccess: (data) => {
+      toast.success(data.message ?? 'Email sent')
+      void qc.invalidateQueries({ queryKey: ['invoices', orgId] })
+    },
+    onError: (err: Error) => toast.error(err.message || 'Failed to send email'),
+  })
+
+  const sendWhatsApp = useMutation({
+    mutationFn: (id: string) =>
+      apiFetch<{ message?: string }>(`/v1/orgs/${orgId}/quotations/${id}/send`, {
+        method: 'POST',
+        json: { channel: 'whatsapp', doc_type: 'invoice' },
+      }),
+    onSuccess: (data) => {
+      toast.success(data.message ?? 'Sent on WhatsApp')
+      void qc.invalidateQueries({ queryKey: ['invoices', orgId] })
+    },
+    onError: (err: Error) => toast.error(err.message || 'Failed to send on WhatsApp'),
   })
 
   if (!orgId) return (
@@ -116,38 +161,105 @@ export function InvoicesPage() {
                         {x.invoiced_at ? new Date(x.invoiced_at).toLocaleDateString('en-IN') : '—'}
                       </td>
                       <td>
-                        <div className="stack" style={{ gap: '0.35rem', alignItems: 'flex-start' }}>
-                          {x.pdf_url && (
-                            <button
-                              type="button"
-                              className="btn btn-ghost btn-sm"
-                              onClick={() => downloadPdf(orgId, x.id, x.invoice_number)}
-                            >
-                              <Download size={13} />
-                              PDF
-                            </button>
+                        <RowActions>
+                          {(close) => (
+                            <>
+                              {x.pdf_url && (
+                                <>
+                                  <button
+                                    type="button"
+                                    className="btn btn-ghost btn-sm"
+                                    onClick={() => {
+                                      downloadPdf(orgId, x.id, x.invoice_number, 'invoice')
+                                      close()
+                                    }}
+                                  >
+                                    <Download size={13} />
+                                    Download Invoice
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn-ghost btn-sm"
+                                    onClick={() => {
+                                      downloadPdf(orgId, x.id, x.number, 'quotation')
+                                      close()
+                                    }}
+                                  >
+                                    <Download size={13} />
+                                    Download Quotation
+                                  </button>
+                                </>
+                              )}
+                              {x.lead_phone && (
+                                <button
+                                  type="button"
+                                  className="btn btn-ghost btn-sm"
+                                  disabled={
+                                    !x.pdf_url ||
+                                    (sendWhatsApp.isPending && sendWhatsApp.variables === x.id)
+                                  }
+                                  title={
+                                    !x.pdf_url
+                                      ? 'Generate the invoice PDF first'
+                                      : `Send invoice to ${x.lead_phone} on WhatsApp`
+                                  }
+                                  onClick={() => {
+                                    sendWhatsApp.mutate(x.id)
+                                    close()
+                                  }}
+                                >
+                                  <MessageCircle size={13} />
+                                  {sendWhatsApp.isPending && sendWhatsApp.variables === x.id
+                                    ? 'Sending…'
+                                    : 'Send on WhatsApp'}
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-sm"
+                                disabled={
+                                  !x.lead_email ||
+                                  !x.pdf_url ||
+                                  (sendEmail.isPending && sendEmail.variables === x.id)
+                                }
+                                title={
+                                  !x.lead_email
+                                    ? 'This lead has no email address'
+                                    : !x.pdf_url
+                                      ? 'Generate the invoice PDF first'
+                                      : `Send invoice to ${x.lead_email}`
+                                }
+                                onClick={() => {
+                                  sendEmail.mutate(x.id)
+                                  close()
+                                }}
+                              >
+                                <Mail size={13} />
+                                {sendEmail.isPending && sendEmail.variables === x.id
+                                  ? 'Sending…'
+                                  : 'Email invoice'}
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-sm btn-danger"
+                                disabled={deleteInvoice.isPending}
+                                onClick={() => {
+                                  if (
+                                    window.confirm(
+                                      `Delete invoice ${x.invoice_number}? This cannot be undone.`,
+                                    )
+                                  ) {
+                                    deleteInvoice.mutate(x.id)
+                                  }
+                                  close()
+                                }}
+                              >
+                                <Trash2 size={13} />
+                                Delete
+                              </button>
+                            </>
                           )}
-                          {x.lead_phone && (
-                            <button
-                              type="button"
-                              className="btn btn-sm btn-ghost"
-                              style={{ color: '#25d366' }}
-                            >
-                              <MessageCircle size={13} />
-                              WhatsApp
-                            </button>
-                          )}
-                          {x.lead_email && (
-                            <button
-                              type="button"
-                              className="btn btn-sm btn-ghost"
-                              style={{ color: '#6366f1' }}
-                            >
-                              <Mail size={13} />
-                              Email
-                            </button>
-                          )}
-                        </div>
+                        </RowActions>
                       </td>
                     </tr>
                   )

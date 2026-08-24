@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import RedirectResponse
 
 from loomrun_api.config import settings
-from loomrun_api.deps import OrgContext, get_org_context
+from loomrun_api.deps import OrgContext, require_feature, require_roles
 from loomrun_api.meta_client import (
     build_oauth_url,
     exchange_code_for_token,
@@ -15,6 +15,7 @@ from loomrun_api.meta_client import (
     subscribe_page_to_leadgen,
 )
 from loomrun_api.prisma_client import prisma
+from loomrun_api.prisma_json import json_meta
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -23,8 +24,24 @@ REDIRECT_URI_TEMPLATE = "{base}/v1/meta/oauth/callback"
 DEFAULT_RETURN_PATH = "/app/leads/connections"
 
 
+def _api_base_url() -> str:
+    """Always use server-configured public URL so OAuth redirect matches Meta app settings."""
+    return settings.public_api_url.rstrip("/")
+
+
 def _redirect_uri(base_url: str) -> str:
     return REDIRECT_URI_TEMPLATE.format(base=base_url.rstrip("/"))
+
+
+def _normalize_return_url(return_url: str) -> str:
+    url = return_url.rstrip("/")
+    allowed = settings.cors_origin_list
+    if allowed and not any(url == origin.rstrip("/") or url.startswith(origin.rstrip("/") + "/") for origin in allowed):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="return_url must match a configured CORS origin",
+        )
+    return url
 
 
 def _return_with_status(return_url: str, meta: str, pages: int | None = None) -> str:
@@ -48,18 +65,21 @@ def _parse_state(state: str) -> tuple[str, str, str] | None:
 @router.get("/orgs/{org_id}/meta/oauth-url")
 async def get_meta_oauth_url(
     org_id: str,
-    base_url: str = Query(..., description="Public base URL of this API, e.g. https://34b2-....ngrok-free.app"),
+    base_url: str | None = Query(None, description="Deprecated; server uses PUBLIC_API_URL"),
     return_url: str = Query(..., description="Frontend URL to return to after OAuth"),
-    ctx: OrgContext = Depends(get_org_context),
+    ctx: OrgContext = Depends(require_feature("meta_lead_ads")),
+    _owner: OrgContext = Depends(require_roles("OWNER")),
 ) -> dict:
     if not settings.meta_app_id:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="Meta integration not configured")
-    redirect_uri = _redirect_uri(base_url)
+    api_base = _api_base_url()
+    redirect_uri = _redirect_uri(api_base)
+    safe_return = _normalize_return_url(return_url)
     url = build_oauth_url(
         redirect_uri=redirect_uri,
-        state=f"{org_id}|{base_url.rstrip('/')}|{return_url.rstrip('/')}",
+        state=f"{org_id}|{api_base}|{safe_return}",
     )
-    return {"url": url}
+    return {"url": url, "redirect_uri": redirect_uri}
 
 
 @router.get("/meta/oauth/callback")
@@ -124,10 +144,16 @@ async def meta_oauth_callback(
         existing = await prisma.leadconnection.find_first(
             where={"organizationId": org_id, "sourceName": "META_ADS"}
         )
+        creds_json = json_meta(credentials)
         if existing:
             await prisma.leadconnection.update(
                 where={"id": existing.id},
-                data={"status": "connected", "credentials": credentials, "lastSync": datetime.now(timezone.utc)},
+                data={
+                    "status": "connected",
+                    "credentials": creds_json,
+                    # Clear so sync_org does a full historical pull on connect.
+                    "lastSync": None,
+                },
             )
         else:
             await prisma.leadconnection.create(
@@ -135,10 +161,15 @@ async def meta_oauth_callback(
                     "organizationId": org_id,
                     "sourceName": "META_ADS",
                     "status": "connected",
-                    "credentials": credentials,
+                    "credentials": creds_json,
                     "leadsCount": 0,
                 }
             )
+
+        # Historical import on connect; lastSync is owned by sync_org.
+        from loomrun_api.meta_sync import sync_org
+
+        asyncio.create_task(sync_org(org_id))
 
         page_count = len(page_records)
         return RedirectResponse(url=_return_with_status(return_url, "success", page_count))
@@ -148,14 +179,16 @@ async def meta_oauth_callback(
         return RedirectResponse(url=_return_with_status(return_url, "error"))
 
 
-@router.post("/orgs/{org_id}/meta/sync", status_code=status.HTTP_202_ACCEPTED)
-async def trigger_meta_sync(org_id: str, ctx: OrgContext = Depends(get_org_context)) -> dict:
+@router.post("/orgs/{org_id}/meta/sync")
+async def trigger_meta_sync(org_id: str, ctx: OrgContext = Depends(require_roles("OWNER"))) -> dict:
     connection = await prisma.leadconnection.find_first(
         where={"organizationId": ctx.organization_id, "sourceName": "META_ADS", "status": "connected"}
     )
     if not connection:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Meta Ads not connected")
 
-    from loomrun_api.workers import sync_meta_leads_job
-    asyncio.create_task(sync_meta_leads_job({}, ctx.organization_id))
-    return {"status": "queued", "job_id": None}
+    from loomrun_api.meta_sync import sync_org
+
+    # Await full Instant Form reconcile so the UI can show created/skipped counts.
+    # Meta only exposes ~90 days of lead payloads; Ads Manager lifetime totals can be higher.
+    return await sync_org(ctx.organization_id)

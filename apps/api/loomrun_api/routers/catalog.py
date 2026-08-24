@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
 from loomrun_api.catalog_csv import parse_catalog_rows
-from loomrun_api.deps import OrgContext, get_org_context
+from loomrun_api.deps import OrgContext, require_roles
+from loomrun_api import org_events
 from loomrun_api.prisma_client import prisma
 
 router = APIRouter()
@@ -25,7 +26,7 @@ class CatalogItemCreate(BaseModel):
 
 
 @router.get("/orgs/{org_id}/catalog")
-async def list_catalog(org_id: str, ctx: OrgContext = Depends(get_org_context)) -> dict:
+async def list_catalog(org_id: str, ctx: OrgContext = Depends(require_roles("OWNER"))) -> dict:
     items = await prisma.catalogitem.find_many(
         where={"organizationId": ctx.organization_id},
         order={"createdAt": "desc"},
@@ -49,7 +50,7 @@ async def list_catalog(org_id: str, ctx: OrgContext = Depends(get_org_context)) 
 async def create_catalog_item(
     org_id: str,
     body: CatalogItemCreate,
-    ctx: OrgContext = Depends(get_org_context),
+    ctx: OrgContext = Depends(require_roles("OWNER")),
 ) -> dict:
     item = await prisma.catalogitem.create(
         data={
@@ -59,6 +60,11 @@ async def create_catalog_item(
             "unitPrice": body.unit_price,
             "sku": body.sku,
         }
+    )
+    org_events.record_changed(
+        organization_id=ctx.organization_id,
+        entity_type=org_events.qlix_docs.ENTITY_CATALOG,
+        entity_id=item.id,
     )
     return {
         "id": item.id,
@@ -74,7 +80,7 @@ async def create_catalog_item(
 async def delete_catalog_item(
     org_id: str,
     item_id: str,
-    ctx: OrgContext = Depends(get_org_context),
+    ctx: OrgContext = Depends(require_roles("OWNER")),
 ):
     item = await prisma.catalogitem.find_first(
         where={"id": item_id, "organizationId": ctx.organization_id}
@@ -82,13 +88,19 @@ async def delete_catalog_item(
     if not item:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Catalog item not found")
     await prisma.catalogitem.delete(where={"id": item_id})
+    org_events.record_changed(
+        organization_id=ctx.organization_id,
+        entity_type=org_events.qlix_docs.ENTITY_CATALOG,
+        entity_id=item_id,
+        deleted=True,
+    )
 
 
 @router.post("/orgs/{org_id}/catalog/upload-csv")
 async def upload_catalog_csv(
     org_id: str,
     file: UploadFile,
-    ctx: OrgContext = Depends(get_org_context),
+    ctx: OrgContext = Depends(require_roles("OWNER")),
 ) -> dict:
     if not file.filename or not file.filename.lower().endswith(".csv"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="File must be a CSV file")
@@ -104,7 +116,7 @@ async def upload_catalog_csv(
     items_created = 0
     for item in items:
         try:
-            await prisma.catalogitem.create(
+            created = await prisma.catalogitem.create(
                 data={
                     "organizationId": ctx.organization_id,
                     "name": item["name"],
@@ -112,6 +124,11 @@ async def upload_catalog_csv(
                     "unitPrice": item["unit_price"],
                     "sku": item.get("sku"),
                 }
+            )
+            org_events.record_changed(
+                organization_id=ctx.organization_id,
+                entity_type=org_events.qlix_docs.ENTITY_CATALOG,
+                entity_id=created.id,
             )
             items_created += 1
         except Exception as e:

@@ -13,3 +13,6 @@ coverage/
 apps/api/prisma/
 apps/web/dist/
 .DS_Store
+
+# Claude Code personal settings
+.claude/settings.local.json

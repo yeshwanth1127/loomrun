@@ -30,23 +30,40 @@ AI_ADAPTERS = {
 }
 
 
+def _resolve_credentials(config) -> dict:
+    """
+    Return usable credentials dict from a TelephonyConfig row.
+    Provisioned configs store an encrypted blob; BYO configs store a plain dict.
+    """
+    raw = config.credentials
+    if not raw:
+        return {}
+    from loomrun_api.telephony.crypto import decrypt_credentials
+    if isinstance(raw, dict) and "blob" in raw:
+        try:
+            creds = decrypt_credentials(raw["blob"])
+        except Exception:
+            return {}
+    elif isinstance(raw, str):
+        try:
+            creds = decrypt_credentials(raw)
+        except Exception:
+            return {}
+    else:
+        creds = dict(raw)
+
+    # Provisioned VAPI configs don't store the API key — inject master key
+    if config.providerName == "VAPI" and config.provisioned and not creds.get("api_key"):
+        from loomrun_api.config import settings
+        creds["api_key"] = settings.vapi_master_api_key
+
+    return creds
+
+
 async def get_active_voice_adapter(org_id: str) -> VoiceAdapter:
-    """
-    Get the active voice provider adapter for an organization.
-
-    Args:
-        org_id: Organization ID
-
-    Returns:
-        Instantiated VoiceAdapter
-
-    Raises:
-        ValueError: If no active voice provider is configured
-    """
     config = await prisma.telephonyconfig.find_first(
         where={"organizationId": org_id, "providerType": "VOICE", "isActive": True}
     )
-
     if not config:
         raise ValueError(f"No active voice provider configured for org {org_id}")
 
@@ -54,27 +71,13 @@ async def get_active_voice_adapter(org_id: str) -> VoiceAdapter:
     if not adapter_class:
         raise ValueError(f"Unknown voice provider: {config.providerName}")
 
-    credentials = config.credentials or {}
-    return adapter_class(credentials)
+    return adapter_class(_resolve_credentials(config))
 
 
 async def get_active_ai_adapter(org_id: str) -> AICallAdapter:
-    """
-    Get the active AI call provider adapter for an organization.
-
-    Args:
-        org_id: Organization ID
-
-    Returns:
-        Instantiated AICallAdapter
-
-    Raises:
-        ValueError: If no active AI call provider is configured
-    """
     config = await prisma.telephonyconfig.find_first(
         where={"organizationId": org_id, "providerType": "AI_CALL", "isActive": True}
     )
-
     if not config:
         raise ValueError(f"No active AI call provider configured for org {org_id}")
 
@@ -82,5 +85,4 @@ async def get_active_ai_adapter(org_id: str) -> AICallAdapter:
     if not adapter_class:
         raise ValueError(f"Unknown AI call provider: {config.providerName}")
 
-    credentials = config.credentials or {}
-    return adapter_class(credentials)
+    return adapter_class(_resolve_credentials(config))

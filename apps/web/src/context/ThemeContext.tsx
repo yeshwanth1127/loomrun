@@ -7,12 +7,14 @@ type ThemeContextType = {
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined)
 
+/* Light is the default. Dark only applies when the user has picked it here —
+   the OS preference is deliberately not consulted. The key is versioned because
+   an earlier build persisted the OS preference on every mount, so a plain
+   'theme' entry is not proof of an actual choice. */
+const THEME_KEY = 'loomrun-theme-v2'
+
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [isDark, setIsDark] = useState(() => {
-    const stored = localStorage.getItem('theme')
-    if (stored) return stored === 'dark'
-    return window.matchMedia('(prefers-color-scheme: dark)').matches
-  })
+  const [isDark, setIsDark] = useState(() => localStorage.getItem(THEME_KEY) === 'dark')
 
   useEffect(() => {
     const root = document.documentElement
@@ -21,11 +23,18 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     } else {
       root.classList.remove('dark')
     }
-    localStorage.setItem('theme', isDark ? 'dark' : 'light')
   }, [isDark])
 
+  const toggleDark = () => {
+    setIsDark((prev) => {
+      const next = !prev
+      localStorage.setItem(THEME_KEY, next ? 'dark' : 'light')
+      return next
+    })
+  }
+
   return (
-    <ThemeContext.Provider value={{ isDark, toggleDark: () => setIsDark(!isDark) }}>
+    <ThemeContext.Provider value={{ isDark, toggleDark }}>
       {children}
     </ThemeContext.Provider>
   )
