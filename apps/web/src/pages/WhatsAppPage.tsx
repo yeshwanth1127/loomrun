@@ -1,11 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { MessageCircle, Pencil, Plus, Send, Trash2, X } from 'lucide-react'
+import { History, MessageCircle, Pencil, Plus, Send, Trash2, Workflow, X } from 'lucide-react'
 import type { FormEvent } from 'react'
 import { useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { LeadSearchSelect, type LeadOption } from '../components/LeadSearchSelect'
+import { EmptyState } from '../components/ui/EmptyState'
+import { PageHeader } from '../components/ui/PageHeader'
+import { DonutChart, DonutLegend, InsightCard, MetricCard } from '../components/ui/dashboard'
 import { useAuth } from '../context/AuthContext'
 import { useDateFilter } from '../context/DateFilterContext'
 import { apiFetch } from '../lib/api'
 import { membershipForOrg } from '../lib/membership'
+
+type Tab = 'send' | 'templates' | 'automations' | 'history'
 
 type Lead = { id: string; title: string; company: string | null; phone: string | null }
 
@@ -33,11 +40,11 @@ type CategoryOpt = { value: string; label: string }
 type TemplatesResponse = { items: Template[]; categories: CategoryOpt[] }
 
 /** Replace {name}, {company} and {org} placeholders with the chosen lead / org. */
-function applyVars(body: string, lead: Lead | undefined, orgName: string): string {
+function applyVars(body: string, lead: LeadOption | Lead | undefined, orgName: string): string {
   const name = lead?.title ?? 'there'
   return body
     .replace(/\{name\}/g, name)
-    .replace(/\{company\}/g, lead?.company || name)
+    .replace(/\{company\}/g, (lead && 'company' in lead ? lead.company : null) || name)
     .replace(/\{org\}/g, orgName || 'our team')
 }
 
@@ -46,9 +53,11 @@ export function WhatsAppPage() {
   const { dayParam, appendDay, isAll } = useDateFilter()
   const qc = useQueryClient()
   const [leadId, setLeadId] = useState('')
+  const [selectedLeadOption, setSelectedLeadOption] = useState<LeadOption | null>(null)
   const [message, setMessage] = useState('')
   const [composeCategory, setComposeCategory] = useState('')
   const [composeTemplateId, setComposeTemplateId] = useState('')
+  const [tab, setTab] = useState<Tab>('send')
 
   const membership = membershipForOrg(me, orgId)
   const orgName = membership?.organization.name ?? ''
@@ -97,45 +106,63 @@ export function WhatsAppPage() {
     return (value: string) => map.get(value) ?? value
   }, [categories])
 
-  const selectedLead = leads.find((l) => l.id === leadId)
+  const selectedLead = selectedLeadOption ?? leads.find((l) => l.id === leadId)
   const composerTemplates = composeCategory ? templates.filter((t) => t.category === composeCategory) : templates
 
   function applyTemplate(templateId: string) {
     setComposeTemplateId(templateId)
     const tmpl = templates.find((t) => t.id === templateId)
-    if (tmpl) setMessage(applyVars(tmpl.body, selectedLead, orgName))
+    if (tmpl) setMessage(applyVars(tmpl.body, selectedLead ?? undefined, orgName))
   }
 
   const base = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
   if (!orgId)
     return (
-      <div className="page-header">
-        <h1>WhatsApp</h1>
-        <p>Select an organization.</p>
-      </div>
+      <PageHeader title="WhatsApp" description="Select an organization." />
     )
 
   const messages = messagesQ.data?.items ?? []
+  const sentCount = messages.filter((m) => m.status === 'SENT').length
+  const failedCount = messages.filter((m) => m.status === 'FAILED').length
+  const queuedCount = messages.filter((m) => m.status === 'QUEUED' || m.status === 'SENDING').length
   return (
     <>
-      <div className="page-header">
-        <h1>WhatsApp</h1>
-        <p>
-          Send messages, build reusable templates and manage automated follow-ups
-          {!isAll && ` · Showing ${messages.length} from ${dayParam}`}
-          {isAll && messages.length > 0 && ` · ${messages.length} message${messages.length !== 1 ? 's' : ''}`}
-        </p>
-      </div>
+      <PageHeader
+        title="WhatsApp"
+        badge={`${messages.length} message${messages.length !== 1 ? 's' : ''}`}
+        description="Send WhatsApp messages, use templates and manage automated follow-ups."
+      >
+        <div className="panel-tabs">
+          <button type="button" className={`panel-tab${tab === 'send' ? ' active' : ''}`} onClick={() => setTab('send')}>
+            <Send size={14} />
+            Send
+          </button>
+          <button type="button" className={`panel-tab${tab === 'templates' ? ' active' : ''}`} onClick={() => setTab('templates')}>
+            <MessageCircle size={14} />
+            Templates
+          </button>
+          <button type="button" className={`panel-tab${tab === 'automations' ? ' active' : ''}`} onClick={() => setTab('automations')}>
+            <Workflow size={14} />
+            Automations
+          </button>
+          <button type="button" className={`panel-tab${tab === 'history' ? ' active' : ''}`} onClick={() => setTab('history')}>
+            <History size={14} />
+            History
+          </button>
+        </div>
+      </PageHeader>
 
-      <div className="page-body page-grid-2">
-        {/* Compose */}
-        <div className="stack" style={{ gap: '1.25rem' }}>
+      <div className="page-body stack" style={{ gap: '1.25rem' }}>
+        <div className="metrics-grid">
+          <MetricCard icon={Send} tone="purple" label="Messages sent" value={messages.length} />
+          <MetricCard icon={Send} tone="green" label="Delivered" value={sentCount} hint={messages.length ? `${((sentCount / messages.length) * 100).toFixed(0)}%` : '0%'} />
+          <MetricCard icon={Send} tone="amber" label="Queued" value={queuedCount} />
+          <MetricCard icon={Send} tone="red" label="Failed" value={failedCount} hint={messages.length ? `${((failedCount / messages.length) * 100).toFixed(0)}%` : '0%'} />
+        </div>
+        {tab === 'send' && (
+          <div className="page-grid-2">
           <div className="card">
-            <div style={{ fontWeight: 700, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-              <MessageCircle size={16} style={{ color: '#25d366' }} />
-              Send WhatsApp Message
-            </div>
             <form
               className="stack"
               onSubmit={(e: FormEvent) => {
@@ -145,15 +172,15 @@ export function WhatsAppPage() {
             >
               <div className="form-field">
                 <label className="input-label">Lead *</label>
-                <select className="select" value={leadId} onChange={(e) => setLeadId(e.target.value)} style={{ width: '100%' }} required>
-                  <option value="">Select lead…</option>
-                  {leads.map((l) => (
-                    <option key={l.id} value={l.id}>
-                      {l.title}
-                      {l.phone ? ` · ${l.phone}` : ''}
-                    </option>
-                  ))}
-                </select>
+                <LeadSearchSelect
+                  orgId={orgId}
+                  value={leadId}
+                  required
+                  onChange={(id, lead) => {
+                    setLeadId(id)
+                    setSelectedLeadOption(lead)
+                  }}
+                />
               </div>
 
               <div className="row" style={{ gap: '0.5rem' }}>
@@ -220,16 +247,123 @@ export function WhatsAppPage() {
               </button>
             </form>
           </div>
+          <div className="stack" style={{ gap: '1rem' }}>
+            <InsightCard title="Quick templates" action={{ label: 'View all', onClick: () => setTab('templates') }}>
+              {templates.length === 0 ? (
+                <p className="muted small">No templates yet. Create one in the Templates tab.</p>
+              ) : (
+                <div className="stack" style={{ gap: '0.65rem' }}>
+                  {templates.slice(0, 4).map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      className="card-sm"
+                      style={{ textAlign: 'left', cursor: 'pointer', width: '100%' }}
+                      onClick={() => applyTemplate(t.id)}
+                    >
+                      <div className="row spread" style={{ marginBottom: '0.25rem' }}>
+                        <strong style={{ fontSize: '0.82rem' }}>{t.name}</strong>
+                        <span className="source-pill">{categoryLabel(t.category)}</span>
+                      </div>
+                      <div className="muted small">{t.body}</div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </InsightCard>
+            <InsightCard title="Message summary">
+              {messages.length === 0 ? (
+                <p className="muted small">No messages this period.</p>
+              ) : (
+                <>
+                  <DonutChart
+                    segments={[
+                      { label: 'Sent', value: sentCount, color: '#3D7A5A' },
+                      { label: 'Queued', value: queuedCount, color: '#2563eb' },
+                      { label: 'Failed', value: failedCount, color: '#B42318' },
+                    ]}
+                    center={{ value: messages.length, label: 'Total' }}
+                  />
+                  <DonutLegend
+                    segments={[
+                      { label: 'Sent', value: sentCount, color: '#3D7A5A' },
+                      { label: 'Queued', value: queuedCount, color: '#2563eb' },
+                      { label: 'Failed', value: failedCount, color: '#B42318' },
+                    ]}
+                    total={messages.length}
+                  />
+                </>
+              )}
+            </InsightCard>
+          </div>
+          </div>
+        )}
 
-          <div className="card">
-            <div style={{ fontWeight: 700, marginBottom: '0.75rem' }}>Message Log</div>
+        {tab === 'automations' && (
+          <div className="card" style={{ maxWidth: 640 }}>
+            <div style={{ fontWeight: 700, marginBottom: '0.5rem' }}>Automations</div>
+            <p className="muted" style={{ marginBottom: '1rem' }}>
+              Auto-greet new leads and manage WhatsApp templates. Connection settings live under Integrations.
+            </p>
+            <div className="quick-action-list">
+              <button type="button" onClick={() => setTab('templates')}>
+                <MessageCircle size={14} /> Message templates
+              </button>
+              <Link to="/app/leads/connections">
+                <Workflow size={14} /> WhatsApp settings
+              </Link>
+            </div>
+          </div>
+        )}
+
+        {tab === 'templates' && (
+          <div className="stack" style={{ gap: '1.25rem', maxWidth: 720 }}>
+            <AutoGreetCard orgId={orgId} canManage={canManage} />
+
+            <TemplateManager
+              orgId={orgId}
+              canManage={canManage}
+              templates={templates}
+              categories={categories}
+              categoryLabel={categoryLabel}
+              isLoading={templatesQ.isLoading}
+            />
+
+            <div className="card">
+              <div className="section-title">Inbound Webhook (Meta)</div>
+              <p className="muted small" style={{ marginBottom: '0.5rem' }}>
+                Configure this URL in your Meta App dashboard:
+              </p>
+              <div
+                style={{
+                  background: '#f8fafc',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: 7,
+                  padding: '0.65rem 0.75rem',
+                  fontFamily: 'ui-monospace, monospace',
+                  fontSize: '0.75rem',
+                  color: '#4338ca',
+                  wordBreak: 'break-all',
+                }}
+              >
+                POST {base}/v1/hooks/whatsapp/{orgId}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {tab === 'history' && (
+          <div className="card" style={{ maxWidth: 720 }}>
             {messagesQ.isLoading && <p className="muted small">Loading…</p>}
             {!messagesQ.isLoading && messages.length === 0 && (
-              <p className="muted small">{isAll ? 'No messages queued yet.' : 'No messages on this date.'}</p>
+              <EmptyState
+                icon={History}
+                description={isAll ? 'No messages queued yet.' : 'No messages on this date.'}
+              />
             )}
-            <div className="stack" style={{ gap: '0.5rem', maxHeight: 280, overflow: 'auto' }}>
+            <div className="stack" style={{ gap: '0.5rem' }}>
               {messages.map((m) => (
-                <div key={m.id} style={{ padding: '0.4rem 0', borderBottom: '1px solid #f8fafc' }}>
+                <div key={m.id} style={{ padding: '0.65rem 0', borderBottom: '1px solid var(--border)' }}>
                   <div style={{ fontSize: '0.85rem', fontWeight: 600 }}>{m.lead_title ?? '—'}</div>
                   <div className="muted small" style={{ marginTop: '0.15rem' }}>
                     {m.message ?? '—'}
@@ -244,42 +378,7 @@ export function WhatsAppPage() {
               ))}
             </div>
           </div>
-        </div>
-
-        {/* Templates & webhook */}
-        <div className="stack" style={{ gap: '1.25rem' }}>
-          <AutoGreetCard orgId={orgId} canManage={canManage} />
-
-          <TemplateManager
-            orgId={orgId}
-            canManage={canManage}
-            templates={templates}
-            categories={categories}
-            categoryLabel={categoryLabel}
-            isLoading={templatesQ.isLoading}
-          />
-
-          <div className="card">
-            <div style={{ fontWeight: 700, marginBottom: '0.5rem' }}>Inbound Webhook (Meta)</div>
-            <p className="muted small" style={{ marginBottom: '0.5rem' }}>
-              Configure this URL in your Meta App dashboard:
-            </p>
-            <div
-              style={{
-                background: '#f8fafc',
-                border: '1px solid #e2e8f0',
-                borderRadius: 7,
-                padding: '0.65rem 0.75rem',
-                fontFamily: 'ui-monospace, monospace',
-                fontSize: '0.75rem',
-                color: '#4338ca',
-                wordBreak: 'break-all',
-              }}
-            >
-              POST {base}/v1/hooks/whatsapp/{orgId}
-            </div>
-          </div>
-        </div>
+        )}
       </div>
     </>
   )

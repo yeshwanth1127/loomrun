@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowDown, ArrowUp, Copy, Eye, FileText, Save, Star, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { PageHeader } from '../components/ui/PageHeader'
 import { useAuth } from '../context/AuthContext'
 import { apiFetch } from '../lib/api'
 import { toast } from 'sonner'
@@ -301,27 +302,19 @@ export function DocumentTemplatesPage() {
 
   if (!orgId) {
     return (
-      <div className="page-header">
-        <h1>Document templates</h1>
-        <p>Select an organization.</p>
-      </div>
+      <PageHeader title="Document templates" description="Select an organization." />
     )
   }
 
   return (
     <>
-      <div className="page-header">
-        <h1>Document templates</h1>
-        <p>Customize quotation and invoice PDF layouts for your organization.</p>
-      </div>
-
-      <div className="page-body stack" style={{ gap: '1.25rem' }}>
-        <div className="row" style={{ gap: '0.5rem' }}>
+      <PageHeader title="Document templates" description="Customize quotation and invoice PDF layouts for your organization.">
+        <div className="panel-tabs">
           {(['QUOTATION', 'INVOICE'] as DocType[]).map((dt) => (
             <button
               key={dt}
               type="button"
-              className={`btn ${docType === dt ? '' : 'btn-ghost'}`}
+              className={`panel-tab${docType === dt ? ' active' : ''}`}
               onClick={() => {
                 setDocType(dt)
                 setSelectedId(null)
@@ -332,7 +325,9 @@ export function DocumentTemplatesPage() {
             </button>
           ))}
         </div>
+      </PageHeader>
 
+      <div className="page-body stack" style={{ gap: '1.25rem' }}>
         {listQ.isLoading && <p className="muted">Loading templates…</p>}
 
         {isOwner && (

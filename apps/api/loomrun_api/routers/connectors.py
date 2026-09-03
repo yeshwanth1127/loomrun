@@ -34,7 +34,7 @@ async def _upsert_status(org_id: str, status: str, phone_number: str | None = No
 @router.get("/orgs/{org_id}/connectors/whatsapp")
 async def whatsapp_status(
     org_id: str,
-    ctx: OrgContext = Depends(require_roles("OWNER", "TELECALLER")),
+    ctx: OrgContext = Depends(require_roles("OWNER")),
 ) -> dict:
     """Live WhatsApp connector status for the org (merges sidecar + stored record)."""
     live = await baileys_client.get_status(org_id)
@@ -68,7 +68,7 @@ async def whatsapp_status(
 @router.post("/orgs/{org_id}/connectors/whatsapp/connect")
 async def whatsapp_connect(
     org_id: str,
-    ctx: OrgContext = Depends(require_roles("OWNER", "TELECALLER")),
+    ctx: OrgContext = Depends(require_roles("OWNER")),
 ) -> dict:
     """Start the org's Baileys session so a QR code can be scanned."""
     # Force a clean session: the button only shows when the org is unlinked, so a
@@ -81,7 +81,7 @@ async def whatsapp_connect(
 @router.post("/orgs/{org_id}/connectors/whatsapp/disconnect")
 async def whatsapp_disconnect(
     org_id: str,
-    ctx: OrgContext = Depends(require_roles("OWNER", "TELECALLER")),
+    ctx: OrgContext = Depends(require_roles("OWNER")),
 ) -> dict:
     """Log out and wipe the org's WhatsApp session."""
     await baileys_client.disconnect(org_id)

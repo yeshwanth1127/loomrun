@@ -1,6 +1,7 @@
 import type { FormEvent } from 'react'
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { ThemeToggle } from '../components/ui/ThemeToggle'
 import { useAuth } from '../context/AuthContext'
 
 export function RegisterSuperAdminPage() {
@@ -27,6 +28,9 @@ export function RegisterSuperAdminPage() {
 
       {/* Right: Form panel */}
       <div className="login-panel">
+        <div className="login-panel-theme">
+          <ThemeToggle />
+        </div>
         <div className="login-panel-inner">
           <div className="login-header">
             <h1 className="login-title">Platform Admin</h1>

@@ -3,6 +3,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
+from loomrun_api.config import settings
 from loomrun_api.date_filter import apply_created_at
 from loomrun_api.deps import OrgContext, require_roles
 from loomrun_api.prisma_client import prisma
@@ -84,7 +85,7 @@ async def list_outbound_messages(
 
 
 @router.post("/orgs/{org_id}/integrations/whatsapp/outbound", status_code=status.HTTP_201_CREATED)
-async def queue_outbound(org_id: str, body: OutboundBody, ctx: OrgContext = Depends(require_roles("OWNER"))) -> dict:
+async def queue_outbound(org_id: str, body: OutboundBody, ctx: OrgContext = Depends(require_roles("OWNER", "PRODUCTION"))) -> dict:
     from loomrun_api import baileys_client
     from loomrun_api.entitlements import METRIC_WHATSAPP, get_org_entitlements
     from loomrun_api.usage import increment_usage, require_capacity
@@ -107,13 +108,37 @@ async def queue_outbound(org_id: str, body: OutboundBody, ctx: OrgContext = Depe
             label="WhatsApp messaging",
         )
 
-    # Deliver immediately: the org's self-hosted Baileys session if connected,
-    # otherwise the Meta Cloud API. If the live send fails, leave it QUEUED so
-    # the background poll loop retries it.
-    if await baileys_client.is_connected(ctx.organization_id):
-        sent = await baileys_client.send_text(ctx.organization_id, lead.phone, body.message)
-    else:
+    # Prefer the org's linked Baileys WhatsApp (same path as quotation send).
+    # Fall back to Meta Cloud API only when Baileys is not connected AND Meta is configured.
+    # Never return success when nothing was actually delivered.
+    baileys_connected = await baileys_client.is_connected(ctx.organization_id)
+    sent = False
+    send_error: str | None = None
+    if baileys_connected:
+        result = await baileys_client.send_text(ctx.organization_id, lead.phone, body.message)
+        sent = bool(result)
+        send_error = None if sent else (result.error or "WhatsApp send failed")
+    elif settings.whatsapp_access_token and settings.whatsapp_phone_number_id:
         sent = await send_whatsapp_text(lead.phone, body.message)
+        if not sent:
+            send_error = "Meta WhatsApp API send failed"
+    else:
+        raise HTTPException(
+            status.HTTP_424_FAILED_DEPENDENCY,
+            detail=(
+                "WhatsApp is not connected for this organization. "
+                "Reconnect WhatsApp under Integrations → WhatsApp, then try again."
+            ),
+        )
+
+    if not sent:
+        detail = send_error or "WhatsApp send failed"
+        if "not connected" in detail.lower() or "conflict" in detail.lower():
+            detail = (
+                f"{detail} Reconnect WhatsApp in Integrations "
+                "(close other WhatsApp Web sessions if you see a conflict)."
+            )
+        raise HTTPException(status.HTTP_424_FAILED_DEPENDENCY, detail=detail)
 
     await increment_usage(ctx.organization_id, METRIC_WHATSAPP)
 
@@ -123,13 +148,13 @@ async def queue_outbound(org_id: str, body: OutboundBody, ctx: OrgContext = Depe
             "leadId": body.lead_id,
             "channel": OutboundChannel.WHATSAPP,
             "payload": json_meta({"text": body.message}),
-            "status": OutboundMessageStatus.SENT if sent else OutboundMessageStatus.QUEUED,
-            "attempts": 1 if sent else 0,
-            "lastError": None if sent else "Immediate send failed — queued for retry",
+            "status": OutboundMessageStatus.SENT,
+            "attempts": 1,
+            "lastError": None,
         }
     )
     status_name = msg.status.name if hasattr(msg.status, "name") else str(msg.status)
-    return {"id": msg.id, "status": status_name, "sent": sent}
+    return {"id": msg.id, "status": status_name, "sent": True}
 
 
 # --- Settings -------------------------------------------------------------

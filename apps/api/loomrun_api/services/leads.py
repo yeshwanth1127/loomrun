@@ -76,6 +76,12 @@ def call_summary_fields(call) -> dict:
 
 
 def serialize_lead(lead, *, with_last_call: bool = False, last_call=None) -> dict:
+    next_follow_up = lead.nextFollowUpAt.isoformat() if lead.nextFollowUpAt else None
+    if with_last_call and last_call is not None:
+        outcome = last_call.outcome.name if hasattr(last_call.outcome, "name") else str(last_call.outcome)
+        # Stale dates linger when a later call resolves the callback (e.g. Order Confirmed).
+        if outcome != "CALLBACK_SCHEDULED":
+            next_follow_up = None
     data = {
         "id": lead.id,
         "organization_id": lead.organizationId,
@@ -94,7 +100,7 @@ def serialize_lead(lead, *, with_last_call: bool = False, last_call=None) -> dic
         "tags": list(lead.tags) if lead.tags else [],
         "notes": lead.notes,
         "assignee_id": lead.assigneeId,
-        "next_follow_up_at": lead.nextFollowUpAt.isoformat() if lead.nextFollowUpAt else None,
+        "next_follow_up_at": next_follow_up,
         "last_activity_at": lead.lastActivityAt.isoformat() if lead.lastActivityAt else None,
         "estimated_value": float(lead.estimatedValue) if lead.estimatedValue is not None else None,
         "meta_campaign_id": lead.metaCampaignId,
@@ -351,21 +357,28 @@ async def list_follow_ups(
             latest[call.leadId] = call
 
     now = datetime.now(timezone.utc)
-    today = now.date()
     items: list[dict[str, Any]] = []
-    buckets = {"overdue": 0, "today": 0, "upcoming": 0, "unscheduled": 0}
+    buckets = {
+        "overdue": 0,
+        "due_now": 0,
+        "later_today": 0,
+        "today": 0,
+        "upcoming": 0,
+        "unscheduled": 0,
+    }
+
+    from loomrun_api.follow_up_reminders import follow_up_bucket
 
     for lead in leads:
         call = latest.get(lead.id)
         if not call or _enum_name(call.outcome) != "CALLBACK_SCHEDULED":
             continue
         due = lead.nextFollowUpAt
-        if due is None:
-            bucket = "unscheduled"
-        else:
-            due_day = due.date()
-            bucket = "overdue" if due_day < today else "today" if due_day == today else "upcoming"
-        buckets[bucket] += 1
+        bucket = follow_up_bucket(due, now=now)
+        # Keep legacy "today" count for callers that expect it
+        if bucket in ("due_now", "later_today"):
+            buckets["today"] += 1
+        buckets[bucket] = buckets.get(bucket, 0) + 1
         row = serialize_lead(lead, with_last_call=True, last_call=call)
         row["follow_up_bucket"] = bucket
         if lead.assignee:
@@ -407,7 +420,16 @@ async def get_lead(*, organization_id: str, lead_id: str) -> dict[str, Any]:
     assignee = None
     if lead.assignee:
         assignee = {"id": lead.assignee.id, "name": lead.assignee.name, "email": lead.assignee.email}
-    return {**serialize_lead(lead), "activities": activities, "assignee": assignee}
+    last_call = await prisma.telecallercalllog.find_first(
+        where={"organizationId": organization_id, "leadId": lead.id},
+        order={"createdAt": "desc"},
+        include={"user": True},
+    )
+    return {
+        **serialize_lead(lead, with_last_call=True, last_call=last_call),
+        "activities": activities,
+        "assignee": assignee,
+    }
 
 
 async def create_lead(
@@ -601,6 +623,8 @@ async def update_lead(
         )
     if next_follow_up_at is not None:
         update_data["nextFollowUpAt"] = next_follow_up_at
+        update_data["followUpRemindedAt"] = None
+        update_data["followUpWaRemindedAt"] = None
     if estimated_value is not None:
         update_data["estimatedValue"] = estimated_value
 

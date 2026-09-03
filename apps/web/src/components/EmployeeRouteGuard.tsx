@@ -8,7 +8,7 @@ export function EmployeeRouteGuard({ children }: { children: React.ReactNode }) 
   const membership = membershipForOrg(me, orgId)
   const hasFullAccess = isOwnerRole(membership) || !!me?.is_super_admin
 
-  if (!hasFullAccess && !employeeMayAccess(pathname)) {
+  if (!hasFullAccess && !employeeMayAccess(pathname, membership?.role)) {
     return <Navigate to="/app/leads" replace />
   }
 

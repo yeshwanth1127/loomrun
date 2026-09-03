@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader, Phone, PhoneCall, Zap } from 'lucide-react'
 import { useState } from 'react'
+import { PageHeader } from '../components/ui/PageHeader'
 import { useAuth } from '../context/AuthContext'
 import { apiFetch } from '../lib/api'
 
@@ -59,7 +60,7 @@ export function TelephonyPage() {
 
 
   if (!orgId) {
-    return <div className="page-header"><h1>Telephony</h1><p className="muted">Select an organization.</p></div>
+    return <PageHeader title="Telephony" description="Select an organization." />
   }
 
   const providers = providersQ.data?.providers ?? []
@@ -71,12 +72,10 @@ export function TelephonyPage() {
 
   return (
     <>
-      <div className="page-header">
-        <h1>Telephony</h1>
-        <p style={{ marginTop: '0.5rem', marginBottom: 0 }}>
-          Platform-managed voice calling and AI auto-calls
-        </p>
-      </div>
+      <PageHeader
+        title="Telephony"
+        description="Platform-managed voice calling and AI auto-calls"
+      />
 
       <div className="page-body stack" style={{ gap: '1.5rem' }}>
 

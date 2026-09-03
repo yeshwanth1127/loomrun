@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Check, CreditCard, Mail, Sparkles, Users } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import { PageHeader } from '../components/ui/PageHeader'
 import { useAuth } from '../context/AuthContext'
 import { apiFetch } from '../lib/api'
 import { planBadgeClass, type SubscriptionInfo } from '../lib/entitlements'
@@ -54,10 +55,10 @@ export function SubscriptionPage() {
 
   return (
     <>
-      <div className="page-header">
-        <h1>Subscription</h1>
-        <p>14-day free trial includes Scale features at limited capacity — then choose Growth or Scale</p>
-      </div>
+      <PageHeader
+        title="Subscription"
+        description="14-day free trial includes Scale features at limited capacity — then choose Growth or Scale"
+      />
 
       <div className="page-body stack" style={{ gap: '1.75rem' }}>
         {subQ.isLoading && <p className="muted">Loading subscription…</p>}

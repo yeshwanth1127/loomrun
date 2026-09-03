@@ -8,7 +8,7 @@ from prisma.enums import CallOutcome
 TELECALLER_OUTCOMES: list[tuple[str, str]] = [
     ("CONNECTED_INTERESTED", "Connected - Interested"),
     ("CONNECTED_NOT_INTERESTED", "Connected - Not Interested"),
-    ("CALLBACK_SCHEDULED", "Call Back"),
+    ("CALLBACK_SCHEDULED", "Follow Up"),
     ("RINGING_NO_RESPONSE", "Ringing - No Response"),
     ("BUSY", "Busy"),
     ("SWITCHED_OFF", "Switched Off / Not Reachable"),
@@ -22,7 +22,7 @@ OUTCOME_LABELS: dict[str, str] = {
     "BUSY": "Busy",
     "WRONG_NUMBER": "Wrong Number",
     "NOT_INTERESTED": "Not Interested",
-    "CALLBACK_SCHEDULED": "Call Back",
+    "CALLBACK_SCHEDULED": "Follow Up",
     "QUALIFIED": "Qualified",
     "CONNECTED_INTERESTED": "Connected - Interested",
     "CONNECTED_NOT_INTERESTED": "Connected - Not Interested",

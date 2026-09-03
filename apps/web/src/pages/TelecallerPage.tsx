@@ -1,14 +1,41 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Call, Device } from '@twilio/voice-sdk'
-import { Mic, MicOff, Phone, PhoneCall, PhoneOff, Bot, CheckCircle, Link2 } from 'lucide-react'
+import {
+  Bot,
+  CheckCircle,
+  ChevronDown,
+  Mail,
+  MessageCircle,
+  Mic,
+  MicOff,
+  Phone,
+  PhoneCall,
+  PhoneOff,
+  Send,
+} from 'lucide-react'
 import type { FormEvent } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import { toast } from 'sonner'
 import { LeadSearchSelect } from '../components/LeadSearchSelect'
-import { WhatsAppGmailIntegrations } from '../components/MessagingConnectors'
+import { CallbackScheduleFields, type CallbackPreset } from '../components/CallbackScheduleFields'
+import { Modal } from '../components/ui/Modal'
+import { PageHeader } from '../components/ui/PageHeader'
+import { DonutChart, DonutLegend, MetricCard } from '../components/ui/dashboard'
 import { useAuth } from '../context/AuthContext'
 import { useDateFilter } from '../context/DateFilterContext'
 import { apiFetch } from '../lib/api'
+import {
+  CALL_STATUS_MAP,
+  CALL_STATUS_OPTIONS,
+  CONNECTED_CALL_STATUSES,
+} from '../lib/callStatus'
+import {
+  localDateTimeToIso,
+  toLocalDateInput,
+  toLocalTimeInput,
+  tomorrowAt10Local,
+} from '../lib/followUp'
 
 type LeadDetail = {
   id: string
@@ -48,43 +75,7 @@ const STAGE_LABELS: Record<string, string> = {
   LOST: 'Lost',
 }
 
-const OUTCOMES = [
-  { value: 'CONNECTED_INTERESTED',     label: 'Connected - Interested',          color: 'badge-green' },
-  { value: 'CONNECTED_NOT_INTERESTED', label: 'Connected - Not Interested',      color: 'badge-red' },
-  { value: 'CALLBACK_SCHEDULED',       label: 'Call Back',                       color: 'badge-blue' },
-  { value: 'RINGING_NO_RESPONSE',      label: 'Ringing - No Response',           color: 'badge-slate' },
-  { value: 'BUSY',                     label: 'Busy',                            color: 'badge-amber' },
-  { value: 'SWITCHED_OFF',             label: 'Switched Off / Not Reachable',    color: 'badge-slate' },
-  { value: 'WRONG_NUMBER',             label: 'Wrong Number',                    color: 'badge-red' },
-  { value: 'ORDER_CONFIRMED',          label: 'Order Confirmed',                 color: 'badge-indigo' },
-]
-
-// Legacy outcomes kept for older call rows / telephony webhooks.
-const LEGACY_OUTCOMES = [
-  { value: 'CONNECTED',      label: 'Connected',      color: 'badge-green' },
-  { value: 'NO_ANSWER',      label: 'No Answer',      color: 'badge-slate' },
-  { value: 'NOT_INTERESTED', label: 'Not Interested', color: 'badge-red' },
-  { value: 'QUALIFIED',      label: 'Qualified',      color: 'badge-indigo' },
-]
-
-const OUTCOME_MAP = Object.fromEntries(
-  [...OUTCOMES, ...LEGACY_OUTCOMES].map((o) => [o.value, o]),
-)
-
-const CONNECTED_OUTCOMES = new Set([
-  'CONNECTED',
-  'CONNECTED_INTERESTED',
-  'CONNECTED_NOT_INTERESTED',
-  'ORDER_CONFIRMED',
-  'QUALIFIED',
-])
-
 const CLICK_TO_CALL_PROVIDERS = new Set(['EXOTEL', 'PLIVO'])
-
-function toDateInputValue(iso: string | null): string {
-  if (!iso) return ''
-  return iso.slice(0, 10)
-}
 
 const EMPTY_LEAD_FIELDS = {
   stage: 'NEW',
@@ -95,6 +86,7 @@ const EMPTY_LEAD_FIELDS = {
   productInterest: '',
   quantityEstimate: '',
   nextFollowUpDate: '',
+  nextFollowUpTime: '',
   estimatedValue: '',
   leadNotes: '',
 }
@@ -103,9 +95,12 @@ export function TelecallerPage() {
   const { orgId, me } = useAuth()
   const qc = useQueryClient()
   const saveCallRef = useRef<HTMLDivElement>(null)
+  const [searchParams] = useSearchParams()
+  const [workStep, setWorkStep] = useState<'call' | 'log'>('call')
+  const [leadDetailsOpen, setLeadDetailsOpen] = useState(false)
 
   // ── Lead state ──────────────────────────────────────────────────────────────
-  const [leadId, setLeadId] = useState('')
+  const [leadId, setLeadId] = useState(() => searchParams.get('lead') ?? '')
   const [stage, setStage] = useState(EMPTY_LEAD_FIELDS.stage)
   const [phone, setPhone] = useState(EMPTY_LEAD_FIELDS.phone)
   const [email, setEmail] = useState(EMPTY_LEAD_FIELDS.email)
@@ -114,6 +109,8 @@ export function TelecallerPage() {
   const [productInterest, setProductInterest] = useState(EMPTY_LEAD_FIELDS.productInterest)
   const [quantityEstimate, setQuantityEstimate] = useState(EMPTY_LEAD_FIELDS.quantityEstimate)
   const [nextFollowUpDate, setNextFollowUpDate] = useState(EMPTY_LEAD_FIELDS.nextFollowUpDate)
+  const [nextFollowUpTime, setNextFollowUpTime] = useState(EMPTY_LEAD_FIELDS.nextFollowUpTime)
+  const [callbackPreset, setCallbackPreset] = useState<CallbackPreset>('custom')
   const [estimatedValue, setEstimatedValue] = useState(EMPTY_LEAD_FIELDS.estimatedValue)
   const [leadNotes, setLeadNotes] = useState(EMPTY_LEAD_FIELDS.leadNotes)
 
@@ -124,9 +121,6 @@ export function TelecallerPage() {
   const [sendCatalog, setSendCatalog] = useState(false)
   const [sendQuotation, setSendQuotation] = useState(false)
   const [selectedCallId, setSelectedCallId] = useState<string | null>(null)
-  const [tab, setTab] = useState<'calls' | 'integrations'>('calls')
-  const [searchParams, setSearchParams] = useSearchParams()
-  const [integrationBanner, setIntegrationBanner] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
 
   // ── Telephony selection state ───────────────────────────────────────────────
   const [selectedProvider, setSelectedProvider] = useState<string>('') // provider_name
@@ -183,6 +177,8 @@ export function TelecallerPage() {
       setProductInterest(EMPTY_LEAD_FIELDS.productInterest)
       setQuantityEstimate(EMPTY_LEAD_FIELDS.quantityEstimate)
       setNextFollowUpDate(EMPTY_LEAD_FIELDS.nextFollowUpDate)
+      setNextFollowUpTime(EMPTY_LEAD_FIELDS.nextFollowUpTime)
+      setCallbackPreset('custom')
       setEstimatedValue(EMPTY_LEAD_FIELDS.estimatedValue)
       setLeadNotes(EMPTY_LEAD_FIELDS.leadNotes)
       return
@@ -196,32 +192,34 @@ export function TelecallerPage() {
     setCompany(d.company ?? '')
     setProductInterest(d.product_interest ?? '')
     setQuantityEstimate(d.quantity_estimate ?? '')
-    setNextFollowUpDate(toDateInputValue(d.next_follow_up_at))
+    setNextFollowUpDate(toLocalDateInput(d.next_follow_up_at))
+    setNextFollowUpTime(toLocalTimeInput(d.next_follow_up_at) || '10:00')
+    setCallbackPreset('custom')
     setEstimatedValue(d.estimated_value != null ? String(d.estimated_value) : '')
     setLeadNotes(d.notes ?? '')
   }, [leadId, leadDetailQ.data])
 
+  useEffect(() => {
+    setShareOpen(false)
+  }, [leadId])
+
   const membership = me?.organizations.find((o) => o.organization.id === orgId)
   const isTelecaller = membership?.role === 'TELECALLER'
-  const canManageIntegrations = isTelecaller || membership?.role === 'OWNER' || !!me?.is_super_admin
   const myUserId = me?.id ?? null
+  const summaryUserId = isTelecaller ? myUserId : null
+  const [shareOpen, setShareOpen] = useState(false)
+  const shareRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    const google = searchParams.get('google')
-    const service = searchParams.get('service')
-    if (!google) return
-    const label = service === 'GMAIL' ? 'Gmail' : 'Google'
-    setTab('integrations')
-    setIntegrationBanner({
-      type: google === 'success' ? 'success' : 'error',
-      message: google === 'success'
-        ? `${label} connected successfully.`
-        : `${label} connection failed. Please try again.`,
-    })
-    void qc.invalidateQueries({ queryKey: ['google-connections', orgId] })
-    setSearchParams({}, { replace: true })
-  }, [searchParams, setSearchParams, qc, orgId])
-  const summaryUserId = isTelecaller ? myUserId : null
+    if (!shareOpen) return
+    function onDocClick(e: MouseEvent) {
+      if (shareRef.current && !shareRef.current.contains(e.target as Node)) {
+        setShareOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDocClick)
+    return () => document.removeEventListener('mousedown', onDocClick)
+  }, [shareOpen])
 
   // ── Summary query ───────────────────────────────────────────────────────────
   const summary = useQuery({
@@ -285,7 +283,12 @@ export function TelecallerPage() {
             outcome,
             notes: notes || null,
             duration_seconds: durationMinutes ? parseInt(durationMinutes, 10) * 60 : null,
-            next_call_at: nextFollowUpDate ? new Date(nextFollowUpDate).toISOString() : null,
+            next_call_at:
+              outcome === 'CALLBACK_SCHEDULED'
+                ? localDateTimeToIso(nextFollowUpDate, nextFollowUpTime)
+                : nextFollowUpDate
+                  ? localDateTimeToIso(nextFollowUpDate, nextFollowUpTime)
+                  : null,
             stage,
             phone,
             email,
@@ -295,8 +298,8 @@ export function TelecallerPage() {
             quantity_estimate: quantityEstimate || null,
             estimated_value: estimatedValue ? Number(estimatedValue) : null,
             lead_notes: leadNotes || null,
-            send_catalog: CONNECTED_OUTCOMES.has(outcome) ? sendCatalog : false,
-            send_quotation: CONNECTED_OUTCOMES.has(outcome) ? sendQuotation : false,
+            send_catalog: CONNECTED_CALL_STATUSES.has(outcome) ? sendCatalog : false,
+            send_quotation: CONNECTED_CALL_STATUSES.has(outcome) ? sendQuotation : false,
           },
         }
       ),
@@ -309,7 +312,61 @@ export function TelecallerPage() {
       void qc.invalidateQueries({ queryKey: ['tele-summary', orgId] })
       void qc.invalidateQueries({ queryKey: ['leads', orgId] })
       void qc.invalidateQueries({ queryKey: ['leads-picker', orgId] })
+      void qc.invalidateQueries({ queryKey: ['follow-ups', orgId] })
+      void qc.invalidateQueries({ queryKey: ['follow-ups-due', orgId] })
       if (leadId) void qc.invalidateQueries({ queryKey: ['lead-detail', orgId, leadId] })
+    },
+  })
+
+  const sendQuote = useMutation({
+    mutationFn: async (channel: 'whatsapp' | 'email') => {
+      const leadPhoneNow = phone || leadDetailQ.data?.phone || ''
+      const leadEmailNow = email || leadDetailQ.data?.email || ''
+      if (channel === 'whatsapp' && !leadPhoneNow) {
+        throw new Error('This lead has no phone number')
+      }
+      if (channel === 'email' && !leadEmailNow) {
+        throw new Error('This lead has no email address')
+      }
+
+      const { items } = await apiFetch<{
+        items: Array<{
+          id: string
+          lead_id: string
+          pdf_url: string | null
+          number: string
+        }>
+      }>(`/v1/orgs/${orgId}/quotations?day=all`)
+
+      const forLead = items.filter((q) => q.lead_id === leadId)
+      const ready = forLead.find((q) => !!q.pdf_url)
+      if (!ready) {
+        const draft = forLead.find((q) => !q.pdf_url)
+        if (draft) {
+          throw new Error(
+            `Quotation ${draft.number} is still a draft — ask an owner to Generate PDF before sending`,
+          )
+        }
+        throw new Error('No quotation for this lead yet — create one on Quotations')
+      }
+
+      return apiFetch<{ message?: string; channel: string }>(
+        `/v1/orgs/${orgId}/quotations/${ready.id}/send`,
+        {
+          method: 'POST',
+          json: { channel, doc_type: 'quotation' },
+        },
+      )
+    },
+    onSuccess: (data) => {
+      setShareOpen(false)
+      const via = data.channel === 'whatsapp' ? 'WhatsApp' : 'Email'
+      toast.success(data.message ?? `Quotation sent via ${via}`)
+      void qc.invalidateQueries({ queryKey: ['quotations', orgId] })
+      if (leadId) void qc.invalidateQueries({ queryKey: ['lead-detail', orgId, leadId] })
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || 'Failed to send quotation')
     },
   })
 
@@ -325,6 +382,7 @@ export function TelecallerPage() {
       setOutcome('CONNECTED_INTERESTED')
       void qc.invalidateQueries({ queryKey: ['tele-summary', orgId] })
       setTimeout(() => saveCallRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150)
+      setWorkStep('log')
     },
   })
 
@@ -366,6 +424,7 @@ export function TelecallerPage() {
         setDurationMinutes(String(Math.ceil(callSeconds / 60)))
         setOutcome('CONNECTED_INTERESTED')
         activeCallRef.current = null
+        setWorkStep('log')
         setTimeout(() => saveCallRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150)
       })
       call.on('error', (err: Error) => {
@@ -414,52 +473,62 @@ export function TelecallerPage() {
   const calls = data?.calls ?? []
   const byOutcome = data?.by_outcome ?? {}
   const leadPhone = phone || leadDetailQ.data?.phone || ''
+  const leadEmail = email || leadDetailQ.data?.email || ''
+  const waDigits = leadPhone.replace(/\D/g, '')
 
   return (
     <>
-      <div className="page-header">
-        <h1>Telecaller</h1>
-        <p>{isTelecaller ? 'Your calls and daily performance' : 'Log calls and track daily performance'}</p>
-        {canManageIntegrations && (
-          <div className="row" style={{ gap: '0.5rem', paddingBottom: '1rem' }}>
-            <button
-              type="button"
-              className={`btn btn-sm ${tab === 'calls' ? '' : 'btn-ghost'}`}
-              onClick={() => setTab('calls')}
-            >
-              <Phone size={14} />
-              Calls
-            </button>
-            <button
-              type="button"
-              className={`btn btn-sm ${tab === 'integrations' ? '' : 'btn-ghost'}`}
-              onClick={() => setTab('integrations')}
-            >
-              <Link2 size={14} />
-              Integrations
-            </button>
+      <PageHeader
+        title="Telecaller"
+        badge={data ? `${data.total_calls} calls` : undefined}
+        description={isTelecaller ? 'Your calls and daily performance' : 'Log calls and track daily performance'}
+      />
+
+      <div className="page-body stack" style={{ gap: '1.25rem' }}>
+        {data && (
+          <div className="metrics-grid">
+            <MetricCard icon={Phone} tone="purple" label="Total calls" value={data.total_calls} hint={isAll ? 'All time' : isToday ? 'Today' : data.date} />
+            <MetricCard
+              icon={CheckCircle}
+              tone="green"
+              label="Connected"
+              value={(byOutcome.CONNECTED_INTERESTED ?? 0) + (byOutcome.CONNECTED ?? 0) + (byOutcome.QUALIFIED ?? 0) + (byOutcome.ORDER_CONFIRMED ?? 0)}
+              hint={data.total_calls ? `${((((byOutcome.CONNECTED_INTERESTED ?? 0) + (byOutcome.CONNECTED ?? 0) + (byOutcome.QUALIFIED ?? 0) + (byOutcome.ORDER_CONFIRMED ?? 0)) / data.total_calls) * 100).toFixed(1)}%` : '0%'}
+            />
+            <MetricCard icon={Phone} tone="red" label="Not interested" value={(byOutcome.CONNECTED_NOT_INTERESTED ?? 0) + (byOutcome.NOT_INTERESTED ?? 0)} />
+            <MetricCard icon={Phone} tone="slate" label="No response" value={(byOutcome.RINGING_NO_RESPONSE ?? 0) + (byOutcome.NO_ANSWER ?? 0) + (byOutcome.SWITCHED_OFF ?? 0)} />
+            <MetricCard icon={Phone} tone="amber" label="Busy" value={byOutcome.BUSY ?? 0} />
+            <MetricCard icon={Phone} tone="purple" label="Qualified" value={(byOutcome.QUALIFIED ?? 0) + (byOutcome.ORDER_CONFIRMED ?? 0)} />
+            <MetricCard icon={Phone} tone="green" label="Call back" value={byOutcome.CALLBACK_SCHEDULED ?? 0} />
           </div>
         )}
-      </div>
-
-      {tab === 'integrations' && canManageIntegrations ? (
-        <div className="page-body">
-          <WhatsAppGmailIntegrations
-            orgId={orgId}
-            returnPath="/app/telecaller"
-            banner={integrationBanner}
-          />
-        </div>
-      ) : (
-      <div className="page-body page-grid-2">
+        <div className="page-grid-2">
 
         {/* Left column: Make Call + Save Call */}
-        <div className="stack" style={{ gap: '1.25rem' }}>
+        <div className="stack" style={{ gap: '1rem' }}>
+          <div className="panel-tabs" style={{ paddingLeft: 0, paddingRight: 0, background: 'transparent' }}>
+            <button
+              type="button"
+              className={`panel-tab${workStep === 'call' ? ' active' : ''}`}
+              onClick={() => setWorkStep('call')}
+            >
+              1. Make call
+            </button>
+            <button
+              type="button"
+              className={`panel-tab${workStep === 'log' ? ' active' : ''}`}
+              onClick={() => setWorkStep('log')}
+            >
+              2. Log result
+              {callInProgress && <span className="badge badge-indigo" style={{ marginLeft: '0.35rem', fontSize: '0.65rem' }}>Live</span>}
+            </button>
+          </div>
 
           {/* ── Make Call ── */}
+          {workStep === 'call' && (
           <div className="card">
             <div style={{ fontWeight: 700, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-              <Phone size={16} style={{ color: '#6366f1' }} />
+              <Phone size={16} style={{ color: 'var(--primary)' }} />
               Make Call
             </div>
 
@@ -470,6 +539,91 @@ export function TelecallerPage() {
             </div>
 
             {leadId && leadDetailQ.isLoading && <p className="muted small">Loading lead…</p>}
+
+            {/* Same quick actions as Leads Contacted drawer */}
+            {leadId && !leadDetailQ.isLoading && (
+              <div className="quick-actions" style={{ marginBottom: '1rem' }}>
+                {leadPhone && (
+                  <a href={`tel:${leadPhone}`} className="quick-action-btn">
+                    <Phone size={13} /> Call
+                  </a>
+                )}
+                {waDigits && (
+                  <a
+                    href={`https://wa.me/${waDigits}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="quick-action-btn"
+                  >
+                    <MessageCircle size={13} /> WhatsApp
+                  </a>
+                )}
+                {leadEmail && (
+                  <a href={`mailto:${leadEmail}`} className="quick-action-btn">
+                    <Mail size={13} /> Gmail
+                  </a>
+                )}
+                <div className="quick-action-dropdown" ref={shareRef}>
+                  <button
+                    type="button"
+                    className="quick-action-btn primary"
+                    aria-haspopup="menu"
+                    aria-expanded={shareOpen}
+                    disabled={sendQuote.isPending}
+                    onClick={() => setShareOpen((v) => !v)}
+                  >
+                    <Send size={13} />
+                    {sendQuote.isPending ? 'Sending…' : 'Send Quote'}
+                    <ChevronDown size={13} />
+                  </button>
+                  {shareOpen && (
+                    <div className="quick-action-menu" role="menu">
+                      <button
+                        type="button"
+                        className="quick-action-menu-item"
+                        role="menuitem"
+                        disabled={sendQuote.isPending || !leadPhone}
+                        title={
+                          leadPhone
+                            ? `Send quotation on WhatsApp to ${leadPhone}`
+                            : 'This lead has no phone number'
+                        }
+                        onClick={() => sendQuote.mutate('whatsapp')}
+                      >
+                        <MessageCircle size={13} /> WhatsApp
+                      </button>
+                      <button
+                        type="button"
+                        className="quick-action-menu-item"
+                        role="menuitem"
+                        disabled={sendQuote.isPending || !leadEmail}
+                        title={
+                          leadEmail
+                            ? `Email quotation to ${leadEmail}`
+                            : 'This lead has no email address'
+                        }
+                        onClick={() => sendQuote.mutate('email')}
+                      >
+                        <Mail size={13} /> Gmail
+                      </button>
+                    </div>
+                  )}
+                </div>
+                {stage === 'CONTACTED' && (
+                  <select
+                    className="select"
+                    value={outcome}
+                    onChange={(e) => setOutcome(e.target.value)}
+                    style={{ fontSize: '0.8rem', paddingRight: '1.8rem', minWidth: '11rem' }}
+                  >
+                    <option value="" disabled>Call status…</option>
+                    {CALL_STATUS_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            )}
 
             {/* Lead phone display */}
             {leadId && !leadDetailQ.isLoading && (
@@ -671,17 +825,30 @@ export function TelecallerPage() {
                 {aiCall.error && <p className="error" style={{ fontSize: '0.8rem' }}>{(aiCall.error as Error).message}</p>}
 
                 {!leadPhone && (
-                  <p className="muted small">Add a phone number in the section below to enable calling.</p>
+                  <p className="muted small">Add a phone number in Log result to enable calling.</p>
                 )}
               </div>
             )}
+
+            {leadId && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                style={{ marginTop: '0.75rem' }}
+                onClick={() => setWorkStep('log')}
+              >
+                Continue to log result
+              </button>
+            )}
           </div>
+          )}
 
           {/* ── Save Call ── */}
-          <div className="card" ref={saveCallRef} style={callInProgress ? { border: '1px solid #6366f1', boxShadow: '0 0 0 3px rgba(99,102,241,0.1)' } : {}}>
+          {workStep === 'log' && (
+          <div className="card" ref={saveCallRef} style={callInProgress ? { border: '1px solid var(--primary)', boxShadow: '0 0 0 3px var(--ring-soft)' } : {}}>
             <div style={{ fontWeight: 700, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-              <PhoneCall size={16} style={{ color: callInProgress ? '#6366f1' : '#64748b' }} />
-              Save Call
+              <PhoneCall size={16} style={{ color: callInProgress ? 'var(--primary)' : 'var(--muted-fg)' }} />
+              Log result
               {callInProgress && (
                 <span className="badge badge-indigo" style={{ marginLeft: '0.25rem', fontSize: '0.7rem' }}>In progress</span>
               )}
@@ -691,7 +858,12 @@ export function TelecallerPage() {
               className="stack"
               onSubmit={(e: FormEvent) => {
                 e.preventDefault()
-                if (leadId) void logCall.mutateAsync()
+                if (!leadId) return
+                if (outcome === 'CALLBACK_SCHEDULED' && !nextFollowUpDate.trim()) {
+                  toast.error('Pick a follow-up date for Follow Up')
+                  return
+                }
+                void logCall.mutateAsync()
               }}
             >
               {!leadId && (
@@ -700,9 +872,37 @@ export function TelecallerPage() {
 
               {leadId && (
                 <>
-                  {/* Lead details */}
-                  <div className="stack" style={{ gap: '0.75rem', padding: '0.75rem', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                    <div style={{ fontWeight: 600, fontSize: '0.85rem', color: '#475569' }}>Lead details</div>
+                  {/* Lead details — collapsed by default */}
+                  <div className="stack" style={{ gap: '0.75rem', padding: '0.75rem', background: 'var(--secondary)', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
+                    <button
+                      type="button"
+                      className="row spread"
+                      style={{
+                        width: '100%',
+                        border: 'none',
+                        background: 'transparent',
+                        cursor: 'pointer',
+                        font: 'inherit',
+                        fontWeight: 600,
+                        fontSize: '0.85rem',
+                        color: 'var(--foreground)',
+                        padding: 0,
+                      }}
+                      onClick={() => setLeadDetailsOpen((v) => !v)}
+                      aria-expanded={leadDetailsOpen}
+                    >
+                      <span>Lead details</span>
+                      <ChevronDown
+                        size={16}
+                        style={{
+                          transform: leadDetailsOpen ? 'rotate(180deg)' : undefined,
+                          transition: 'transform 0.15s ease',
+                          color: 'var(--muted-fg)',
+                        }}
+                      />
+                    </button>
+                    {leadDetailsOpen && (
+                      <>
                     <div className="form-field">
                       <label className="input-label">Stage</label>
                       <select className="select" value={stage} onChange={(e) => setStage(e.target.value)} style={{ width: '100%' }}>
@@ -743,10 +943,6 @@ export function TelecallerPage() {
                     </div>
                     <div className="row" style={{ gap: '0.75rem' }}>
                       <div className="form-field" style={{ flex: 1 }}>
-                        <label className="input-label">Follow-up date</label>
-                        <input className="input" type="date" value={nextFollowUpDate} onChange={(e) => setNextFollowUpDate(e.target.value)} style={{ width: '100%' }} />
-                      </div>
-                      <div className="form-field" style={{ flex: 1 }}>
                         <label className="input-label">Est. value (₹)</label>
                         <input className="input" type="number" min="0" step="0.01" value={estimatedValue} onChange={(e) => setEstimatedValue(e.target.value)} style={{ width: '100%' }} />
                       </div>
@@ -755,16 +951,47 @@ export function TelecallerPage() {
                       <label className="input-label">Lead notes</label>
                       <textarea className="input" rows={2} value={leadNotes} onChange={(e) => setLeadNotes(e.target.value)} style={{ width: '100%', resize: 'vertical' }} placeholder="Persistent notes on the lead record…" />
                     </div>
+                      </>
+                    )}
                   </div>
 
                   {/* Call result */}
-                  <div style={{ fontWeight: 600, fontSize: '0.85rem', color: '#475569' }}>Call result</div>
+                  <div style={{ fontWeight: 600, fontSize: '0.85rem', color: 'var(--muted-fg)' }}>Call result</div>
                   <div className="form-field">
-                    <label className="input-label">Outcome</label>
-                    <select className="select" value={outcome} onChange={(e) => setOutcome(e.target.value)} style={{ width: '100%' }}>
-                      {OUTCOMES.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                    <label className="input-label">Call status</label>
+                    <select
+                      className="select"
+                      value={outcome}
+                      onChange={(e) => {
+                        const next = e.target.value
+                        setOutcome(next)
+                        if (next === 'CALLBACK_SCHEDULED' && !nextFollowUpDate) {
+                          const p = tomorrowAt10Local()
+                          setNextFollowUpDate(p.date)
+                          setNextFollowUpTime(p.time)
+                          setCallbackPreset('tomorrow')
+                        }
+                      }}
+                      style={{ width: '100%' }}
+                    >
+                      <option value="" disabled>Call status…</option>
+                      {CALL_STATUS_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                     </select>
                   </div>
+
+                  {outcome === 'CALLBACK_SCHEDULED' && (
+                    <CallbackScheduleFields
+                      date={nextFollowUpDate}
+                      time={nextFollowUpTime}
+                      preset={callbackPreset}
+                      onChange={({ date, time, preset }) => {
+                        setNextFollowUpDate(date)
+                        setNextFollowUpTime(time)
+                        setCallbackPreset(preset)
+                      }}
+                    />
+                  )}
+
                   <div className="row" style={{ gap: '0.75rem' }}>
                     <div className="form-field" style={{ flex: 1 }}>
                       <label className="input-label">Duration (minutes)</label>
@@ -777,7 +1004,7 @@ export function TelecallerPage() {
                   </div>
 
                   {/* WhatsApp automation */}
-                  {CONNECTED_OUTCOMES.has(outcome) && (
+                  {CONNECTED_CALL_STATUSES.has(outcome) && (
                     <div style={{ padding: '0.75rem', background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '8px' }}>
                       <div style={{ fontWeight: 600, fontSize: '0.85rem', color: '#0369a1', marginBottom: '0.5rem' }}>
                         WhatsApp automation
@@ -809,7 +1036,7 @@ export function TelecallerPage() {
                         Call saved
                       </div>
                       <div className="stack" style={{ gap: '0.25rem', fontSize: '0.85rem' }}>
-                        <div><strong>Outcome:</strong> {OUTCOME_MAP[logCall.data.outcome]?.label ?? logCall.data.outcome}</div>
+                        <div><strong>Outcome:</strong> {CALL_STATUS_MAP[logCall.data.outcome]?.label ?? logCall.data.outcome}</div>
                         <div><strong>Attempt #:</strong> {logCall.data.attempt_number}</div>
                         {logCall.data.stage_changed && <div><strong>Stage moved to:</strong> {STAGE_LABELS[logCall.data.lead_stage] ?? logCall.data.lead_stage}</div>}
                         <div><strong>Time:</strong> {new Date(logCall.data.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</div>
@@ -827,6 +1054,7 @@ export function TelecallerPage() {
               )}
             </form>
           </div>
+          )}
         </div>
 
         {/* Right column: Summary */}
@@ -834,34 +1062,31 @@ export function TelecallerPage() {
           {data && (
             <>
               <div className="card">
-                <div style={{ fontWeight: 700, marginBottom: '1rem' }}>
-                  {isAll
-                    ? (isTelecaller ? 'All My Calls' : 'All Calls')
-                    : isTelecaller
-                      ? (isToday ? 'My Today' : 'My Calls')
-                      : (isToday ? 'Today' : 'Calls')}
-                  {!isAll && ` — ${data.date}`}
-                </div>
-                <div style={{ fontSize: '2.5rem', fontWeight: 800, color: '#0f172a', lineHeight: 1 }}>
-                  {data.total_calls}
-                </div>
-                <div className="muted small" style={{ marginBottom: '1rem' }}>calls logged</div>
-                <div className="stack" style={{ gap: '0.5rem' }}>
-                  {Object.entries(byOutcome).map(([k, v]) => {
-                    const meta = OUTCOME_MAP[k]
-                    return (
-                      <div key={k} className="row spread">
-                        <span className={`badge ${meta?.color ?? 'badge-slate'}`}>{meta?.label ?? k}</span>
-                        <span style={{ fontWeight: 700 }}>{v}</span>
-                      </div>
-                    )
-                  })}
-                  {Object.keys(byOutcome).length === 0 && (
-                    <p className="muted small">
-                      {isAll ? 'No calls logged yet.' : isToday ? 'No calls logged today.' : 'No calls logged on this date.'}
-                    </p>
-                  )}
-                </div>
+                <div style={{ fontWeight: 700, marginBottom: '1rem' }}>Call outcome overview</div>
+                {data.total_calls > 0 ? (
+                  <>
+                    <DonutChart
+                      segments={Object.entries(byOutcome).map(([k, v], i) => ({
+                        label: CALL_STATUS_MAP[k]?.label ?? k,
+                        value: v,
+                        color: ['#3D7A5A', '#B42318', '#2563eb', '#B07A2E', '#5B2C87', '#64748b'][i % 6],
+                      }))}
+                      center={{ value: data.total_calls, label: 'Calls' }}
+                    />
+                    <DonutLegend
+                      segments={Object.entries(byOutcome).map(([k, v], i) => ({
+                        label: CALL_STATUS_MAP[k]?.label ?? k,
+                        value: v,
+                        color: ['#3D7A5A', '#B42318', '#2563eb', '#B07A2E', '#5B2C87', '#64748b'][i % 6],
+                      }))}
+                      total={data.total_calls}
+                    />
+                  </>
+                ) : (
+                  <p className="muted small">
+                    {isAll ? 'No calls logged yet.' : isToday ? 'No calls logged today.' : 'No calls logged on this date.'}
+                  </p>
+                )}
               </div>
 
               {calls.length > 0 && (
@@ -869,7 +1094,7 @@ export function TelecallerPage() {
                   <div style={{ fontWeight: 700, marginBottom: '0.75rem' }}>Call Logs</div>
                   <div className="stack" style={{ gap: '0.5rem' }}>
                     {calls.map((c) => {
-                      const meta = OUTCOME_MAP[c.outcome]
+                      const meta = CALL_STATUS_MAP[c.outcome]
                       return (
                         <div
                           key={c.id}
@@ -901,66 +1126,57 @@ export function TelecallerPage() {
           )}
           {summary.isLoading && <div className="card muted">Loading summary…</div>}
         </div>
+        </div>
+        <div className="tips-banner">
+          <span>Call between 11:00 AM – 1:00 PM and 4:00 PM – 8:00 PM for a better connect rate.</span>
+        </div>
       </div>
-      )}
 
-      {/* Call detail modal */}
-      {selectedCallId && (
-        <div
-          style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
-          onClick={() => setSelectedCallId(null)}
-        >
-          <div
-            className="card"
-            style={{ maxWidth: '500px', width: '90%', maxHeight: '90vh', overflow: 'auto' }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <div style={{ fontWeight: 700, fontSize: '1.1rem' }}>Call Details</div>
-              <button type="button" onClick={() => setSelectedCallId(null)} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#64748b' }}>×</button>
+      <Modal
+        open={!!selectedCallId}
+        onClose={() => setSelectedCallId(null)}
+        title="Call Details"
+      >
+        {callDetail.isLoading && <p className="muted">Loading…</p>}
+        {callDetail.data && (
+          <div className="stack" style={{ gap: '0.75rem' }}>
+            <div><div className="muted small">Lead</div><div style={{ fontWeight: 600 }}>{callDetail.data.lead_title ?? '—'}</div></div>
+            <div><div className="muted small">Logged by</div><div>{callDetail.data.logged_by ?? 'AI Auto-Call'}</div></div>
+            <div>
+              <div className="muted small">Outcome</div>
+              <span className={`badge ${CALL_STATUS_MAP[callDetail.data.outcome]?.color ?? 'badge-slate'}`}>
+                {CALL_STATUS_MAP[callDetail.data.outcome]?.label ?? callDetail.data.outcome}
+              </span>
             </div>
-            {callDetail.isLoading && <p className="muted">Loading…</p>}
-            {callDetail.data && (
-              <div className="stack" style={{ gap: '0.75rem' }}>
-                <div><div className="muted small">Lead</div><div style={{ fontWeight: 600 }}>{callDetail.data.lead_title ?? '—'}</div></div>
-                <div><div className="muted small">Logged by</div><div>{callDetail.data.logged_by ?? 'AI Auto-Call'}</div></div>
-                <div>
-                  <div className="muted small">Outcome</div>
-                  <span className={`badge ${OUTCOME_MAP[callDetail.data.outcome]?.color ?? 'badge-slate'}`}>
-                    {OUTCOME_MAP[callDetail.data.outcome]?.label ?? callDetail.data.outcome}
-                  </span>
+            <div><div className="muted small">Attempt #</div><div>{callDetail.data.attempt_number}</div></div>
+            <div><div className="muted small">Call Source</div><div>{callDetail.data.call_source === 'HUMAN' ? 'Manual / Browser Call' : 'AI Auto-Call'}</div></div>
+            <div><div className="muted small">Time</div><div>{new Date(callDetail.data.created_at).toLocaleString('en-IN')}</div></div>
+            {callDetail.data.duration_seconds !== null && (
+              <div><div className="muted small">Duration</div><div>{Math.floor(callDetail.data.duration_seconds / 60)}m {callDetail.data.duration_seconds % 60}s</div></div>
+            )}
+            {callDetail.data.notes && (
+              <div><div className="muted small">Notes</div><div style={{ whiteSpace: 'pre-wrap', fontSize: '0.9rem' }}>{callDetail.data.notes}</div></div>
+            )}
+            {callDetail.data.transcript_raw && (
+              <div>
+                <div className="muted small">Transcript</div>
+                <div style={{ background: 'var(--secondary)', padding: '0.5rem', borderRadius: 'var(--radius)', fontSize: '0.85rem', maxHeight: '200px', overflow: 'auto', whiteSpace: 'pre-wrap' }}>
+                  {callDetail.data.transcript_raw}
                 </div>
-                <div><div className="muted small">Attempt #</div><div>{callDetail.data.attempt_number}</div></div>
-                <div><div className="muted small">Call Source</div><div>{callDetail.data.call_source === 'HUMAN' ? 'Manual / Browser Call' : 'AI Auto-Call'}</div></div>
-                <div><div className="muted small">Time</div><div>{new Date(callDetail.data.created_at).toLocaleString('en-IN')}</div></div>
-                {callDetail.data.duration_seconds !== null && (
-                  <div><div className="muted small">Duration</div><div>{Math.floor(callDetail.data.duration_seconds / 60)}m {callDetail.data.duration_seconds % 60}s</div></div>
-                )}
-                {callDetail.data.notes && (
-                  <div><div className="muted small">Notes</div><div style={{ whiteSpace: 'pre-wrap', fontSize: '0.9rem' }}>{callDetail.data.notes}</div></div>
-                )}
-                {callDetail.data.transcript_raw && (
-                  <div>
-                    <div className="muted small">Transcript</div>
-                    <div style={{ backgroundColor: '#f1f5f9', padding: '0.5rem', borderRadius: '0.375rem', fontSize: '0.85rem', maxHeight: '200px', overflow: 'auto', whiteSpace: 'pre-wrap' }}>
-                      {callDetail.data.transcript_raw}
-                    </div>
-                  </div>
-                )}
-                {callDetail.data.ai_summary && (
-                  <div><div className="muted small">AI Summary</div><div style={{ fontSize: '0.9rem' }}>{callDetail.data.ai_summary}</div></div>
-                )}
-                {callDetail.data.recording_url && (
-                  <div><div className="muted small">Recording</div><audio controls style={{ width: '100%' }} src={callDetail.data.recording_url} /></div>
-                )}
-                {callDetail.data.next_call_at && (
-                  <div><div className="muted small">Next Follow-up</div><div>{new Date(callDetail.data.next_call_at).toLocaleDateString('en-IN')}</div></div>
-                )}
               </div>
             )}
+            {callDetail.data.ai_summary && (
+              <div><div className="muted small">AI Summary</div><div style={{ fontSize: '0.9rem' }}>{callDetail.data.ai_summary}</div></div>
+            )}
+            {callDetail.data.recording_url && (
+              <div><div className="muted small">Recording</div><audio controls style={{ width: '100%' }} src={callDetail.data.recording_url} /></div>
+            )}
+            {callDetail.data.next_call_at && (
+              <div><div className="muted small">Next Follow-up</div><div>{new Date(callDetail.data.next_call_at).toLocaleDateString('en-IN')}</div></div>
+            )}
           </div>
-        </div>
-      )}
+        )}
+      </Modal>
     </>
   )
 }

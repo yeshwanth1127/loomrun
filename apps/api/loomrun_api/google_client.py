@@ -22,6 +22,9 @@ SERVICE_SCOPES: dict[str, list[str]] = {
         "https://www.googleapis.com/auth/calendar",
         "https://www.googleapis.com/auth/calendar.events",
     ],
+    "GOOGLE_ADS": [
+        "https://www.googleapis.com/auth/adwords",
+    ],
 }
 
 

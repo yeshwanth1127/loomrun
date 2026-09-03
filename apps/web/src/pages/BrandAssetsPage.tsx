@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { FileText, Palette, Shield, Trash2, Upload } from 'lucide-react'
 import type { FormEvent } from 'react'
 import { useEffect, useState } from 'react'
+import { PageHeader } from '../components/ui/PageHeader'
 import { useAuth } from '../context/AuthContext'
 import { apiFetch } from '../lib/api'
 
@@ -340,22 +341,14 @@ export function BrandAssetsPage() {
 
   if (!orgId) {
     return (
-      <>
-        <div className="page-header">
-          <h1>Brand assets</h1>
-          <p>Select an organization.</p>
-        </div>
-      </>
+      <PageHeader title="Brand assets" description="Select an organization." />
     )
   }
 
   if (!isOwner) {
     return (
       <>
-        <div className="page-header">
-          <h1>Brand assets</h1>
-          <p>Logo and business details used on quotations.</p>
-        </div>
+        <PageHeader title="Brand assets" description="Logo and business details used on quotations." />
         <div className="page-body">
           <div className="card" style={{ maxWidth: 420 }}>
             <Shield size={24} style={{ color: '#94a3b8', marginBottom: '0.5rem' }} />
@@ -368,13 +361,15 @@ export function BrandAssetsPage() {
 
   return (
     <>
-      <div className="page-header">
-        <h1>Brand assets</h1>
-        <p>
-          Logo and contact details appear on{' '}
-          <strong className="muted">generated quotation PDFs</strong> and in the sidebar for your team.
-        </p>
-      </div>
+      <PageHeader
+        title="Brand assets"
+        description={
+          <>
+            Logo and contact details appear on{' '}
+            <strong className="muted">generated quotation PDFs</strong> and in the sidebar for your team.
+          </>
+        }
+      />
 
       <div className="page-body page-grid-2">
         <div className="stack" style={{ gap: '1.25rem' }}>

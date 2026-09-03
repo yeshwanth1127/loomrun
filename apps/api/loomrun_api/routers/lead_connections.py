@@ -86,6 +86,16 @@ async def list_connections(org_id: str, ctx: OrgContext = Depends(require_roles(
             if isinstance(stats, dict):
                 item["meta_available"] = stats.get("meta_available")
                 item["sync_note"] = stats.get("retention_note")
+        if sn == "GOOGLE_ADS" and conn and isinstance(conn.credentials, dict):
+            creds = conn.credentials
+            item["connected_email"] = creds.get("connected_email")
+            customer_ids = creds.get("customer_ids")
+            if isinstance(customer_ids, list):
+                item["google_ads_customers"] = len(customer_ids)
+            stats = creds.get("sync_stats")
+            if isinstance(stats, dict):
+                item["google_ads_available"] = stats.get("ads_available")
+                item["sync_note"] = stats.get("retention_note")
         items.append(item)
     return {"items": items}
 
@@ -111,6 +121,12 @@ async def connect_source(org_id: str, body: ConnectPayload, ctx: OrgContext = De
                 status.HTTP_403_FORBIDDEN,
                 detail=f"FEATURE_LOCKED: {FEATURE_UPGRADE_HINTS['meta_lead_ads']}",
             )
+
+    if body.source_name == "GOOGLE_ADS":
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Connect Google Ads via OAuth from the Integrations page",
+        )
 
     # MANUAL is always connected
     if body.source_name == "MANUAL":

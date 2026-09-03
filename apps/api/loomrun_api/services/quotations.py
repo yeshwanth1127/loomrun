@@ -72,6 +72,7 @@ def serialize_quotation(q) -> dict[str, Any]:
         "lead_phone": q.lead.phone if getattr(q, "lead", None) else None,
         "lead_email": q.lead.email if getattr(q, "lead", None) else None,
         "number": q.number,
+        "title": getattr(q, "title", None),
         "invoice_number": q.invoiceNumber,
         "version": q.version,
         "status": q.status.name if hasattr(q.status, "name") else str(q.status),

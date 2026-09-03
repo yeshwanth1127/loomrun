@@ -42,6 +42,10 @@ class QuotationSendBody(BaseModel):
     doc_type: Literal["quotation", "invoice"] | None = None
 
 
+class QuotationRenameBody(BaseModel):
+    title: str = Field(max_length=200)
+
+
 # Back-compat aliases for any internal imports
 _next_quotation_number = quote_svc.next_quotation_number
 _next_invoice_number = quote_svc.next_invoice_number
@@ -56,7 +60,7 @@ _quotation_lines = quote_svc.quotation_lines
 async def list_quotations(
     org_id: str,
     day: str | None = Query(None, description="YYYY-MM-DD or all"),
-    ctx: OrgContext = Depends(require_roles("OWNER")),
+    ctx: OrgContext = Depends(require_roles("OWNER", "SALES", "TELECALLER")),
 ) -> dict:
     where: dict = {"organizationId": ctx.organization_id}
     apply_created_at(where, day)
@@ -85,7 +89,7 @@ async def send_quotation(
     org_id: str,
     quotation_id: str,
     body: QuotationSendBody,
-    ctx: OrgContext = Depends(require_roles("OWNER")),
+    ctx: OrgContext = Depends(require_roles("OWNER", "SALES", "TELECALLER")),
 ) -> dict:
     return await quote_svc.send_document(
         organization_id=ctx.organization_id,
@@ -201,6 +205,34 @@ async def update_quotation(
     return result
 
 
+@router.patch("/orgs/{org_id}/quotations/{quotation_id}/title")
+async def rename_quotation(
+    org_id: str,
+    quotation_id: str,
+    body: QuotationRenameBody,
+    ctx: OrgContext = Depends(require_roles("OWNER", "SALES")),
+) -> dict:
+    q = await prisma.quotation.find_first(
+        where={"id": quotation_id, "organizationId": ctx.organization_id},
+        include={"lines": True, "lead": True},
+    )
+    if not q:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Quotation not found")
+
+    title = body.title.strip() or None
+    updated = await prisma.quotation.update(
+        where={"id": quotation_id},
+        data={"title": title},
+        include={"lines": True, "lead": True},
+    )
+    org_events.record_changed(
+        organization_id=ctx.organization_id,
+        entity_type=org_events.qlix_docs.ENTITY_QUOTATION,
+        entity_id=quotation_id,
+    )
+    return quote_svc.serialize_quotation(updated)
+
+
 @router.post("/orgs/{org_id}/quotations/{quotation_id}/generate-invoice")
 async def generate_invoice(
     org_id: str,
@@ -228,7 +260,7 @@ async def download_pdf(
         None,
         description="Download as quotation or invoice PDF",
     ),
-    ctx: OrgContext = Depends(require_roles("OWNER")),
+    ctx: OrgContext = Depends(require_roles("OWNER", "SALES", "TELECALLER")),
 ):
     q = await prisma.quotation.find_first(
         where={"id": quotation_id, "organizationId": ctx.organization_id},
@@ -253,7 +285,12 @@ async def download_pdf(
         path = settings.storage_dir / q.pdfUrl
         if path.is_file():
             filename = f"{q.invoiceNumber if effective_variant == 'invoice' else q.number}.pdf"
-            return FileResponse(path, filename=filename, media_type="application/pdf")
+            return FileResponse(
+                path,
+                filename=filename,
+                media_type="application/pdf",
+                content_disposition_type="inline",
+            )
 
     if not q.lines:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="PDF not available")
@@ -264,7 +301,7 @@ async def download_pdf(
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
     )
 
 

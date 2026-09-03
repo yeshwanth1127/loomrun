@@ -69,9 +69,9 @@ async def get_production_order(ctx: ToolContext, order_id: str, **_: Any) -> dic
 @register_tool(
     name="create_production_order",
     description=(
-        "Start a production order for a lead, beginning at FABRIC_CHECK. "
-        "`lead_id` accepts a lead id or the customer/company name. A lead can "
-        "only have one production order."
+        "Create an order for a lead, beginning at FABRIC_CHECK. "
+        "`lead_id` accepts a lead id or the customer/company name. "
+        "A lead can have multiple orders."
     ),
     parameters={
         "lead_id": {"type": "string", "description": "Lead id, or the lead/company name"},
@@ -314,7 +314,7 @@ async def delete_expense(ctx: ToolContext, expense_id: str, **_: Any) -> dict:
     description=(
         "Record that a PHONE CALL happened with a lead, exactly as the Telecaller "
         "screen does. Use this ONLY when someone actually made or took a call. "
-        f"Call outcomes: {_OUTCOMES}. Logging CALLBACK_SCHEDULED (Call Back) is what puts a "
+        f"Call outcomes: {_OUTCOMES}. Logging CALLBACK_SCHEDULED (Follow Up) is what puts a "
         "lead on the Follow-ups screen. "
         "DO NOT use this tool to change a lead's pipeline stage — call outcomes are "
         "disposition codes for the telecaller log, not pipeline stage names. "

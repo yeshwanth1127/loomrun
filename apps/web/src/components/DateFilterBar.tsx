@@ -1,13 +1,13 @@
 import { Calendar } from 'lucide-react'
 import { todayIsoDate, useDateFilter } from '../context/DateFilterContext'
 
-export function DateFilterBar() {
+export function DateFilterBar({ compact = true }: { compact?: boolean }) {
   const { mode, date, isAll, setMode, setDate } = useDateFilter()
 
   return (
-    <div className="date-filter-bar">
+    <div className={`date-filter-bar${compact ? ' date-filter-bar--compact' : ''}`}>
       <div className="date-filter-bar-inner">
-        <Calendar size={15} style={{ color: '#64748b', flexShrink: 0 }} />
+        <Calendar size={14} style={{ color: 'var(--muted-fg)', flexShrink: 0 }} />
         <span className="date-filter-label">Period</span>
         <select
           className="select date-filter-select"

@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     meta_webhook_verify_token: str = "[REDACTED]"
     google_client_id: str = ""
     google_client_secret: str = ""
+    google_ads_developer_token: str = ""
+    google_ads_login_customer_id: str = ""
     # Public n8n UI URL (optional — links to workflow editor in Integrations)
     n8n_public_url: str = ""
     # Webhook base URL for Loomrun → n8n events (e.g. https://n8n.example.com/webhook)

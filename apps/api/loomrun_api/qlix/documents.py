@@ -83,7 +83,7 @@ def _join(parts: list[str | None]) -> str:
 async def render_lead(organization_id: str, lead_id: str) -> dict[str, str] | None:
     lead = await prisma.lead.find_first(
         where={"id": lead_id, "organizationId": organization_id},
-        include={"assignee": True, "quotations": True, "production": True},
+        include={"assignee": True, "quotations": True, "productionOrders": True},
     )
     if not lead:
         return None
@@ -117,7 +117,7 @@ async def render_lead(organization_id: str, lead_id: str) -> dict[str, str] | No
         f"## Notes\n{lead.notes}" if lead.notes else None,
         "",
         _quotation_lines(lead.quotations),
-        _production_line(lead.production),
+        _production_lines(lead.productionOrders),
     ])
 
     return {"title": title, "body": body, "external_id": external_id(ENTITY_LEAD, lead.id)}
@@ -134,11 +134,15 @@ def _quotation_lines(quotations: list[Any] | None) -> str | None:
     return "## Quotations\n" + "\n".join(rows)
 
 
-def _production_line(production: Any | None) -> str | None:
-    if not production:
+def _production_lines(orders: list[Any] | None) -> str | None:
+    if not orders:
         return None
-    flag = " (flagged as delayed)" if production.delayFlag else ""
-    return f"## Production\n- Stage: {_enum(production.stage)}{flag}"
+    rows = []
+    for production in orders:
+        flag = " (flagged as delayed)" if production.delayFlag else ""
+        num = getattr(production, "orderNumber", None) or production.id
+        rows.append(f"- {num}: {_enum(production.stage)}{flag}")
+    return "## Orders\n" + "\n".join(rows)
 
 
 async def render_quotation(organization_id: str, quotation_id: str) -> dict[str, str] | None:

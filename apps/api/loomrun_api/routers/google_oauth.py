@@ -24,16 +24,6 @@ router = APIRouter()
 REDIRECT_URI_TEMPLATE = "{base}/v1/google/oauth/callback"
 DEFAULT_RETURN_PATH = "/app/leads/connections"
 VALID_SERVICES = {a["service_name"] for a in ALL_AUTOMATIONS}
-TELECALLER_GOOGLE_SERVICES = {"GMAIL"}
-
-
-def _role_name(ctx: OrgContext) -> str:
-    return ctx.membership.role.name if hasattr(ctx.membership.role, "name") else str(ctx.membership.role)
-
-
-def _assert_google_service_allowed(ctx: OrgContext, service_name: str) -> None:
-    if _role_name(ctx) == "TELECALLER" and service_name not in TELECALLER_GOOGLE_SERVICES:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Insufficient role")
 
 
 def _api_base_url() -> str:
@@ -81,11 +71,10 @@ async def get_google_oauth_url(
     return_url: str = Query(..., description="Frontend URL to return to after OAuth"),
     service_name: str = Query(..., description="Automation service to connect (GMAIL, GOOGLE_CALENDAR)"),
     ctx: OrgContext = Depends(require_feature("gmail_calendar")),
-    _member: OrgContext = Depends(require_roles("OWNER", "TELECALLER")),
+    _owner: OrgContext = Depends(require_roles("OWNER")),
 ) -> dict:
     if service_name not in VALID_SERVICES:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Unknown automation service")
-    _assert_google_service_allowed(ctx, service_name)
     if not settings.google_client_id:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="Google integration not configured")
 
@@ -188,7 +177,7 @@ _GOOGLE_SERVICE_META = {
 @router.get("/orgs/{org_id}/google/connections")
 async def list_google_connections(
     org_id: str,
-    ctx: OrgContext = Depends(require_roles("OWNER", "TELECALLER")),
+    ctx: OrgContext = Depends(require_roles("OWNER")),
 ) -> dict:
     rows = await prisma.automationconnection.find_many(
         where={"organizationId": ctx.organization_id, "serviceName": {"in": list(VALID_SERVICES)}}
@@ -339,11 +328,10 @@ async def gmail_get_message(
 async def disconnect_google_service(
     org_id: str,
     body: DisconnectGooglePayload,
-    ctx: OrgContext = Depends(require_roles("OWNER", "TELECALLER")),
+    ctx: OrgContext = Depends(require_roles("OWNER")),
 ) -> dict:
     if body.service_name not in VALID_SERVICES:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Unknown service")
-    _assert_google_service_allowed(ctx, body.service_name)
     existing = await prisma.automationconnection.find_first(
         where={"organizationId": ctx.organization_id, "serviceName": body.service_name}
     )

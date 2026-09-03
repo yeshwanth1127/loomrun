@@ -1,19 +1,20 @@
 /* ══════════════════════════════════════════════════════════════════
    LOOMRUN — PUBLIC LANDING PAGE
-   Soft-neumorphic, hairline-divided, single accent.
+   Shares canvas/card tokens with the app shell. Calm surfaces, no neumorphism.
    Scoped under .landing so it never collides with the app shell.
    ══════════════════════════════════════════════════════════════════ */
 
 .landing {
-  --bg: #EAEBEF;
+  --bg: #F4F5F8;
+  --card: #FFFFFF;
   --ink: #26262E;
   --ink-soft: #6B6C76;
   --ink-faint: #9799A3;
-  --line: rgba(38, 38, 46, 0.13);
+  --line: rgba(38, 38, 46, 0.1);
   --accent: #5B2C87;
   --accent-soft: #8672A0;
-  --shadow-d: #C7C9D2;
-  --shadow-l: #FFFFFF;
+  --shadow: 0 1px 2px rgba(38, 38, 46, 0.04), 0 1px 3px rgba(38, 38, 46, 0.06);
+  --shadow-md: 0 2px 6px rgba(38, 38, 46, 0.06), 0 4px 12px rgba(38, 38, 46, 0.06);
 
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
   font-size: 16px;
@@ -28,15 +29,16 @@
 }
 
 .dark .landing {
-  --bg: #23232A;
+  --bg: #1C1C22;
+  --card: #2A2A32;
   --ink: #EDEDF2;
   --ink-soft: #A6A7B2;
   --ink-faint: #7C7D88;
-  --line: rgba(255, 255, 255, 0.11);
+  --line: rgba(255, 255, 255, 0.1);
   --accent: #C4A6E8;
   --accent-soft: #9D86BC;
-  --shadow-d: #191920;
-  --shadow-l: #2E2E38;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.25), 0 1px 3px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 .landing a { color: inherit; text-decoration: none; }
@@ -70,7 +72,9 @@
   display: grid;
   place-items: center;
   color: var(--accent);
-  box-shadow: 3px 3px 7px var(--shadow-d), -3px -3px 7px var(--shadow-l);
+  background: var(--card);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
 }
 
 .landing .nav-links {
@@ -95,14 +99,14 @@
   padding: 9px 20px;
   border-radius: 100px;
   white-space: nowrap;
-  box-shadow: 4px 4px 10px var(--shadow-d), -4px -4px 10px var(--shadow-l);
-  transition: box-shadow .2s ease, transform .2s ease;
+  box-shadow: var(--shadow);
+  transition: box-shadow .2s ease, transform .2s ease, background .2s ease;
 }
 
 .dark .landing .nav-btn { color: #1C1024; }
-.landing .nav-links a.nav-btn:hover { color: #fff; transform: translateY(-1px); }
+.landing .nav-links a.nav-btn:hover { color: #fff; transform: translateY(-1px); box-shadow: var(--shadow-md); }
 .dark .landing .nav-links a.nav-btn:hover { color: #1C1024; }
-.landing .nav-btn:active { box-shadow: inset 3px 3px 6px rgba(0, 0, 0, .22); transform: translateY(0); }
+.landing .nav-btn:active { transform: translateY(0); box-shadow: var(--shadow); }
 
 /* ── Hero ────────────────────────────────────────────── */
 .landing .hero {
@@ -161,7 +165,7 @@
   border-radius: 100px;
   font-size: 15px;
   font-weight: 500;
-  box-shadow: 6px 6px 14px var(--shadow-d), -6px -6px 14px var(--shadow-l);
+  box-shadow: var(--shadow);
   transition: box-shadow .2s ease, transform .2s ease;
   display: inline-block;
   border: none;
@@ -171,8 +175,8 @@
 
 .dark .landing .btn { color: #1C1024; }
 
-.landing .btn:hover { transform: translateY(-1px); }
-.landing .btn:active { box-shadow: inset 3px 3px 6px rgba(0, 0, 0, .22); transform: translateY(0); }
+.landing .btn:hover { transform: translateY(-1px); box-shadow: var(--shadow-md); }
+.landing .btn:active { transform: translateY(0); box-shadow: var(--shadow); }
 
 .landing .link-underline {
   font-size: 15px;
@@ -226,7 +230,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 5px 5px 10px var(--shadow-d), -5px -5px 10px var(--shadow-l);
+  background: var(--card);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
   margin-bottom: 20px;
   color: var(--accent);
 }
@@ -253,14 +259,15 @@
   width: 44px;
   height: 44px;
   border-radius: 50%;
-  background: var(--bg);
+  background: var(--card);
+  border: 1px solid var(--line);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 13px;
   font-weight: 600;
   color: var(--accent);
-  box-shadow: 5px 5px 10px var(--shadow-d), -5px -5px 10px var(--shadow-l);
+  box-shadow: var(--shadow);
   margin: 0 auto 18px;
   position: relative;
   z-index: 1;
@@ -282,7 +289,9 @@
   padding: 15px 20px;
   border-radius: 100px;
   max-width: 380px;
-  box-shadow: inset 4px 4px 8px var(--shadow-d), inset -4px -4px 8px var(--shadow-l);
+  background: var(--card);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
 }
 
 .landing .ask-input span:first-child { flex: 1; font-size: 13px; color: var(--ink-faint); }
@@ -295,7 +304,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 3px 3px 7px var(--shadow-d), -3px -3px 7px var(--shadow-l);
+  background: var(--card);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
   color: var(--accent);
 }
 
@@ -337,7 +348,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 4px 4px 8px var(--shadow-d), -4px -4px 8px var(--shadow-l);
+  background: var(--card);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
   color: var(--accent);
 }
 
@@ -404,7 +417,7 @@
 .landing .connect-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
 
 .landing .connect {
-  background: var(--bg);
+  background: var(--card);
   padding: 26px 28px;
   display: flex;
   align-items: center;
@@ -419,7 +432,9 @@
   display: grid;
   place-items: center;
   color: var(--accent);
-  box-shadow: 4px 4px 8px var(--shadow-d), -4px -4px 8px var(--shadow-l);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
 }
 
 .landing .connect h4 { font-size: 14px; font-weight: 600; margin-bottom: 3px; }

@@ -46,6 +46,12 @@ async def log_call(
         )
     lead = await resolve_lead(organization_id=organization_id, lead_id=lead_id)
 
+    if key == "CALLBACK_SCHEDULED" and next_call_at is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="next_call_at is required when outcome is CALLBACK_SCHEDULED",
+        )
+
     attempt = await prisma.telecallercalllog.count(where={"leadId": lead.id}) + 1
     row = await prisma.telecallercalllog.create(
         data={
@@ -64,6 +70,18 @@ async def log_call(
     logged_by = None
     if row.user:
         logged_by = (row.user.name.strip() if row.user.name else None) or row.user.email
+
+    lead_update: dict[str, Any] = {}
+    if next_call_at is not None:
+        lead_update["nextFollowUpAt"] = next_call_at
+        lead_update["followUpRemindedAt"] = None
+        lead_update["followUpWaRemindedAt"] = None
+    elif key != "CALLBACK_SCHEDULED":
+        lead_update["nextFollowUpAt"] = None
+        lead_update["followUpRemindedAt"] = None
+        lead_update["followUpWaRemindedAt"] = None
+    if lead_update:
+        await prisma.lead.update(where={"id": lead.id}, data=lead_update)
 
     new_stage = await sync_lead_after_call(
         lead_id=lead.id,

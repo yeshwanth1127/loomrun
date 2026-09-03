@@ -33,6 +33,27 @@ class CreateOrgMemberBody(BaseModel):
     password: str = Field(min_length=8)
     name: str | None = None
     role: MembershipRole = MembershipRole.SALES
+    whatsapp_phone: str | None = Field(default=None, max_length=32)
+
+
+class UpdateOrgMemberBody(BaseModel):
+    whatsapp_phone: str | None = Field(default=None, max_length=32)
+    role: MembershipRole | None = None
+
+
+def _normalize_member_phone(value: str | None) -> str | None:
+    if value is None:
+        return None
+    import re
+
+    digits = re.sub(r"\D", "", value.strip())
+    if not digits:
+        return None
+    if len(digits) == 10:
+        digits = "91" + digits
+    if len(digits) < 10 or len(digits) > 15:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid WhatsApp phone number")
+    return digits
 
 
 _LOGO_CONTENT_TYPES = {
@@ -157,11 +178,58 @@ async def list_org_members(
                 "email": m.user.email,
                 "name": m.user.name,
                 "role": m.role.name if hasattr(m.role, "name") else str(m.role),
+                "whatsapp_phone": getattr(m, "whatsappPhone", None),
                 "created_at": m.createdAt.isoformat(),
             }
             for m in rows
             if m.user is not None
         ]
+    }
+
+
+@router.patch("/orgs/{org_id}/members/{membership_id}")
+async def update_org_member(
+    org_id: str,
+    membership_id: str,
+    body: UpdateOrgMemberBody,
+    ctx: OrgContext = Depends(require_roles("OWNER")),
+) -> dict:
+    m = await prisma.membership.find_first(
+        where={"id": membership_id, "organizationId": ctx.organization_id},
+        include={"user": True},
+    )
+    if not m:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Member not found")
+
+    data: dict = {}
+    payload = body.model_dump(exclude_unset=True)
+    if "whatsapp_phone" in payload:
+        data["whatsappPhone"] = _normalize_member_phone(payload.get("whatsapp_phone"))
+    if "role" in payload and body.role is not None:
+        if body.role not in _INVITABLE_ROLES and body.role != MembershipRole.OWNER:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid role")
+        # Don't demote/promote OWNER via this path — keep simple for phone edits.
+        if m.role == MembershipRole.OWNER:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Cannot change owner role here")
+        if body.role == MembershipRole.OWNER:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Cannot promote to owner here")
+        data["role"] = body.role
+
+    if not data:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="No changes")
+
+    updated = await prisma.membership.update(
+        where={"id": m.id},
+        data=data,
+        include={"user": True},
+    )
+    return {
+        "membership_id": updated.id,
+        "user_id": updated.userId,
+        "email": updated.user.email if updated.user else None,
+        "name": updated.user.name if updated.user else None,
+        "role": updated.role.name if hasattr(updated.role, "name") else str(updated.role),
+        "whatsapp_phone": updated.whatsappPhone,
     }
 
 
@@ -216,6 +284,7 @@ async def create_org_member(
             "userId": user.id,
             "organizationId": oid,
             "role": body.role,
+            "whatsappPhone": _normalize_member_phone(body.whatsapp_phone),
         },
     )
     return {
@@ -224,6 +293,7 @@ async def create_org_member(
         "email": user.email,
         "name": user.name,
         "role": m.role.name if hasattr(m.role, "name") else str(m.role),
+        "whatsapp_phone": m.whatsappPhone,
     }
 
 

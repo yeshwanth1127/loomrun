@@ -358,7 +358,7 @@ export function AiChatPage() {
   const [voiceError, setVoiceError] = useState<string | null>(null)
   const [voiceEnabled, setVoiceEnabled] = useState(() => readStored(VOICE_STORAGE_KEY) === '1')
   const [convSearch, setConvSearch] = useState('')
-  const [historyOpen, setHistoryOpen] = useState(() => readStored(HISTORY_STORAGE_KEY) !== '0')
+  const [historyOpen, setHistoryOpen] = useState(() => readStored(HISTORY_STORAGE_KEY) === '1')
   const [activeRunId, setActiveRunId] = useState<string | null>(null)
   const activeRunIdRef = useRef<string | null>(null)
   const agentActivity = useAgentActivity()
@@ -903,12 +903,16 @@ export function AiChatPage() {
       <div className="page-header">
         <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
           <div>
-            <h1>Loomrun AI</h1>
+            <h1>
+              Loomrun AI
+              {status && (
+                <span className="page-title-badge">{aiModeLabel(status.mode)}</span>
+              )}
+            </h1>
             <p>
-              {writesEnabled
-                ? 'Ask questions or give commands — chats and org memory persist'
-                : 'Ask questions — chats and org memory persist'}
-              {!isAll ? ` · History filtered to ${dayParam}` : ''}
+              Ask questions, get insights and automate your business tasks.
+              {writesEnabled ? ' Chats and org memory persist.' : ''}
+              {!isAll ? ` History filtered to ${dayParam}` : ''}
             </p>
           </div>
           {status && (

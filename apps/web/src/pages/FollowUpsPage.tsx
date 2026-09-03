@@ -1,10 +1,22 @@
 import { useQuery } from '@tanstack/react-query'
-import { Calendar, MessageCircle, Phone } from 'lucide-react'
-import { useEffect } from 'react'
+import { Calendar, MessageCircle, Phone, Plus } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
-import { useAuth } from '../context/AuthContext'
+import { EmptyState } from '../components/ui/EmptyState'
+import { FilterToolbar } from '../components/ui/FilterToolbar'
+import { PageHeader } from '../components/ui/PageHeader'
+import { InsightCard, InsightGrid, MetricCard } from '../components/ui/dashboard'
 import { TableSkeleton } from '../components/ui/Skeleton'
+import { useAuth } from '../context/AuthContext'
 import { apiFetch } from '../lib/api'
+import {
+  followUpBucket,
+  fmtDateTime,
+  fmtFollowUpRelative,
+  type FollowUpBucket,
+} from '../lib/followUp'
+import { fmtPct } from '../lib/format'
 
 type FollowUpLead = {
   id: string
@@ -50,7 +62,7 @@ const CALL_OUTCOME_LABELS: Record<string, string> = {
   BUSY: 'Busy',
   WRONG_NUMBER: 'Wrong number',
   NOT_INTERESTED: 'Not interested',
-  CALLBACK_SCHEDULED: 'Call Back',
+  CALLBACK_SCHEDULED: 'Follow Up',
   QUALIFIED: 'Qualified',
   CONNECTED_INTERESTED: 'Connected - Interested',
   CONNECTED_NOT_INTERESTED: 'Connected - Not Interested',
@@ -59,34 +71,7 @@ const CALL_OUTCOME_LABELS: Record<string, string> = {
   ORDER_CONFIRMED: 'Order Confirmed',
 }
 
-function startOfDay(d: Date) {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate())
-}
-
-function bucketFor(dt: string | null): 'overdue' | 'today' | 'upcoming' | 'unscheduled' {
-  if (!dt) return 'unscheduled'
-  const today = startOfDay(new Date())
-  const due = startOfDay(new Date(dt))
-  if (due.getTime() < today.getTime()) return 'overdue'
-  if (due.getTime() === today.getTime()) return 'today'
-  return 'upcoming'
-}
-
-function fmtDate(dt: string | null) {
-  if (!dt) return '—'
-  return new Date(dt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
-}
-
-function fmtRelative(dt: string) {
-  const today = startOfDay(new Date())
-  const due = startOfDay(new Date(dt))
-  const diff = Math.round((due.getTime() - today.getTime()) / 86400000)
-  if (diff === 0) return 'Today'
-  if (diff === 1) return 'Tomorrow'
-  if (diff === -1) return 'Yesterday'
-  if (diff < 0) return `${Math.abs(diff)} days overdue`
-  return `in ${diff} days`
-}
+type TabKey = 'all' | 'today' | 'overdue'
 
 function reasonFor(lead: FollowUpLead): string | null {
   if (lead.last_call_notes && lead.last_call_notes.trim()) return lead.last_call_notes.trim()
@@ -95,15 +80,29 @@ function reasonFor(lead: FollowUpLead): string | null {
   return null
 }
 
+function statusLabel(bucket: FollowUpBucket) {
+  if (bucket === 'overdue' || bucket === 'due_now') return { label: bucket === 'overdue' ? 'Overdue' : 'Due now', cls: 'badge-red' }
+  if (bucket === 'later_today') return { label: 'Due today', cls: 'badge-green' }
+  if (bucket === 'upcoming') return { label: 'Scheduled', cls: 'badge-blue' }
+  return { label: 'Unscheduled', cls: 'badge-slate' }
+}
+
 function FollowUpRow({ lead }: { lead: FollowUpLead }) {
+  const navigate = useNavigate()
   const reason = reasonFor(lead)
-  const overdue = bucketFor(lead.next_follow_up_at) === 'overdue'
+  const bucket = followUpBucket(lead.next_follow_up_at)
+  const overdue = bucket === 'overdue' || bucket === 'due_now'
+  const status = statusLabel(bucket)
+
   return (
-    <tr>
+    <tr
+      onClick={() => navigate(`/app/telecaller?lead=${encodeURIComponent(lead.id)}`)}
+      title="Open in Telecaller"
+    >
       <td>
         <div style={{ fontWeight: 600 }}>{lead.title}</div>
+        {lead.phone && <div className="muted small">{lead.phone}</div>}
         {lead.company && <div className="muted small">{lead.company}</div>}
-        {lead.product_interest && <div className="muted small">{lead.product_interest}</div>}
       </td>
       <td>
         <span className={`badge ${STAGE_COLOR[lead.stage] ?? 'badge-slate'}`}>
@@ -111,40 +110,36 @@ function FollowUpRow({ lead }: { lead: FollowUpLead }) {
         </span>
       </td>
       <td>
-        <div className={`row small ${overdue ? 'error' : ''}`} style={{ gap: '0.3rem', fontWeight: 600 }}>
-          <Calendar size={12} />
-          {fmtDate(lead.next_follow_up_at)}
-        </div>
+        <span className="badge badge-purple">Follow Up</span>
+      </td>
+      <td>
+        <div className={overdue ? 'error' : ''}>{fmtDateTime(lead.next_follow_up_at)}</div>
         {lead.next_follow_up_at && (
-          <div className={`small ${overdue ? 'error' : 'muted'}`}>{fmtRelative(lead.next_follow_up_at)}</div>
+          <div className={`small ${overdue ? 'error' : 'muted'}`}>{fmtFollowUpRelative(lead.next_follow_up_at)}</div>
         )}
       </td>
       <td>
-        {reason ? (
-          <span className="small" style={{ whiteSpace: 'pre-wrap' }}>{reason}</span>
-        ) : (
-          <span className="muted small">—</span>
-        )}
+        <span className={`badge ${status.cls}`}>{status.label}</span>
       </td>
-      <td>
-        <span className="muted small">{lead.last_call_logged_by ?? '—'}</span>
+      <td className="muted small" style={{ maxWidth: 220 }}>
+        {reason ?? '—'}
+      </td>
+      <td className="muted small">{lead.last_call_logged_by ?? '—'}</td>
+      <td className="muted small">
+        {lead.last_call_at ? fmtDateTime(lead.last_call_at) : '—'}
       </td>
       <td onClick={(e) => e.stopPropagation()}>
-        <div className="row" style={{ gap: '0.4rem' }}>
+        <div className="row" style={{ gap: '0.35rem' }}>
+          <Link
+            to={`/app/telecaller?lead=${encodeURIComponent(lead.id)}`}
+            className="btn btn-ghost btn-sm"
+            title="Open in Telecaller"
+          >
+            <Phone size={14} /> Call
+          </Link>
           {lead.phone && (
-            <a href={`tel:${lead.phone}`} className="quick-action-btn" title="Call">
-              <Phone size={13} />
-            </a>
-          )}
-          {lead.phone && (
-            <a
-              href={`https://wa.me/${lead.phone.replace(/\D/g, '')}`}
-              target="_blank"
-              rel="noreferrer"
-              className="quick-action-btn"
-              title="WhatsApp"
-            >
-              <MessageCircle size={13} />
+            <a className="btn btn-ghost btn-sm" href={`https://wa.me/${lead.phone.replace(/\D/g, '')}`} target="_blank" rel="noreferrer">
+              <MessageCircle size={14} />
             </a>
           )}
         </div>
@@ -153,15 +148,10 @@ function FollowUpRow({ lead }: { lead: FollowUpLead }) {
   )
 }
 
-const SECTIONS: { key: 'overdue' | 'today' | 'upcoming' | 'unscheduled'; label: string }[] = [
-  { key: 'overdue', label: 'Overdue' },
-  { key: 'today', label: 'Today' },
-  { key: 'upcoming', label: 'Upcoming' },
-  { key: 'unscheduled', label: 'No date set' },
-]
-
 export function FollowUpsPage() {
   const { orgId } = useAuth()
+  const [tab, setTab] = useState<TabKey>('all')
+  const [search, setSearch] = useState('')
 
   const qs = new URLSearchParams({ last_call_outcome: 'CALLBACK_SCHEDULED', day: 'all' }).toString()
 
@@ -169,84 +159,166 @@ export function FollowUpsPage() {
     queryKey: ['follow-ups', orgId, qs],
     enabled: !!orgId,
     queryFn: () => apiFetch<{ items: FollowUpLead[] }>(`/v1/orgs/${orgId}/leads?${qs}`),
+    refetchInterval: 30_000,
   })
 
   useEffect(() => {
     if (q.error) toast.error((q.error as Error).message)
   }, [q.error])
 
+  const leads = q.data?.items ?? []
+  const grouped = useMemo(() => {
+    const buckets: Record<FollowUpBucket, FollowUpLead[]> = {
+      overdue: [],
+      due_now: [],
+      later_today: [],
+      upcoming: [],
+      unscheduled: [],
+    }
+    for (const lead of leads) {
+      buckets[followUpBucket(lead.next_follow_up_at)].push(lead)
+    }
+    return buckets
+  }, [leads])
+
+  const dueToday = grouped.due_now.length + grouped.later_today.length
+  const overdue = grouped.overdue.length
+  const quoted = leads.filter((l) => ['QUOTATION', 'NEGOTIATION', 'SAMPLE', 'WON'].includes(l.stage)).length
+  const won = leads.filter((l) => l.stage === 'WON').length
+
+  const visible = useMemo(() => {
+    const qtext = search.trim().toLowerCase()
+    return leads.filter((lead) => {
+      const bucket = followUpBucket(lead.next_follow_up_at)
+      if (tab === 'today' && bucket !== 'due_now' && bucket !== 'later_today') return false
+      if (tab === 'overdue' && bucket !== 'overdue' && bucket !== 'due_now') return false
+      if (!qtext) return true
+      return [lead.title, lead.phone, lead.company, lead.notes].some((v) =>
+        (v ?? '').toLowerCase().includes(qtext),
+      )
+    })
+  }, [leads, tab, search])
+
   if (!orgId) {
     return (
-      <div className="page-header">
-        <h1>Follow ups</h1>
-        <p className="muted">Select an organization to view follow ups.</p>
-      </div>
+      <PageHeader title="Follow ups" description="Select an organization to view follow ups." />
     )
-  }
-
-  const leads = q.data?.items ?? []
-  const grouped: Record<string, FollowUpLead[]> = { overdue: [], today: [], upcoming: [], unscheduled: [] }
-  for (const lead of leads) {
-    grouped[bucketFor(lead.next_follow_up_at)].push(lead)
   }
 
   return (
     <div className="leads-page">
-      <div className="page-header">
-        <div className="row spread" style={{ paddingBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
-          <div>
-            <h1>Follow ups</h1>
-            <p style={{ marginTop: '0.15rem', marginBottom: 0 }}>
-              {leads.length} lead{leads.length !== 1 ? 's' : ''} marked “Callback scheduled” by the telecaller
-            </p>
-          </div>
+      <PageHeader
+        title="Follow ups"
+        badge={`${leads.length} scheduled`}
+        description="Stay on top of every follow-up and never miss one."
+        actions={
+          <Link to="/app/telecaller" className="btn">
+            <Plus size={15} /> Schedule follow-up
+          </Link>
+        }
+        toolbar={
+          <>
+            <div className="panel-tabs" style={{ padding: 0, background: 'transparent' }}>
+              {([
+                ['all', `All follow ups (${leads.length})`],
+                ['today', `Due today (${dueToday})`],
+                ['overdue', `Overdue (${overdue})`],
+              ] as const).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  className={`panel-tab${tab === id ? ' active' : ''}`}
+                  onClick={() => setTab(id)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <FilterToolbar collapsible={false}>
+              <input
+                className="input"
+                placeholder="Search leads, phone, notes…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                style={{ minWidth: 220 }}
+              />
+            </FilterToolbar>
+          </>
+        }
+      />
+
+      <div className="page-body stack" style={{ gap: '1.25rem' }}>
+        <div className="metrics-grid">
+          <MetricCard icon={Calendar} tone="purple" label="Total follow ups" value={leads.length} hint="Scheduled" />
+          <MetricCard icon={Calendar} tone="green" label="Due today" value={dueToday} hint="High priority" />
+          <MetricCard icon={Calendar} tone="amber" label="Overdue" value={overdue} hint="Requires action" />
+          <MetricCard icon={Calendar} tone="blue" label="Upcoming" value={grouped.upcoming.length} hint="Later dates" />
+          <MetricCard
+            icon={Calendar}
+            tone="purple"
+            label="Conversion from follow ups"
+            value={fmtPct(quoted, leads.length)}
+            hint={`${quoted} to quotes · ${won} orders`}
+          />
         </div>
-      </div>
 
-      <div className="page-body">
-        {q.isLoading && <TableSkeleton rows={8} />}
-
+        {q.isLoading && <TableSkeleton rows={5} />}
         {!q.isLoading && leads.length === 0 && (
-          <div className="empty-state card">
-            <p>No callbacks scheduled. Leads appear here when a telecaller logs a call with the “Call Back” outcome.</p>
-          </div>
+          <EmptyState
+            icon={Calendar}
+            description="No follow-ups scheduled. Leads appear here when a telecaller logs a call with the “Follow Up” outcome."
+          />
         )}
 
-        {!q.isLoading &&
-          leads.length > 0 &&
-          SECTIONS.map(({ key, label }) => {
-            const rows = grouped[key]
-            if (rows.length === 0) return null
-            return (
-              <div key={key} style={{ marginBottom: '1.5rem' }}>
-                <div className="row" style={{ gap: '0.5rem', alignItems: 'center', marginBottom: '0.5rem' }}>
-                  <h2 style={{ margin: 0, fontSize: '0.95rem' }}>{label}</h2>
-                  <span className={`badge ${key === 'overdue' ? 'badge-red' : key === 'today' ? 'badge-amber' : 'badge-slate'}`}>
-                    {rows.length}
-                  </span>
-                </div>
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Lead</th>
-                        <th>Stage</th>
-                        <th>Follow-up date</th>
-                        <th>Reason</th>
-                        <th>Telecaller</th>
-                        <th>Contact</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {rows.map((lead) => (
-                        <FollowUpRow key={lead.id} lead={lead} />
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )
-          })}
+        {visible.length > 0 && (
+          <div className="table-wrap follow-ups-table">
+            <table>
+              <thead>
+                <tr>
+                  <th>Lead</th>
+                  <th>Stage</th>
+                  <th>Type</th>
+                  <th>Next follow-up</th>
+                  <th>Status</th>
+                  <th>Notes</th>
+                  <th>Owner</th>
+                  <th>Last contact</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {visible.map((lead) => (
+                  <FollowUpRow key={lead.id} lead={lead} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {!q.isLoading && leads.length > 0 && visible.length === 0 && (
+          <EmptyState description="No follow-ups match this filter." />
+        )}
+
+        <InsightGrid>
+          <InsightCard title="Follow-up insights">
+            <div className="stack" style={{ gap: '0.45rem', fontSize: '0.85rem' }}>
+              <div className="row spread"><span className="muted">Due today</span><strong>{dueToday}</strong></div>
+              <div className="row spread"><span className="muted">Overdue</span><strong>{overdue}</strong></div>
+              <div className="row spread"><span className="muted">Unscheduled</span><strong>{grouped.unscheduled.length}</strong></div>
+            </div>
+          </InsightCard>
+          <InsightCard title="Conversion impact">
+            <div className="stack" style={{ gap: '0.45rem', fontSize: '0.85rem' }}>
+              <div className="row spread"><span>Quoted / negotiation</span><strong>{quoted}</strong></div>
+              <div className="row spread"><span>Orders (won)</span><strong>{won}</strong></div>
+            </div>
+          </InsightCard>
+          <InsightCard title="Quick actions">
+            <div className="quick-action-list">
+              <Link to="/app/telecaller"><Phone size={14} /> Make a call</Link>
+              <Link to="/app/whatsapp"><MessageCircle size={14} /> WhatsApp follow-up</Link>
+            </div>
+          </InsightCard>
+        </InsightGrid>
       </div>
     </div>
   )

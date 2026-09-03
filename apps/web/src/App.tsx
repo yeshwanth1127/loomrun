@@ -3,6 +3,7 @@ import { useAuth } from './context/AuthContext'
 import { AppShell } from './components/AppShell'
 import { PlatformAdminShell } from './components/PlatformAdminShell'
 import { EmployeeRouteGuard } from './components/EmployeeRouteGuard'
+import { SettingsLayout } from './components/SettingsLayout'
 import { isTelecallerRole, membershipForOrg } from './lib/membership'
 import { CEODashboardPage } from './pages/CEODashboardPage'
 import { LandingPage } from './pages/LandingPage'
@@ -25,6 +26,8 @@ import { DocumentTemplatesPage } from './pages/DocumentTemplatesPage'
 import { ExpensesPage } from './pages/ExpensesPage'
 import { SubscriptionPage } from './pages/SubscriptionPage'
 import { AiChatPage } from './pages/AiChatPage'
+import { TrackOrderPage } from './pages/TrackOrderPage'
+import { VendorsPage } from './pages/VendorsPage'
 
 function Home() {
   const { me, loading, orgId } = useAuth()
@@ -58,6 +61,7 @@ export default function App() {
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
       <Route path="/register-super-admin" element={<RegisterSuperAdminPage />} />
+      <Route path="/track/:token" element={<TrackOrderPage />} />
 
       <Route path="/platform" element={<PlatformAdminShell />}>
         <Route index element={<AdminPage />} />
@@ -74,21 +78,27 @@ export default function App() {
           <Route index element={<AppIndex />} />
           <Route path="leads" element={<LeadsPage />} />
           <Route path="leads/follow-ups" element={<FollowUpsPage />} />
-          <Route path="leads/connections" element={<LeadConnectionsPage />} />
           <Route path="quotations" element={<QuotationsPage />} />
           <Route path="invoices" element={<InvoicesPage />} />
           <Route path="production" element={<ProductionPage />} />
+          <Route path="orders" element={<Navigate to="/app/production" replace />} />
+          <Route path="vendors" element={<VendorsPage />} />
           <Route path="expenses" element={<ExpensesPage />} />
           <Route path="telecaller" element={<TelecallerPage />} />
-          <Route path="settings/telephony" element={<TelephonyPage />} />
           <Route path="whatsapp" element={<WhatsAppPage />} />
           <Route path="ceo" element={<CEODashboardPage />} />
-          <Route path="brand-assets" element={<BrandAssetsPage />} />
-          <Route path="document-templates" element={<DocumentTemplatesPage />} />
-          <Route path="team" element={<TeamPage />} />
-          <Route path="subscription" element={<SubscriptionPage />} />
           <Route path="ai" element={<AiChatPage />} />
           <Route path="admin" element={<Navigate to="/platform" replace />} />
+
+          {/* Settings — same routes, shared inner nav */}
+          <Route element={<SettingsLayout />}>
+            <Route path="leads/connections" element={<LeadConnectionsPage />} />
+            <Route path="settings/telephony" element={<TelephonyPage />} />
+            <Route path="document-templates" element={<DocumentTemplatesPage />} />
+            <Route path="brand-assets" element={<BrandAssetsPage />} />
+            <Route path="team" element={<TeamPage />} />
+            <Route path="subscription" element={<SubscriptionPage />} />
+          </Route>
         </Route>
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

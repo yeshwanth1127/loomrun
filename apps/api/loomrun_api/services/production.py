@@ -6,6 +6,7 @@ screen uses, so an order the agent moves looks identical to one a person moved.
 
 from __future__ import annotations
 
+import secrets
 from datetime import datetime, timezone
 from typing import Any
 
@@ -17,6 +18,7 @@ from loomrun_api.prisma_client import prisma
 from loomrun_api.production_activity import log_production_activity, stage_label
 from loomrun_api.services.leads import resolve_lead
 from prisma.enums import (
+    OrderStatus,
     PaymentStatus,
     ProductionActivityType,
     ProductionStage,
@@ -30,30 +32,144 @@ _ORDER_INCLUDE = {
 }
 
 STAGES = [s.name for s in ProductionStage]
+ORDER_STATUSES = [s.name for s in OrderStatus]
+_TERMINAL_STAGES = {"SHIPPED", "DELIVERED"}
+_LOCKED_STATUSES = {"ON_HOLD", "CANCELLED", "COMPLETED"}
+
+# Customer-facing milestones (collapsed from internal stages)
+CUSTOMER_MILESTONES: list[tuple[str, str]] = [
+    ("CONFIRMED", "Order Confirmed"),
+    ("MATERIALS", "Materials"),
+    ("PRODUCTION", "Production"),
+    ("QC", "Quality Check"),
+    ("PACKING", "Packing"),
+    ("SHIPPED", "Shipped"),
+    ("DELIVERED", "Delivered"),
+]
+
+_STAGE_TO_MILESTONE: dict[str, str] = {
+    "PENDING": "CONFIRMED",
+    "FABRIC_CHECK": "CONFIRMED",
+    "PROCUREMENT": "MATERIALS",
+    "FABRIC_RECEIVED": "MATERIALS",
+    "CUTTING": "PRODUCTION",
+    "PRINTING": "PRODUCTION",
+    "STITCHING": "PRODUCTION",
+    "QC": "QC",
+    "PACKING": "PACKING",
+    "PAYMENT_HOLD": "PACKING",
+    "READY_DISPATCH": "PACKING",
+    "SHIPPED": "SHIPPED",
+    "DELIVERED": "DELIVERED",
+}
+
+
+def new_tracking_token() -> str:
+    return secrets.token_urlsafe(16)
+
+
+def customer_milestone_for_stage(stage: str) -> str:
+    return _STAGE_TO_MILESTONE.get(str(stage).strip().upper(), "CONFIRMED")
+
+
+def _parse_sequence(value: str, prefix: str) -> int | None:
+    if not value.startswith(prefix):
+        return None
+    try:
+        return int(value[len(prefix) :])
+    except ValueError:
+        return None
+
+
+async def next_order_number(org_id: str) -> str:
+    year = datetime.now(timezone.utc).year
+    return await _next_order_number_for_prefix(org_id, f"ORD-{year}-")
+
+
+async def _next_order_number_for_prefix(org_id: str, prefix: str) -> str:
+    rows = await prisma.productionorder.find_many(
+        where={"organizationId": org_id, "orderNumber": {"startswith": prefix}},
+    )
+    max_seq = 0
+    for row in rows:
+        seq = _parse_sequence(row.orderNumber, prefix)
+        if seq is not None:
+            max_seq = max(max_seq, seq)
+    return f"{prefix}{(max_seq + 1):05d}"
 
 
 def _enum_name(value: Any) -> str:
     return value.name if hasattr(value, "name") else str(value)
 
 
+def _iso(dt: Any) -> str | None:
+    if dt is None:
+        return None
+    return dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
+
+
+def resolve_order_status(r) -> str:
+    """Effective health status — auto-flags overdue dispatches as DELAYED."""
+    stored = _enum_name(getattr(r, "orderStatus", None) or OrderStatus.ON_TRACK)
+    if stored in _LOCKED_STATUSES:
+        return stored
+    stage = _enum_name(r.stage)
+    if stage == "DELIVERED":
+        return "COMPLETED"
+    eta = getattr(r, "expectedDispatchAt", None)
+    if eta is not None and stage not in _TERMINAL_STAGES:
+        now = datetime.now(timezone.utc)
+        eta_aware = eta if eta.tzinfo else eta.replace(tzinfo=timezone.utc)
+        if eta_aware < now:
+            return "DELAYED"
+    if getattr(r, "delayFlag", False) and stored == "ON_TRACK":
+        return "DELAYED"
+    return stored
+
+
+def days_until(dt: Any) -> int | None:
+    if dt is None:
+        return None
+    now = datetime.now(timezone.utc)
+    aware = dt if getattr(dt, "tzinfo", None) else dt.replace(tzinfo=timezone.utc)
+    return (aware.date() - now.date()).days
+
+
 def serialize_order(r) -> dict[str, Any]:
+    status = resolve_order_status(r)
     return {
         "id": r.id,
         "lead_id": r.leadId,
         "quotation_id": r.quotationId,
+        "order_number": r.orderNumber,
         "name": r.name,
+        "display_name": r.name or (r.lead.title if getattr(r, "lead", None) else None),
         "stage": _enum_name(r.stage),
-        "delay_flag": r.delayFlag,
+        "order_status": status,
+        "delay_flag": r.delayFlag or status == "DELAYED",
         "budget_cents": r.budgetCents,
-        "stage_entered_at": r.stageEnteredAt.isoformat() if r.stageEnteredAt else None,
+        "expected_completion_at": _iso(getattr(r, "expectedCompletionAt", None)),
+        "expected_dispatch_at": _iso(getattr(r, "expectedDispatchAt", None)),
+        "actual_dispatch_at": _iso(getattr(r, "actualDispatchAt", None)),
+        "courier_name": getattr(r, "courierName", None),
+        "courier_tracking_no": getattr(r, "courierTrackingNo", None),
+        "shipping_notes": getattr(r, "shippingNotes", None),
+        "on_hold_reason": getattr(r, "onHoldReason", None),
+        "cancelled_at": _iso(getattr(r, "cancelledAt", None)),
+        "tracking_token": getattr(r, "trackingToken", None),
+        "tracking_enabled": bool(getattr(r, "trackingEnabled", True)),
+        "days_until_dispatch": days_until(getattr(r, "expectedDispatchAt", None)),
+        "customer_milestone": customer_milestone_for_stage(_enum_name(r.stage)),
+        "stage_entered_at": _iso(r.stageEnteredAt),
         "lead_title": r.lead.title if getattr(r, "lead", None) else None,
+        "lead_phone": r.lead.phone if getattr(r, "lead", None) else None,
         "payments": [
             {
                 "id": p.id,
                 "amount_cents": p.amountCents,
                 "status": _enum_name(p.status),
                 "note": p.note,
-                "recorded_at": p.recordedAt.isoformat() if p.recordedAt else None,
+                "recorded_at": _iso(p.recordedAt),
             }
             for p in (getattr(r, "payments", None) or [])
         ],
@@ -93,7 +209,11 @@ async def _require_order(*, organization_id: str, order_id: str):
 
 
 async def list_production_orders(
-    *, organization_id: str, stage: str | None = None, limit: int = 50
+    *,
+    organization_id: str,
+    stage: str | None = None,
+    lead_id: str | None = None,
+    limit: int = 50,
 ) -> dict[str, Any]:
     where: dict[str, Any] = {"organizationId": organization_id}
     if stage:
@@ -104,6 +224,8 @@ async def list_production_orders(
                 detail=f"Unknown stage '{stage}'. Valid stages: {', '.join(STAGES)}",
             )
         where["stage"] = ProductionStage[key]
+    if lead_id:
+        where["leadId"] = lead_id
     total = await prisma.productionorder.count(where=where)
     rows = await prisma.productionorder.find_many(
         where=where,
@@ -126,15 +248,15 @@ async def get_production_order(*, organization_id: str, order_id: str) -> dict[s
 
 
 async def create_production_order(
-    *, organization_id: str, user_id: str, lead_id: str, quotation_id: str | None = None
+    *,
+    organization_id: str,
+    user_id: str,
+    lead_id: str,
+    quotation_id: str | None = None,
+    expected_completion_at: datetime | None = None,
+    expected_dispatch_at: datetime | None = None,
 ) -> dict[str, Any]:
     lead = await resolve_lead(organization_id=organization_id, lead_id=lead_id)
-    existing = await prisma.productionorder.find_unique(where={"leadId": lead.id})
-    if existing:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail=f"'{lead.title}' already has a production order (id {existing.id}).",
-        )
     if quotation_id:
         q = await prisma.quotation.find_first(
             where={
@@ -149,13 +271,20 @@ async def create_production_order(
                 detail="That quotation does not belong to this lead.",
             )
 
+    order_number = await next_order_number(organization_id)
     stage = ProductionStage.FABRIC_CHECK
     row = await prisma.productionorder.create(
         data={
             "organizationId": organization_id,
             "leadId": lead.id,
             "quotationId": quotation_id,
+            "orderNumber": order_number,
             "stage": stage,
+            "orderStatus": OrderStatus.ON_TRACK,
+            "expectedCompletionAt": expected_completion_at,
+            "expectedDispatchAt": expected_dispatch_at,
+            "trackingToken": new_tracking_token(),
+            "trackingEnabled": True,
             "stageEnteredAt": datetime.now(timezone.utc),
         }
     )
@@ -165,8 +294,14 @@ async def create_production_order(
         lead_id=lead.id,
         user_id=user_id,
         activity_type=ProductionActivityType.ORDER_CREATED,
-        body=f"Production order started at {stage_label(stage.name)}",
-        metadata={"stage": stage.name, "source": "loomrun_ai"},
+        body=f"Order {order_number} created at {stage_label(stage.name)}",
+        metadata={
+            "stage": stage.name,
+            "quotation_id": quotation_id,
+            "order_number": order_number,
+            "expected_completion_at": _iso(expected_completion_at),
+            "expected_dispatch_at": _iso(expected_dispatch_at),
+        },
     )
     org_events.record_changed(
         organization_id=organization_id,
@@ -185,9 +320,22 @@ async def update_production_order(
     delay_flag: bool | None = None,
     budget_cents: int | None = None,
     name: str | None = None,
+    order_status: str | None = None,
+    expected_completion_at: datetime | None = None,
+    expected_dispatch_at: datetime | None = None,
+    actual_dispatch_at: datetime | None = None,
+    courier_name: str | None = None,
+    courier_tracking_no: str | None = None,
+    shipping_notes: str | None = None,
+    on_hold_reason: str | None = None,
+    internal_note: str | None = None,
+    customer_note: str | None = None,
+    clear_expected_completion: bool = False,
+    clear_expected_dispatch: bool = False,
 ) -> dict[str, Any]:
     row = await _require_order(organization_id=organization_id, order_id=order_id)
     old_stage = _enum_name(row.stage)
+    old_status = _enum_name(getattr(row, "orderStatus", None) or OrderStatus.ON_TRACK)
 
     data: dict[str, Any] = {}
     new_stage = old_stage
@@ -202,8 +350,34 @@ async def update_production_order(
         data["stage"] = ProductionStage[key]
         if key != old_stage:
             data["stageEnteredAt"] = datetime.now(timezone.utc)
+        if key == "DELIVERED":
+            data["orderStatus"] = OrderStatus.COMPLETED
+        if key == "SHIPPED" and not row.actualDispatchAt and actual_dispatch_at is None:
+            data["actualDispatchAt"] = datetime.now(timezone.utc)
+
     if delay_flag is not None:
         data["delayFlag"] = delay_flag
+        if delay_flag and "orderStatus" not in data:
+            data["orderStatus"] = OrderStatus.DELAYED
+        elif not delay_flag and old_status == "DELAYED" and "orderStatus" not in data:
+            data["orderStatus"] = OrderStatus.ON_TRACK
+
+    if order_status is not None:
+        key = str(order_status).strip().upper()
+        if key not in ORDER_STATUSES:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail=f"Unknown order_status '{order_status}'. Valid: {', '.join(ORDER_STATUSES)}",
+            )
+        data["orderStatus"] = OrderStatus[key]
+        data["delayFlag"] = key == "DELAYED"
+        if key == "CANCELLED":
+            data["cancelledAt"] = datetime.now(timezone.utc)
+        elif key != "CANCELLED" and row.cancelledAt:
+            data["cancelledAt"] = None
+        if key != "ON_HOLD":
+            data["onHoldReason"] = None
+
     if budget_cents is not None:
         if budget_cents < 0:
             raise HTTPException(
@@ -212,28 +386,123 @@ async def update_production_order(
         data["budgetCents"] = budget_cents
     if name is not None:
         data["name"] = name
-    if not data:
+    if expected_completion_at is not None:
+        data["expectedCompletionAt"] = expected_completion_at
+    elif clear_expected_completion:
+        data["expectedCompletionAt"] = None
+    if expected_dispatch_at is not None:
+        data["expectedDispatchAt"] = expected_dispatch_at
+    elif clear_expected_dispatch:
+        data["expectedDispatchAt"] = None
+    if actual_dispatch_at is not None:
+        data["actualDispatchAt"] = actual_dispatch_at
+    if courier_name is not None:
+        data["courierName"] = courier_name.strip() or None
+    if courier_tracking_no is not None:
+        data["courierTrackingNo"] = courier_tracking_no.strip() or None
+    if shipping_notes is not None:
+        data["shippingNotes"] = shipping_notes.strip() or None
+    if on_hold_reason is not None:
+        data["onHoldReason"] = on_hold_reason.strip() or None
+
+    notes_only = bool(internal_note or customer_note)
+    if not data and not notes_only:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            detail="Nothing to update — pass stage, delay_flag, budget_cents or name.",
+            detail="Nothing to update.",
         )
 
-    await prisma.productionorder.update(where={"id": row.id}, data=data)
-    org_events.record_changed(
-        organization_id=organization_id,
-        entity_type=org_events.qlix_docs.ENTITY_PRODUCTION,
-        entity_id=row.id,
-    )
+    if data:
+        await prisma.productionorder.update(where={"id": row.id}, data=data)
+        org_events.record_changed(
+            organization_id=organization_id,
+            entity_type=org_events.qlix_docs.ENTITY_PRODUCTION,
+            entity_id=row.id,
+        )
+
+    note_meta = {
+        "internal_note": (internal_note or "").strip() or None,
+        "customer_note": (customer_note or "").strip() or None,
+    }
+
     if stage is not None and new_stage != old_stage:
+        body = f"Stage changed from {stage_label(old_stage)} to {stage_label(new_stage)}"
+        if note_meta["customer_note"]:
+            body = f"{body}: {note_meta['customer_note']}"
         await log_production_activity(
             organization_id=organization_id,
             production_order_id=row.id,
             lead_id=row.leadId,
             user_id=user_id,
             activity_type=ProductionActivityType.STAGE_CHANGED,
-            body=f"Stage changed from {stage_label(old_stage)} to {stage_label(new_stage)}",
-            metadata={"from_stage": old_stage, "to_stage": new_stage, "source": "loomrun_ai"},
+            body=body,
+            metadata={
+                "from_stage": old_stage,
+                "to_stage": new_stage,
+                **note_meta,
+                "source": "loomrun_ai",
+            },
         )
+    elif notes_only:
+        await log_production_activity(
+            organization_id=organization_id,
+            production_order_id=row.id,
+            lead_id=row.leadId,
+            user_id=user_id,
+            activity_type=ProductionActivityType.NOTE_ADDED,
+            body=note_meta["customer_note"] or note_meta["internal_note"] or "Note added",
+            metadata={**note_meta, "source": "loomrun_ai"},
+        )
+
+    if "orderStatus" in data:
+        new_status = _enum_name(data["orderStatus"])
+        if new_status != old_status:
+            await log_production_activity(
+                organization_id=organization_id,
+                production_order_id=row.id,
+                lead_id=row.leadId,
+                user_id=user_id,
+                activity_type=ProductionActivityType.STATUS_CHANGED,
+                body=f"Status changed from {old_status.replace('_', ' ').title()} to {new_status.replace('_', ' ').title()}",
+                metadata={"from_status": old_status, "to_status": new_status},
+            )
+
+    eta_changed = any(
+        k in data
+        for k in ("expectedCompletionAt", "expectedDispatchAt", "actualDispatchAt")
+    )
+    if eta_changed:
+        await log_production_activity(
+            organization_id=organization_id,
+            production_order_id=row.id,
+            lead_id=row.leadId,
+            user_id=user_id,
+            activity_type=ProductionActivityType.ETA_UPDATED,
+            body="ETA updated",
+            metadata={
+                "expected_completion_at": _iso(data.get("expectedCompletionAt", row.expectedCompletionAt)),
+                "expected_dispatch_at": _iso(data.get("expectedDispatchAt", row.expectedDispatchAt)),
+                "actual_dispatch_at": _iso(data.get("actualDispatchAt", row.actualDispatchAt)),
+            },
+        )
+
+    ship_changed = any(
+        k in data for k in ("courierName", "courierTrackingNo", "shippingNotes")
+    )
+    if ship_changed:
+        await log_production_activity(
+            organization_id=organization_id,
+            production_order_id=row.id,
+            lead_id=row.leadId,
+            user_id=user_id,
+            activity_type=ProductionActivityType.SHIPMENT_UPDATED,
+            body="Shipment details updated",
+            metadata={
+                "courier_name": data.get("courierName", row.courierName),
+                "courier_tracking_no": data.get("courierTrackingNo", row.courierTrackingNo),
+            },
+        )
+
     return await get_production_order(organization_id=organization_id, order_id=row.id)
 
 

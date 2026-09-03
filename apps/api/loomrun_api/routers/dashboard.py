@@ -6,6 +6,8 @@ from loomrun_api.date_filter import apply_created_at, apply_recorded_at, parse_d
 from loomrun_api.deps import OrgContext, require_roles
 from loomrun_api.pnl import compute_pnl
 from loomrun_api.prisma_client import prisma
+from loomrun_api.services.leads import _group_count
+from loomrun_api.services.production import days_until, resolve_order_status
 from prisma.enums import LeadStage, PaymentStatus, ProductionActivityType, QuotationStatus
 
 router = APIRouter()
@@ -63,16 +65,14 @@ async def build_ceo_dashboard(*, organization_id: str, day: str | None = None) -
         orders = await prisma.productionorder.find_many(
             where={"organizationId": oid},
             order={"updatedAt": "desc"},
+            include={"lead": True},
         )
         collections_pending = await prisma.payment.count(
             where={"organizationId": oid, "status": PaymentStatus.PENDING},
         )
-        start_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        # "All" period: total calls logged (not just today), matching other totals.
         telecaller_calls = await prisma.telecallercalllog.count(
-            where={
-                "organizationId": oid,
-                "createdAt": {"gte": start_day, "lt": start_day + timedelta(days=1)},
-            },
+            where={"organizationId": oid},
         )
     else:
         hot_where: dict = {
@@ -109,6 +109,7 @@ async def build_ceo_dashboard(*, organization_id: str, day: str | None = None) -
         orders = await prisma.productionorder.find_many(
             where=prod_where,
             order={"updatedAt": "desc"},
+            include={"lead": True},
         )
 
         pay_where: dict = {"organizationId": oid, "status": PaymentStatus.PENDING}
@@ -120,9 +121,46 @@ async def build_ceo_dashboard(*, organization_id: str, day: str | None = None) -
         telecaller_calls = await prisma.telecallercalllog.count(where=call_where)
 
     stage_counts: dict[str, int] = {}
+    delayed_orders = 0
+    on_hold_orders = 0
+    active_orders = 0
+    completed_orders = 0
+    upcoming_dispatches: list[dict] = []
     for o in orders:
         name = o.stage.name if hasattr(o.stage, "name") else str(o.stage)
         stage_counts[name] = stage_counts.get(name, 0) + 1
+        status = resolve_order_status(o)
+        if status == "DELAYED":
+            delayed_orders += 1
+        if status == "ON_HOLD":
+            on_hold_orders += 1
+        if name == "DELIVERED" or status == "COMPLETED":
+            completed_orders += 1
+        elif status != "CANCELLED":
+            active_orders += 1
+        days = days_until(getattr(o, "expectedDispatchAt", None))
+        if (
+            days is not None
+            and 0 <= days <= 7
+            and name not in ("SHIPPED", "DELIVERED")
+            and status not in ("CANCELLED", "COMPLETED")
+        ):
+            upcoming_dispatches.append(
+                {
+                    "id": o.id,
+                    "order_number": getattr(o, "orderNumber", None),
+                    "lead_title": o.lead.title if o.lead else None,
+                    "display_name": o.name or (o.lead.title if o.lead else None),
+                    "stage": name,
+                    "order_status": status,
+                    "expected_dispatch_at": (
+                        o.expectedDispatchAt.isoformat() if o.expectedDispatchAt else None
+                    ),
+                    "days_until_dispatch": days,
+                }
+            )
+    upcoming_dispatches.sort(key=lambda x: (x["days_until_dispatch"], x["order_number"] or ""))
+    upcoming_dispatches = upcoming_dispatches[:8]
     bottleneck_stage = max(stage_counts, key=stage_counts.get) if stage_counts else None
 
     # ── Pipeline totals (respect the day filter via createdAt) ──────────────────
@@ -334,6 +372,16 @@ async def build_ceo_dashboard(*, organization_id: str, day: str | None = None) -
         )
     )
 
+    pipeline_value: dict[str, dict[str, int]] = {}
+    valued_leads = await prisma.lead.find_many(
+        where={**leads_where, "estimatedValue": {"not": None}},
+    )
+    for lead in valued_leads:
+        stage_name = lead.stage.name if hasattr(lead.stage, "name") else str(lead.stage)
+        rec = pipeline_value.setdefault(stage_name, {"count": 0, "value_cents": 0})
+        rec["count"] += 1
+        rec["value_cents"] += int(round(float(lead.estimatedValue) * 100))
+
     return {
         "generated_at": now.isoformat(),
         "hot_leads": {"count": hot_leads, "threshold_value": HOT_VALUE_THRESHOLD},
@@ -350,6 +398,13 @@ async def build_ceo_dashboard(*, organization_id: str, day: str | None = None) -
         "production_bottlenecks": {
             "by_stage": stage_counts,
             "busiest_stage": bottleneck_stage,
+        },
+        "order_health": {
+            "active": active_orders,
+            "delayed": delayed_orders,
+            "on_hold": on_hold_orders,
+            "completed": completed_orders,
+            "upcoming_dispatches": upcoming_dispatches,
         },
         "collections_pending": {"count": collections_pending},
         "telecaller_today": {"calls": telecaller_calls},
@@ -379,4 +434,14 @@ async def build_ceo_dashboard(*, organization_id: str, day: str | None = None) -
         "client_pnl": client_pnl,
         "integrations": integrations,
         "recent_activity": recent_activity,
+        "leads_by_source": await _group_count(field="source", where=leads_where),
+        "leads_by_stage": await _group_count(field="stage", where=leads_where),
+        "funnel": {
+            "leads": total_leads,
+            "follow_ups": follow_ups,
+            "quotations": quotations_sent,
+            "orders": len(orders),
+            "completed": completed_orders,
+        },
+        "pipeline_value": pipeline_value,
     }

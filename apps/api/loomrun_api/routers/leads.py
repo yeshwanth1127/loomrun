@@ -402,6 +402,35 @@ async def get_lead(org_id: str, lead_id: str, ctx: OrgContext = Depends(get_org_
     return await lead_svc.get_lead(organization_id=ctx.organization_id, lead_id=lead_id)
 
 
+@router.get("/orgs/{org_id}/follow-ups/due")
+async def list_due_follow_ups(org_id: str, ctx: OrgContext = Depends(get_org_context)) -> dict:
+    from loomrun_api.follow_up_reminders import list_due_follow_ups_for_user
+
+    return await list_due_follow_ups_for_user(
+        organization_id=ctx.organization_id,
+        user_id=ctx.membership.userId,
+    )
+
+
+class AckFollowUpsBody(BaseModel):
+    lead_ids: list[str] = Field(default_factory=list, max_length=100)
+
+
+@router.post("/orgs/{org_id}/follow-ups/ack")
+async def ack_follow_ups(
+    org_id: str,
+    body: AckFollowUpsBody,
+    ctx: OrgContext = Depends(get_org_context),
+) -> dict:
+    from loomrun_api.follow_up_reminders import ack_follow_up_reminders
+
+    return await ack_follow_up_reminders(
+        organization_id=ctx.organization_id,
+        lead_ids=body.lead_ids,
+        user_id=ctx.membership.userId,
+    )
+
+
 @router.patch("/orgs/{org_id}/leads/{lead_id}")
 async def update_lead(
     org_id: str, lead_id: str, body: LeadUpdate, ctx: OrgContext = Depends(get_org_context)

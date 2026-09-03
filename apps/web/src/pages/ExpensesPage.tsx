@@ -1,10 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Pencil, Plus, Receipt, Trash2 } from 'lucide-react'
+import { Pencil, Plus, Receipt, Trash2, TrendingUp } from 'lucide-react'
 import type { FormEvent } from 'react'
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { LeadSearchSelect } from '../components/LeadSearchSelect'
 import { RowActions } from '../components/RowActions'
+import { EmptyState } from '../components/ui/EmptyState'
+import { FilterToolbar } from '../components/ui/FilterToolbar'
+import { Modal } from '../components/ui/Modal'
+import { PageHeader } from '../components/ui/PageHeader'
+import { BarList, DonutChart, DonutLegend, InsightCard, InsightGrid, MetricCard, Sparkline } from '../components/ui/dashboard'
 import { useAuth } from '../context/AuthContext'
 import { useDateFilter } from '../context/DateFilterContext'
 import { apiFetch } from '../lib/api'
@@ -17,8 +22,10 @@ type Expense = {
   subcategory: string | null
   amount_cents: number
   description: string | null
+  vendor: string | null
   incurred_at: string
   lead_title: string | null
+  created_by_name?: string | null
 }
 
 type Summary = {
@@ -89,6 +96,7 @@ export function ExpensesPage() {
   const [category, setCategory] = useState('')
   const [description, setDescription] = useState('')
   const [leadId, setLeadId] = useState('')
+  const [vendor, setVendor] = useState('')
   const [lines, setLines] = useState<ExpenseLineDraft[]>([newLine()])
 
   const q = useQuery({
@@ -114,6 +122,7 @@ export function ExpensesPage() {
     setCategory('')
     setDescription('')
     setLeadId('')
+    setVendor('')
     setLines([newLine()])
   }
 
@@ -132,6 +141,7 @@ export function ExpensesPage() {
     setCategory(expense.category)
     setDescription(expense.description ?? '')
     setLeadId(expense.lead_id ?? '')
+    setVendor(expense.vendor ?? '')
     setLines([
       {
         key: expense.id,
@@ -141,7 +151,6 @@ export function ExpensesPage() {
       },
     ])
     setShowForm(true)
-    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   const create = useMutation({
@@ -166,6 +175,7 @@ export function ExpensesPage() {
           category: trimmedCategory,
           description: description.trim() || null,
           lead_id: leadId || null,
+          vendor: vendor.trim() || null,
           lines: prepared.map((line) => ({
             ...line,
             description: description.trim() || null,
@@ -201,6 +211,7 @@ export function ExpensesPage() {
           description: description.trim() || null,
           incurred_at: line.incurredAt ? new Date(line.incurredAt).toISOString() : null,
           lead_id: leadId || null,
+          vendor: vendor.trim() || null,
           clear_lead: !leadId,
         },
       })
@@ -226,9 +237,7 @@ export function ExpensesPage() {
 
   if (!orgId) {
     return (
-      <>
-        <div className="page-header"><h1>Expenses</h1><p>Select an organization.</p></div>
-      </>
+      <PageHeader title="Expenses" description="Select an organization." />
     )
   }
 
@@ -236,53 +245,164 @@ export function ExpensesPage() {
   const summary = q.data?.summary
   const saving = create.isPending || update.isPending
   const formError = (isEditing ? update.error : create.error) as Error | null
+  const weekAgo = Date.now() - 7 * 86400000
+  const last7Cents = items.filter((e) => +new Date(e.incurred_at) >= weekAgo).reduce((s, e) => s + e.amount_cents, 0)
+  const byCategory = new Map<string, number>()
+  for (const e of items) byCategory.set(e.category, (byCategory.get(e.category) ?? 0) + e.amount_cents)
+  const trendDays: number[] = []
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date()
+    d.setHours(0, 0, 0, 0)
+    d.setDate(d.getDate() - i)
+    const next = new Date(d)
+    next.setDate(next.getDate() + 1)
+    trendDays.push(
+      items
+        .filter((e) => {
+          const t = +new Date(e.incurred_at)
+          return t >= d.getTime() && t < next.getTime()
+        })
+        .reduce((s, e) => s + e.amount_cents, 0),
+    )
+  }
 
   function updateLine(key: string, patch: Partial<ExpenseLineDraft>) {
     setLines((prev) => prev.map((line) => (line.key === key ? { ...line, ...patch } : line)))
   }
 
-  return (
-    <>
-      <div className="page-header">
-        <h1>Expenses</h1>
-        <p>
-          {summary ? `${summary.count} expense${summary.count !== 1 ? 's' : ''}` : 'Job costs and overhead'}
-          {isAll ? '' : ` · ${dayParam}`}
+  const expenseForm = (
+    <form
+      className="stack"
+      onSubmit={(e: FormEvent) => {
+        e.preventDefault()
+        if (isEditing) void update.mutateAsync()
+        else void create.mutateAsync()
+      }}
+    >
+      <div className="form-field">
+        <label className="input-label">Lead</label>
+        <LeadSearchSelect
+          orgId={orgId}
+          value={leadId}
+          onChange={(id) => setLeadId(id)}
+          placeholder="Search by lead name, phone, or company…"
+        />
+        <p className="muted small" style={{ marginTop: '0.35rem' }}>
+          Leave empty for org overhead.
         </p>
       </div>
+      <div className="form-field">
+        <label className="input-label">Category *</label>
+        <input
+          className="input"
+          value={category}
+          onChange={(e) => setCategory(e.target.value)}
+          placeholder="e.g. Production"
+          required
+        />
+      </div>
+      <div className="form-field">
+        <label className="input-label">Vendor</label>
+        <input
+          className="input"
+          value={vendor}
+          onChange={(e) => setVendor(e.target.value)}
+          placeholder="Supplier, job worker, or courier"
+        />
+      </div>
 
-      <div className="page-body stack" style={{ gap: '1.25rem' }}>
-        {summary && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1rem' }}>
-            <div className="card">
-              <div className="muted small" style={{ marginBottom: '0.35rem' }}>Job costs</div>
-              <div style={{ fontSize: '1.4rem', fontWeight: 800 }}>{fmtINR(summary.job_cost_total_cents)}</div>
-            </div>
-            <div className="card">
-              <div className="muted small" style={{ marginBottom: '0.35rem' }}>Overhead</div>
-              <div style={{ fontSize: '1.4rem', fontWeight: 800 }}>{fmtINR(summary.overhead_total_cents)}</div>
-            </div>
-            <div className="card">
-              <div className="muted small" style={{ marginBottom: '0.35rem' }}>Total</div>
-              <div style={{ fontSize: '1.4rem', fontWeight: 800 }}>{fmtINR(summary.total_cents)}</div>
-            </div>
+      <div className="stack" style={{ gap: '0.65rem' }}>
+        {!isEditing && (
+          <div className="row" style={{ justifyContent: 'flex-end' }}>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setLines((prev) => [...prev, newLine()])}>
+              <Plus size={13} />
+              Add row
+            </button>
           </div>
         )}
-
-        <div className="row spread" style={{ flexWrap: 'wrap', gap: '0.75rem' }}>
-          <div className="row" style={{ gap: '0.5rem', flexWrap: 'wrap' }}>
-            <select className="select" value={scope} onChange={(e) => setScope(e.target.value as typeof scope)}>
-              <option value="all">All</option>
-              <option value="job">Job costs</option>
-              <option value="overhead">Overhead</option>
-            </select>
-            <input
-              className="input"
-              value={categoryFilter}
-              onChange={(e) => setCategoryFilter(e.target.value)}
-              placeholder="Filter by category"
-            />
+        {lines.map((line, index) => (
+          <div key={line.key} className="row" style={{ gap: '0.65rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <div className="form-field" style={{ flex: 2, minWidth: 160, margin: 0 }}>
+              <label className="input-label">Expense type *</label>
+              <input
+                className="input"
+                value={line.subcategory}
+                onChange={(e) => updateLine(line.key, { subcategory: e.target.value })}
+                placeholder="e.g. marketing, making"
+                required
+              />
+            </div>
+            <div className="form-field" style={{ flex: 1, minWidth: 140, margin: 0 }}>
+              <label className="input-label">Date</label>
+              <input
+                className="input"
+                type="date"
+                value={line.incurredAt}
+                onChange={(e) => updateLine(line.key, { incurredAt: e.target.value })}
+              />
+            </div>
+            <div className="form-field" style={{ flex: 1, minWidth: 120, margin: 0 }}>
+              <label className="input-label">Amount (₹) *</label>
+              <input
+                className="input"
+                type="number"
+                min="0.01"
+                step="0.01"
+                value={line.amount}
+                onChange={(e) => updateLine(line.key, { amount: e.target.value })}
+                required
+              />
+            </div>
+            {!isEditing && lines.length > 1 && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                style={{ color: 'var(--destructive)' }}
+                onClick={() => setLines((prev) => prev.filter((row) => row.key !== line.key))}
+                aria-label={`Remove row ${index + 1}`}
+              >
+                <Trash2 size={13} />
+              </button>
+            )}
           </div>
+        ))}
+        {!isEditing && (
+          <div className="row spread" style={{ paddingTop: '0.35rem', borderTop: '1px solid var(--border)' }}>
+            <div className="muted">Total</div>
+            <div style={{ fontWeight: 800 }}>{fmtINR(formTotalCents)}</div>
+          </div>
+        )}
+      </div>
+
+      <div className="form-field">
+        <label className="input-label">Description</label>
+        <input
+          className="input"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          placeholder="Optional"
+        />
+      </div>
+
+      {formError && <p className="error">{formError.message}</p>}
+      <div className="row">
+        <button type="submit" className="btn" disabled={saving}>
+          {saving ? 'Saving…' : isEditing ? 'Update expense' : 'Save expense'}
+        </button>
+        <button type="button" className="btn btn-ghost" onClick={closeForm}>
+          Cancel
+        </button>
+      </div>
+    </form>
+  )
+
+  return (
+    <>
+      <PageHeader
+        title="Expenses"
+        badge={summary ? `${summary.count} total` : undefined}
+        description="Track and manage all your business expenses."
+        actions={
           <button
             type="button"
             className="btn"
@@ -294,127 +414,32 @@ export function ExpensesPage() {
             <Plus size={15} />
             Add expense
           </button>
-        </div>
+        }
+        toolbar={
+          <FilterToolbar collapsible={false}>
+            <select className="select" value={scope} onChange={(e) => setScope(e.target.value as typeof scope)}>
+              <option value="all">All</option>
+              <option value="job">Job costs</option>
+              <option value="overhead">Overhead</option>
+            </select>
+            <input
+              className="input"
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+              placeholder="Filter by category"
+            />
+          </FilterToolbar>
+        }
+      />
 
-        {showForm && (
-          <div className="card" style={{ maxWidth: 720 }}>
-            <div style={{ fontWeight: 700, marginBottom: '1rem' }}>
-              {isEditing ? 'Edit expense' : 'New expense'}
-            </div>
-            <form
-              className="stack"
-              onSubmit={(e: FormEvent) => {
-                e.preventDefault()
-                if (isEditing) void update.mutateAsync()
-                else void create.mutateAsync()
-              }}
-            >
-              <div className="form-field">
-                <label className="input-label">Lead</label>
-                <LeadSearchSelect
-                  orgId={orgId}
-                  value={leadId}
-                  onChange={(id) => setLeadId(id)}
-                  placeholder="Search by lead name, phone, or company…"
-                />
-                <p className="muted small" style={{ marginTop: '0.35rem' }}>
-                  Leave empty for org overhead.
-                </p>
-              </div>
-              <div className="form-field">
-                <label className="input-label">Category *</label>
-                <input
-                  className="input"
-                  value={category}
-                  onChange={(e) => setCategory(e.target.value)}
-                  placeholder="e.g. Production"
-                  required
-                />
-              </div>
-
-              <div className="stack" style={{ gap: '0.65rem' }}>
-                {!isEditing && (
-                  <div className="row" style={{ justifyContent: 'flex-end' }}>
-                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => setLines((prev) => [...prev, newLine()])}>
-                      <Plus size={13} />
-                      Add row
-                    </button>
-                  </div>
-                )}
-                {lines.map((line, index) => (
-                  <div key={line.key} className="row" style={{ gap: '0.65rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
-                    <div className="form-field" style={{ flex: 2, minWidth: 160, margin: 0 }}>
-                      <label className="input-label">Expense type *</label>
-                      <input
-                        className="input"
-                        value={line.subcategory}
-                        onChange={(e) => updateLine(line.key, { subcategory: e.target.value })}
-                        placeholder="e.g. marketing, making"
-                        required
-                      />
-                    </div>
-                    <div className="form-field" style={{ flex: 1, minWidth: 140, margin: 0 }}>
-                      <label className="input-label">Date</label>
-                      <input
-                        className="input"
-                        type="date"
-                        value={line.incurredAt}
-                        onChange={(e) => updateLine(line.key, { incurredAt: e.target.value })}
-                      />
-                    </div>
-                    <div className="form-field" style={{ flex: 1, minWidth: 120, margin: 0 }}>
-                      <label className="input-label">Amount (₹) *</label>
-                      <input
-                        className="input"
-                        type="number"
-                        min="0.01"
-                        step="0.01"
-                        value={line.amount}
-                        onChange={(e) => updateLine(line.key, { amount: e.target.value })}
-                        required
-                      />
-                    </div>
-                    {!isEditing && lines.length > 1 && (
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm"
-                        style={{ color: 'var(--destructive)' }}
-                        onClick={() => setLines((prev) => prev.filter((row) => row.key !== line.key))}
-                        aria-label={`Remove row ${index + 1}`}
-                      >
-                        <Trash2 size={13} />
-                      </button>
-                    )}
-                  </div>
-                ))}
-                {!isEditing && (
-                  <div className="row spread" style={{ paddingTop: '0.35rem', borderTop: '1px solid var(--border)' }}>
-                    <div className="muted">Total</div>
-                    <div style={{ fontWeight: 800 }}>{fmtINR(formTotalCents)}</div>
-                  </div>
-                )}
-              </div>
-
-              <div className="form-field">
-                <label className="input-label">Description</label>
-                <input
-                  className="input"
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  placeholder="Optional"
-                />
-              </div>
-
-              {formError && <p className="error">{formError.message}</p>}
-              <div className="row">
-                <button type="submit" className="btn" disabled={saving}>
-                  {saving ? 'Saving…' : isEditing ? 'Update expense' : 'Save expense'}
-                </button>
-                <button type="button" className="btn btn-ghost" onClick={closeForm}>
-                  Cancel
-                </button>
-              </div>
-            </form>
+      <div className="page-body stack" style={{ gap: '1.25rem' }}>
+        {summary && (
+          <div className="metrics-grid">
+            <MetricCard icon={Receipt} tone="purple" label="Total expenses" value={fmtINR(summary.total_cents)} hint={isAll ? 'This period' : dayParam} />
+            <MetricCard icon={Receipt} tone="green" label="Job costs" value={fmtINR(summary.job_cost_total_cents)} hint={summary.total_cents ? `${((summary.job_cost_total_cents / summary.total_cents) * 100).toFixed(1)}% of total` : undefined} />
+            <MetricCard icon={Receipt} tone="amber" label="Overhead" value={fmtINR(summary.overhead_total_cents)} hint={summary.total_cents ? `${((summary.overhead_total_cents / summary.total_cents) * 100).toFixed(1)}% of total` : undefined} />
+            <MetricCard icon={Receipt} tone="blue" label="Entries" value={summary.count} />
+            <MetricCard icon={TrendingUp} tone="purple" label="Last 7 days" value={fmtINR(last7Cents)} />
           </div>
         )}
 
@@ -430,6 +455,7 @@ export function ExpensesPage() {
                   <th>Category</th>
                   <th>Type</th>
                   <th>Lead / Overhead</th>
+                  <th>Vendor</th>
                   <th>Amount</th>
                   <th />
                 </tr>
@@ -445,6 +471,7 @@ export function ExpensesPage() {
                         ? (e.lead_title ?? 'Production order')
                         : <span className="badge-slate">Overhead</span>}
                     </td>
+                    <td className="muted">{e.vendor || '—'}</td>
                     <td style={{ fontWeight: 700 }}>{fmtINR(e.amount_cents)}</td>
                     <td>
                       <RowActions>
@@ -484,13 +511,78 @@ export function ExpensesPage() {
           </div>
         ) : (
           !q.isLoading && (
-            <div className="empty-state card">
-              <Receipt size={28} />
-              <p>No expenses yet. Add a job cost or org overhead expense.</p>
-            </div>
+            <EmptyState
+              icon={Receipt}
+              description="No expenses yet. Add a job cost or org overhead expense."
+            />
           )
         )}
+
+        <InsightGrid>
+          <InsightCard title="Expense trend">
+            <Sparkline points={trendDays.map((c) => c / 100)} />
+            <p className="muted small" style={{ marginTop: '0.5rem' }}>Last 7 days</p>
+          </InsightCard>
+          <InsightCard title="Expense by category">
+            {byCategory.size === 0 ? (
+              <p className="muted small">No categories yet.</p>
+            ) : (
+              <>
+                <DonutChart
+                  segments={[...byCategory.entries()].map(([label, value], i) => ({
+                    label,
+                    value,
+                    color: ['#5B2C87', '#2563eb', '#f59e0b', '#3D7A5A', '#64748b'][i % 5],
+                  }))}
+                  center={{ value: fmtINR(summary?.total_cents ?? 0), label: 'Total' }}
+                />
+                <DonutLegend
+                  segments={[...byCategory.entries()].map(([label, value], i) => ({
+                    label,
+                    value: value / 100,
+                    color: ['#5B2C87', '#2563eb', '#f59e0b', '#3D7A5A', '#64748b'][i % 5],
+                  }))}
+                />
+              </>
+            )}
+          </InsightCard>
+          <InsightCard title="Top categories">
+            <BarList
+              items={[...byCategory.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([label, value]) => ({
+                label,
+                value: value / 100,
+              }))}
+              formatValue={(n) => `₹${n.toLocaleString('en-IN')}`}
+            />
+          </InsightCard>
+          <InsightCard title="Recent activity">
+            {items.length === 0 ? (
+              <p className="muted small">No expenses recorded.</p>
+            ) : (
+              <div className="stack" style={{ gap: '0.45rem', fontSize: '0.82rem' }}>
+                {[...items].sort((a, b) => +new Date(b.incurred_at) - +new Date(a.incurred_at)).slice(0, 5).map((e) => (
+                  <div key={e.id} className="row spread">
+                    <div>
+                      <div style={{ fontWeight: 600 }}>{e.category}{e.subcategory ? ` · ${e.subcategory}` : ''}</div>
+                      <div className="muted small">{e.lead_title ?? 'Overhead'}{e.created_by_name ? ` · ${e.created_by_name}` : ''}</div>
+                    </div>
+                    <strong>{fmtINR(e.amount_cents)}</strong>
+                  </div>
+                ))}
+              </div>
+            )}
+          </InsightCard>
+        </InsightGrid>
       </div>
+
+      <Modal
+        open={showForm}
+        onClose={closeForm}
+        title={isEditing ? 'Edit expense' : 'New expense'}
+        size="lg"
+      >
+        {expenseForm}
+      </Modal>
     </>
   )
 }

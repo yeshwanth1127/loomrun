@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, Copy, Globe, Mail, RefreshCw, Users, Workflow, X, Zap } from 'lucide-react'
+import { Check, Copy, Globe, Link2, Mail, RefreshCw, Users, Workflow, X, Zap } from 'lucide-react'
 import { type ReactElement, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -9,6 +9,8 @@ import {
   WhatsAppConnectorCard,
   type GoogleConnectionItem,
 } from '../components/MessagingConnectors'
+import { PageHeader } from '../components/ui/PageHeader'
+import { MetricCard } from '../components/ui/dashboard'
 import { useAuth } from '../context/AuthContext'
 import { apiFetch } from '../lib/api'
 
@@ -42,6 +44,9 @@ type ConnectionItem = {
   plan_locked?: boolean
   required_plan?: string | null
   meta_available?: number | null
+  google_ads_customers?: number | null
+  google_ads_available?: number | null
+  connected_email?: string | null
   sync_note?: string | null
 }
 
@@ -161,7 +166,7 @@ function ApiKeyModal({ conn, orgId, onClose, onConnected }: {
   )
 }
 
-// ── OAuth Mock Modal ──────────────────────────────────────────────────────────
+// ── OAuth Modal ───────────────────────────────────────────────────────────────
 
 function OAuthModal({ conn, orgId, onClose, onConnected }: {
   conn: ConnectionItem
@@ -173,8 +178,8 @@ function OAuthModal({ conn, orgId, onClose, onConnected }: {
 
   const connect = useMutation({
     mutationFn: async () => {
+      const returnUrl = `${window.location.origin}/app/leads/connections`
       if (conn.source_name === 'META_ADS') {
-        const returnUrl = `${window.location.origin}/app/leads/connections`
         const params = new URLSearchParams({
           base_url: apiPublicBase,
           return_url: returnUrl,
@@ -185,14 +190,32 @@ function OAuthModal({ conn, orgId, onClose, onConnected }: {
         window.location.href = data.url
         return
       }
-      await apiFetch(`/v1/orgs/${orgId}/lead-connections/connect`, {
-        method: 'POST',
-        json: { source_name: conn.source_name, access_token: 'oauth_mock_token' },
-      })
+      if (conn.source_name === 'GOOGLE_ADS') {
+        const params = new URLSearchParams({ return_url: returnUrl })
+        const data = await apiFetch<{ url: string }>(
+          `/v1/orgs/${orgId}/google-ads/oauth-url?${params.toString()}`,
+        )
+        window.location.href = data.url
+        return
+      }
+      throw new Error('OAuth is not available for this source')
     },
     onSuccess: () => { onConnected(); onClose() },
     onError: (e) => setError((e as Error).message),
   })
+
+  const isGoogleAds = conn.source_name === 'GOOGLE_ADS'
+  const permissionLines = isGoogleAds
+    ? [
+        '✅ Read lead form submissions',
+        '✅ Sync Google Ads leads into Loomrun',
+        '❌ Create or edit ads',
+      ]
+    : [
+        '✅ Read Lead Ad forms',
+        '✅ Receive new lead notifications',
+        '❌ Post or edit ads',
+      ]
 
   return (
     <div className="modal-wrap" onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
@@ -206,15 +229,17 @@ function OAuthModal({ conn, orgId, onClose, onConnected }: {
         </div>
         <div className="modal-body stack" style={{ gap: '0.75rem' }}>
           <p className="muted" style={{ fontSize: '0.875rem' }}>
-            You'll be redirected to {conn.label} to authorise access to your Lead Ads.
+            {isGoogleAds
+              ? "You'll be redirected to Google to authorise read access to your Google Ads lead forms."
+              : `You'll be redirected to ${conn.label} to authorise access to your Lead Ads.`}
           </p>
           <div
             className="card"
             style={{ background: '#f8fafc', padding: '1rem', fontSize: '0.8rem', color: '#64748b', lineHeight: 1.6 }}
           >
-            <p>✅ Read Lead Ad forms</p>
-            <p>✅ Receive new lead notifications</p>
-            <p>❌ Post or edit ads</p>
+            {permissionLines.map((line) => (
+              <p key={line} style={{ margin: '0 0 0.35rem' }}>{line}</p>
+            ))}
           </div>
           {error && <p className="error">{error}</p>}
         </div>
@@ -536,6 +561,46 @@ function ConnectionCard({ conn, orgId, onRefresh }: {
     onError: (err) => toast.error((err as Error).message || 'Meta sync failed'),
   })
 
+  const syncGoogleAds = useMutation({
+    mutationFn: () =>
+      apiFetch<{
+        status: string
+        created?: number
+        skipped?: number
+        duplicates?: number
+        ads_available?: number
+        total_google_ads?: number
+        customer_errors?: number
+        retention_note?: string
+      }>(`/v1/orgs/${orgId}/google-ads/sync`, { method: 'POST' }),
+    onSuccess: (res) => {
+      onRefresh()
+      const created = res.created ?? 0
+      const total = res.total_google_ads
+      if (res.status === 'no_customers') {
+        toast.message(res.retention_note ?? 'No Google Ads client accounts found under your MCC.')
+        return
+      }
+      if (res.status === 'token_error') {
+        toast.error('Google Ads token expired — disconnect and reconnect.')
+        return
+      }
+      if (created > 0) {
+        toast.success(`Imported ${created} new Google Ads lead${created === 1 ? '' : 's'}${total != null ? ` · ${total} total in Loomrun` : ''}`)
+      } else {
+        toast.success(
+          res.ads_available != null
+            ? `Already up to date · ${res.ads_available} submissions checked · ${total ?? conn.leads_count} in Loomrun`
+            : 'Already up to date',
+        )
+      }
+      if ((res.customer_errors ?? 0) > 0) {
+        toast.message('Some Google Ads accounts could not be queried — check test-token access or MCC setup.')
+      }
+    },
+    onError: (err) => toast.error((err as Error).message || 'Google Ads sync failed'),
+  })
+
   const disconnect = useMutation({
     mutationFn: () =>
       apiFetch(`/v1/orgs/${orgId}/lead-connections/disconnect`, {
@@ -555,6 +620,10 @@ function ConnectionCard({ conn, orgId, onRefresh }: {
   })
 
   function handleConnect() {
+    if (conn.plan_locked) {
+      toast.error(`This integration requires the ${conn.required_plan ?? 'Scale'} plan.`)
+      return
+    }
     if (conn.method === 'built_in') {
       void connectManual.mutateAsync()
     } else {
@@ -582,6 +651,15 @@ function ConnectionCard({ conn, orgId, onRefresh }: {
           {conn.source_name === 'META_ADS' && conn.meta_available != null && (
             <span>Meta downloadable now: {conn.meta_available}</span>
           )}
+          {conn.source_name === 'GOOGLE_ADS' && conn.connected_email && (
+            <span>Account: {conn.connected_email}</span>
+          )}
+          {conn.source_name === 'GOOGLE_ADS' && conn.google_ads_customers != null && (
+            <span>Ads accounts: {conn.google_ads_customers}</span>
+          )}
+          {conn.source_name === 'GOOGLE_ADS' && conn.google_ads_available != null && (
+            <span>Submissions checked: {conn.google_ads_available}</span>
+          )}
           {conn.last_sync && (
             <span>
               Last sync: {new Date(conn.last_sync).toLocaleString('en-IN', {
@@ -599,6 +677,18 @@ function ConnectionCard({ conn, orgId, onRefresh }: {
             <p className="muted small" style={{ margin: '0.5rem 0 0' }}>
               {conn.sync_note
                 ?? 'Meta Ads Manager lifetime “leads” can be higher than Instant Form downloads. Meta only shares lead details for about 90 days; Loomrun keeps everything it has already synced plus new webhook leads.'}
+            </p>
+          )}
+
+          {conn.source_name === 'GOOGLE_ADS' && conn.status === 'connected' && conn.sync_note && (
+            <p className="muted small" style={{ margin: '0.5rem 0 0' }}>
+              {conn.sync_note}
+            </p>
+          )}
+
+          {conn.plan_locked && (
+            <p className="muted small" style={{ margin: '0.5rem 0 0', color: '#b45309' }}>
+              Requires {conn.required_plan ?? 'Scale'} plan to connect.
             </p>
           )}
 
@@ -623,13 +713,25 @@ function ConnectionCard({ conn, orgId, onRefresh }: {
             {conn.status === 'connected' ? 'Connected' : 'Not Connected'}
           </span>
           <div className="row" style={{ gap: '0.5rem' }}>
+            {conn.status === 'connected' && conn.source_name === 'GOOGLE_ADS' && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={syncGoogleAds.isPending}
+                onClick={() => void syncGoogleAds.mutateAsync()}
+                title="Pull lead form submissions from connected Google Ads accounts."
+              >
+                <RefreshCw size={14} style={{ marginRight: 4 }} />
+                {syncGoogleAds.isPending ? 'Syncing…' : 'Sync now'}
+              </button>
+            )}
             {conn.status === 'connected' && conn.source_name === 'META_ADS' && (
               <button
                 type="button"
                 className="btn btn-ghost btn-sm"
                 disabled={syncMeta.isPending}
                 onClick={() => void syncMeta.mutateAsync()}
-                title="Pulls every Instant Form lead Meta still exposes (~90 days), dedupes against what you already have. New leads also arrive via webhook; poll runs every 10 minutes."
+                title="Pulls every Instant Form lead Meta still exposes (~90 days), dedupes against what you already have. New leads also arrive via webhook; auto-sync runs every 10 seconds."
               >
                 <RefreshCw size={14} style={{ marginRight: 4 }} />
                 {syncMeta.isPending ? 'Syncing…' : 'Sync now'}
@@ -648,7 +750,7 @@ function ConnectionCard({ conn, orgId, onRefresh }: {
               <button
                 type="button"
                 className="btn btn-sm"
-                disabled={connectManual.isPending}
+                disabled={connectManual.isPending || conn.plan_locked}
                 onClick={handleConnect}
               >
                 {connectManual.isPending ? 'Connecting…' : 'Connect'}
@@ -699,6 +801,8 @@ export function LeadConnectionsPage() {
     const google = searchParams.get('google')
     const service = searchParams.get('service')
 
+    const googleAds = searchParams.get('google_ads')
+
     if (meta) {
       if (meta === 'success') {
         const pages = searchParams.get('pages')
@@ -724,7 +828,22 @@ export function LeadConnectionsPage() {
       void qc.invalidateQueries({ queryKey: ['google-connections', orgId] })
     }
 
-    if (meta || google) setSearchParams({}, { replace: true })
+    if (googleAds) {
+      if (googleAds === 'success') {
+        const customers = searchParams.get('customers')
+        setBanner({
+          type: 'success',
+          message: customers
+            ? `Google Ads connected — ${customers} ad account${customers === '1' ? '' : 's'} linked.`
+            : 'Google Ads connected successfully.',
+        })
+      } else {
+        setBanner({ type: 'error', message: 'Google Ads authorisation failed. Please try again.' })
+      }
+      void qc.invalidateQueries({ queryKey: ['lead-connections', orgId] })
+    }
+
+    if (meta || google || googleAds) setSearchParams({}, { replace: true })
   }, [searchParams, setSearchParams, qc, orgId])
 
   const q = useQuery({
@@ -762,7 +881,7 @@ export function LeadConnectionsPage() {
   }
 
   if (!orgId) return (
-    <><div className="page-header"><h1>Integrations</h1></div></>
+    <PageHeader title="Integrations" description="Select an organization." />
   )
 
   const items = q.data?.items ?? []
@@ -777,17 +896,25 @@ export function LeadConnectionsPage() {
   const connectedCount = items.filter((c) => c.status === 'connected').length
   const automationsConnectedCount = automationsForRender.filter((c) => c.status === 'connected').length
   const googleConnectedCount = googleItems.filter((c) => c.status === 'connected').length
+  const totalIntegrations = items.length + googleItems.length + automationsForRender.length
+  const totalConnected = connectedCount + googleConnectedCount + automationsConnectedCount
+  const needsAttention = items.filter((c) => c.plan_locked).length
+  const notConnected = Math.max(0, totalIntegrations - totalConnected)
 
   return (
     <>
-      <div className="page-header">
-        <h1>Integrations</h1>
-        <p>
-          {connectedCount} lead source{connectedCount !== 1 ? 's' : ''} · {googleConnectedCount} Google service{googleConnectedCount !== 1 ? 's' : ''} connected
-        </p>
-      </div>
+      <PageHeader
+        title="Integrations"
+        description="Connect your favorite tools and automate your workflow."
+      />
 
       <div className="page-body stack" style={{ gap: '2rem' }}>
+        <div className="metrics-grid">
+          <MetricCard icon={Link2} tone="purple" label="Total integrations" value={totalIntegrations} hint="Available services" />
+          <MetricCard icon={Link2} tone="green" label="Connected" value={totalConnected} />
+          <MetricCard icon={Link2} tone="amber" label="Needs attention" value={needsAttention} hint="Plan or reconnect" />
+          <MetricCard icon={Link2} tone="slate" label="Not connected" value={notConnected} />
+        </div>
         {banner && (
           <div
             className="card"

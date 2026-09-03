@@ -89,6 +89,15 @@ enum ProductionStage {
   DELIVERED
 }
 
+enum OrderStatus {
+  ON_TRACK
+  AT_RISK
+  DELAYED
+  ON_HOLD
+  COMPLETED
+  CANCELLED
+}
+
 enum PaymentStatus {
   PENDING
   PARTIAL
@@ -103,6 +112,10 @@ enum ProductionActivityType {
   EXPENSE_RECORDED
   BUDGET_SET
   NAME_CHANGED
+  NOTE_ADDED
+  STATUS_CHANGED
+  ETA_UPDATED
+  SHIPMENT_UPDATED
 }
 
 enum OutboundChannel {
@@ -234,6 +247,8 @@ model Membership {
   userId         String         @map("user_id")
   organizationId String         @map("organization_id")
   role           MembershipRole @default(VIEWER)
+  /// Personal WhatsApp number for callback reminders (org Baileys → this phone).
+  whatsappPhone  String?        @map("whatsapp_phone")
   createdAt      DateTime       @default(now()) @map("created_at")
 
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -263,6 +278,10 @@ model Lead {
   notes            String?
   assigneeId       String?     @map("assignee_id")
   nextFollowUpAt   DateTime?   @map("next_follow_up_at")
+  /// Set when an in-app due reminder was shown/acked for the current nextFollowUpAt.
+  followUpRemindedAt DateTime? @map("follow_up_reminded_at")
+  /// Set when a WhatsApp callback reminder was sent for the current nextFollowUpAt.
+  followUpWaRemindedAt DateTime? @map("follow_up_wa_reminded_at")
   lastActivityAt   DateTime?   @map("last_activity_at")
   estimatedValue   Decimal?    @map("estimated_value") @db.Decimal(12, 2)
   metaLeadgenId    String?     @map("meta_leadgen_id")
@@ -276,14 +295,19 @@ model Lead {
   metaAdName       String?     @map("meta_ad_name")
   metaFormName     String?     @map("meta_form_name")
   indiamartQueryId String?     @map("indiamart_query_id")
+  googleAdsSubmissionId String? @map("google_ads_submission_id")
+  googleAdsCustomerId   String? @map("google_ads_customer_id")
+  googleAdsCampaignId   String? @map("google_ads_campaign_id")
+  googleAdsCampaignName String? @map("google_ads_campaign_name")
+  googleAdsFormId       String? @map("google_ads_form_id")
   createdAt        DateTime    @default(now()) @map("created_at")
   updatedAt        DateTime    @updatedAt @map("updated_at")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   assignee     User?        @relation("LeadAssignee", fields: [assigneeId], references: [id])
   activities   LeadActivity[]
-  quotations   Quotation[]
-  production           ProductionOrder?
+  quotations           Quotation[]
+  productionOrders     ProductionOrder[]
   productionActivities ProductionActivity[]
   threads      WhatsAppThread[]
   outbound     OutboundMessage[]
@@ -294,6 +318,7 @@ model Lead {
   @@index([organizationId, nextFollowUpAt])
   @@index([organizationId, metaCampaignId])
   @@index([organizationId, indiamartQueryId])
+  @@index([organizationId, googleAdsSubmissionId])
   @@map("leads")
 }
 
@@ -319,6 +344,7 @@ model Quotation {
   leadId         String           @map("lead_id")
   authorId       String?          @map("author_id")
   number         String
+  title          String?
   invoiceNumber  String?          @map("invoice_number")
   version        Int              @default(1)
   status         QuotationStatus  @default(DRAFT)
@@ -383,17 +409,29 @@ model QuotationLine {
 }
 
 model ProductionOrder {
-  id             String           @id @default(cuid())
-  organizationId String           @map("organization_id")
-  leadId         String           @unique @map("lead_id")
-  quotationId    String?          @map("quotation_id")
-  name           String?
-  stage          ProductionStage  @default(PENDING)
-  delayFlag      Boolean          @default(false) @map("delay_flag")
-  budgetCents    Int?             @map("budget_cents")
-  stageEnteredAt DateTime         @default(now()) @map("stage_entered_at")
-  createdAt      DateTime         @default(now()) @map("created_at")
-  updatedAt      DateTime         @updatedAt @map("updated_at")
+  id                   String           @id @default(cuid())
+  organizationId       String           @map("organization_id")
+  leadId               String           @map("lead_id")
+  quotationId          String?          @map("quotation_id")
+  orderNumber          String           @map("order_number")
+  name                 String?
+  stage                ProductionStage  @default(PENDING)
+  orderStatus          OrderStatus      @default(ON_TRACK) @map("order_status")
+  delayFlag            Boolean          @default(false) @map("delay_flag")
+  budgetCents          Int?             @map("budget_cents")
+  expectedCompletionAt DateTime?        @map("expected_completion_at")
+  expectedDispatchAt   DateTime?        @map("expected_dispatch_at")
+  actualDispatchAt     DateTime?        @map("actual_dispatch_at")
+  courierName          String?          @map("courier_name")
+  courierTrackingNo    String?          @map("courier_tracking_no")
+  shippingNotes        String?          @map("shipping_notes")
+  onHoldReason         String?          @map("on_hold_reason")
+  cancelledAt          DateTime?        @map("cancelled_at")
+  trackingToken        String?          @unique @map("tracking_token")
+  trackingEnabled      Boolean          @default(true) @map("tracking_enabled")
+  stageEnteredAt       DateTime         @default(now()) @map("stage_entered_at")
+  createdAt            DateTime         @default(now()) @map("created_at")
+  updatedAt            DateTime         @updatedAt @map("updated_at")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   lead         Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
@@ -402,7 +440,10 @@ model ProductionOrder {
   expenses     Expense[]
   activities   ProductionActivity[]
 
+  @@unique([organizationId, orderNumber])
   @@index([organizationId, stage])
+  @@index([organizationId, orderStatus])
+  @@index([leadId])
   @@map("production_orders")
 }
 

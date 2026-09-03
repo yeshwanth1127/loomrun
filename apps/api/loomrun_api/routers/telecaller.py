@@ -83,8 +83,17 @@ async def _apply_lead_updates_from_call(
     if body.estimated_value is not None:
         update_data["estimatedValue"] = body.estimated_value
     follow_up = body.next_call_at
+    outcome_name = body.outcome.name if hasattr(body.outcome, "name") else str(body.outcome)
     if follow_up is not None:
         update_data["nextFollowUpAt"] = follow_up
+        # New schedule → allow reminders again
+        update_data["followUpRemindedAt"] = None
+        update_data["followUpWaRemindedAt"] = None
+    elif outcome_name != "CALLBACK_SCHEDULED":
+        # Non–Follow Up outcome clears the scheduled follow-up
+        update_data["nextFollowUpAt"] = None
+        update_data["followUpRemindedAt"] = None
+        update_data["followUpWaRemindedAt"] = None
 
     if body.product_interest is not None or body.phone is not None or body.email is not None or body.city is not None:
         update_data["leadScore"] = _compute_lead_score(
@@ -163,6 +172,12 @@ async def log_call(
     lead = await prisma.lead.find_first(where={"id": body.lead_id, "organizationId": ctx.organization_id})
     if not lead:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Lead not found")
+    outcome_name = body.outcome.name if hasattr(body.outcome, "name") else str(body.outcome)
+    if outcome_name == "CALLBACK_SCHEDULED" and body.next_call_at is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Follow-up date/time is required when logging Follow Up",
+        )
     prev = await prisma.telecallercalllog.count(where={"leadId": body.lead_id})
     attempt = prev + 1
     row = await prisma.telecallercalllog.create(

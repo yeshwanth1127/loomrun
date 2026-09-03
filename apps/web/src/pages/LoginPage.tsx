@@ -2,6 +2,7 @@ import { motion } from 'framer-motion'
 import type { FormEvent } from 'react'
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { ThemeToggle } from '../components/ui/ThemeToggle'
 import { useAuth } from '../context/AuthContext'
 
 export function LoginPage() {
@@ -27,6 +28,9 @@ export function LoginPage() {
       </div>
 
       <div className="login-panel">
+        <div className="login-panel-theme">
+          <ThemeToggle />
+        </div>
         <motion.div
           className="login-panel-inner"
           initial={{ opacity: 0, y: 16 }}

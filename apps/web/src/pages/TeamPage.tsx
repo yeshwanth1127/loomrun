@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Shield, UserPlus, Users } from 'lucide-react'
 import type { FormEvent } from 'react'
 import { useState } from 'react'
+import { toast } from 'sonner'
+import { PageHeader } from '../components/ui/PageHeader'
 import { useAuth } from '../context/AuthContext'
 import { apiFetch } from '../lib/api'
 import type { SubscriptionInfo } from '../lib/entitlements'
@@ -12,6 +14,7 @@ type Member = {
   email: string
   name: string | null
   role: string
+  whatsapp_phone: string | null
   created_at: string
 }
 
@@ -32,6 +35,8 @@ export function TeamPage() {
   const [password, setPassword] = useState('')
   const [name, setName] = useState('')
   const [role, setRole] = useState<string>('TELECALLER')
+  const [whatsappPhone, setWhatsappPhone] = useState('')
+  const [editingPhone, setEditingPhone] = useState<Record<string, string>>({})
 
   const membership = me?.organizations.find((o) => o.organization.id === orgId)
   const isOwner = membership?.role === 'OWNER'
@@ -52,24 +57,41 @@ export function TeamPage() {
     mutationFn: () =>
       apiFetch(`/v1/orgs/${orgId}/members`, {
         method: 'POST',
-        json: { email, password, name: name || undefined, role },
+        json: {
+          email,
+          password,
+          name: name || undefined,
+          role,
+          whatsapp_phone: whatsappPhone || undefined,
+        },
       }),
     onSuccess: () => {
-      setEmail(''); setPassword(''); setName('')
+      setEmail(''); setPassword(''); setName(''); setWhatsappPhone('')
       void qc.invalidateQueries({ queryKey: ['org-members', orgId] })
       void qc.invalidateQueries({ queryKey: ['subscription', orgId] })
     },
   })
 
+  const updatePhone = useMutation({
+    mutationFn: (p: { membership_id: string; whatsapp_phone: string }) =>
+      apiFetch(`/v1/orgs/${orgId}/members/${p.membership_id}`, {
+        method: 'PATCH',
+        json: { whatsapp_phone: p.whatsapp_phone || null },
+      }),
+    onSuccess: () => {
+      toast.success('WhatsApp number saved')
+      void qc.invalidateQueries({ queryKey: ['org-members', orgId] })
+    },
+    onError: (err: Error) => toast.error(err.message || 'Failed to save phone'),
+  })
+
   if (!orgId) return (
-    <>
-      <div className="page-header"><h1>Team</h1><p>Select an organization.</p></div>
-    </>
+    <PageHeader title="Team" description="Select an organization." />
   )
 
   if (!isOwner) return (
     <>
-      <div className="page-header"><h1>Team</h1><p>Manage your organization members and roles.</p></div>
+      <PageHeader title="Team" description="Manage your organization members and roles." />
       <div className="page-body">
         <div className="card" style={{ maxWidth: 420 }}>
           <Shield size={24} style={{ color: '#94a3b8', marginBottom: '0.5rem' }} />
@@ -83,15 +105,17 @@ export function TeamPage() {
 
   return (
     <>
-      <div className="page-header">
-        <h1>Team</h1>
-        <p>
-          {members.length} member{members.length !== 1 ? 's' : ''} · {membership?.organization?.name}
-          {subQ.data && (
-            <> · {subQ.data.seats.used}/{subQ.data.seats.limit} seats</>
-          )}
-        </p>
-      </div>
+      <PageHeader
+        title="Team"
+        description={
+          <>
+            {members.length} member{members.length !== 1 ? 's' : ''} · {membership?.organization?.name}
+            {subQ.data && (
+              <> · {subQ.data.seats.used}/{subQ.data.seats.limit} seats</>
+            )}
+          </>
+        }
+      />
 
       <div className="page-body stack" style={{ gap: '1.5rem' }}>
 
@@ -128,6 +152,20 @@ export function TeamPage() {
                   </select>
                 </div>
               </div>
+              <div className="form-field">
+                <label className="input-label">WhatsApp number (for follow-up reminders)</label>
+                <input
+                  className="input"
+                  type="tel"
+                  placeholder="9876543210"
+                  value={whatsappPhone}
+                  onChange={(e) => setWhatsappPhone(e.target.value)}
+                  style={{ width: '100%', maxWidth: 280 }}
+                />
+                <p className="muted small" style={{ marginTop: '0.25rem' }}>
+                  Reminders are sent from your org’s linked WhatsApp to this number.
+                </p>
+              </div>
               {create.error && <p className="error">{(create.error as Error).message}</p>}
               {create.isSuccess && <p className="success">Member added. They can sign in with that email and password.</p>}
               <div>
@@ -151,12 +189,14 @@ export function TeamPage() {
                 <tr>
                   <th>Member</th>
                   <th>Role</th>
+                  <th>WhatsApp</th>
                   <th>Joined</th>
                 </tr>
               </thead>
               <tbody>
                 {members.map((m) => {
                   const initials = (m.name ?? m.email).slice(0, 2).toUpperCase()
+                  const draft = editingPhone[m.membership_id] ?? m.whatsapp_phone ?? ''
                   return (
                     <tr key={m.membership_id}>
                       <td>
@@ -170,6 +210,33 @@ export function TeamPage() {
                       </td>
                       <td>
                         <span className={`badge ${ROLE_COLOR[m.role] ?? 'badge-slate'}`}>{m.role}</span>
+                      </td>
+                      <td>
+                        <div className="row" style={{ gap: '0.35rem', alignItems: 'center' }}>
+                          <input
+                            className="input"
+                            type="tel"
+                            placeholder="WhatsApp #"
+                            value={draft}
+                            onChange={(e) =>
+                              setEditingPhone((prev) => ({ ...prev, [m.membership_id]: e.target.value }))
+                            }
+                            style={{ width: 140, fontSize: '0.8rem' }}
+                          />
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            disabled={updatePhone.isPending || draft === (m.whatsapp_phone ?? '')}
+                            onClick={() =>
+                              void updatePhone.mutateAsync({
+                                membership_id: m.membership_id,
+                                whatsapp_phone: draft,
+                              })
+                            }
+                          >
+                            Save
+                          </button>
+                        </div>
                       </td>
                       <td className="muted small">
                         {new Date(m.created_at).toLocaleDateString('en-IN')}

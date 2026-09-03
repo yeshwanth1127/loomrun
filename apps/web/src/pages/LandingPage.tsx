@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { Link } from 'react-router-dom'
+import { ThemeToggle } from '../components/ui/ThemeToggle'
 import '../styles/landing.css'
 
 /* ── Inline icons, drawn to match the landing page line weight ── */
@@ -148,6 +149,7 @@ export function LandingPage() {
           <a href="#agent">Agent</a>
           <a href="#features">Features</a>
           <a href="#pricing">Pricing</a>
+          <ThemeToggle />
           <Link to="/login" className="nav-cta">Log in</Link>
           <Link to="/login" className="nav-btn">Sign up</Link>
         </div>

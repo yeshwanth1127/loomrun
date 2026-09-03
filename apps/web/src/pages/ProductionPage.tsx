@@ -1,23 +1,32 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  AlertTriangle,
   Check,
   ChevronDown,
   ChevronRight,
+  MessageCircle,
   Pencil,
   Plus,
+  QrCode,
   Trash2,
   Wallet,
   X,
   Zap,
 } from 'lucide-react'
 import type { FormEvent } from 'react'
-import { useState } from 'react'
+import { useDeferredValue, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { LeadSearchSelect } from '../components/LeadSearchSelect'
+import { RowActions } from '../components/RowActions'
+import { EmptyState } from '../components/ui/EmptyState'
+import { FilterToolbar } from '../components/ui/FilterToolbar'
+import { PageHeader } from '../components/ui/PageHeader'
+import { BarList, DonutChart, DonutLegend, InsightCard, InsightGrid, MetricCard } from '../components/ui/dashboard'
+import { TableSkeleton } from '../components/ui/Skeleton'
 import { useAuth } from '../context/AuthContext'
 import { useDateFilter } from '../context/DateFilterContext'
 import { apiFetch } from '../lib/api'
+import { isOwnerRole, membershipForOrg } from '../lib/membership'
 
 type Expense = {
   id: string
@@ -51,6 +60,12 @@ type Activity = {
   body: string
   user_name: string | null
   created_at: string
+  metadata?: {
+    internal_note?: string | null
+    customer_note?: string | null
+    from_stage?: string
+    to_stage?: string
+  } | null
 }
 type ActivityGroup = {
   lead_id: string
@@ -62,13 +77,26 @@ type Row = {
   id: string
   lead_id: string
   quotation_id: string | null
+  order_number: string
   name: string | null
   display_name: string | null
   stage: string
+  order_status: string
   delay_flag: boolean
   budget_cents: number | null
+  expected_completion_at: string | null
+  expected_dispatch_at: string | null
+  actual_dispatch_at: string | null
+  courier_name: string | null
+  courier_tracking_no: string | null
+  shipping_notes: string | null
+  on_hold_reason: string | null
+  days_until_dispatch: number | null
+  tracking_token: string | null
+  tracking_enabled: boolean
   stage_entered_at: string
   lead_title: string | null
+  lead_phone: string | null
   payments: Payment[]
   expenses: Expense[]
   pnl: Pnl
@@ -135,6 +163,30 @@ const ACTIVITY_ICONS: Record<string, string> = {
   EXPENSE_RECORDED: '🧾',
   BUDGET_SET: '📊',
   NAME_CHANGED: '✎',
+  NOTE_ADDED: '📝',
+  STATUS_CHANGED: '⚑',
+  ETA_UPDATED: '📅',
+  SHIPMENT_UPDATED: '🚚',
+}
+
+const ORDER_STATUSES = ['ON_TRACK', 'AT_RISK', 'DELAYED', 'ON_HOLD', 'COMPLETED', 'CANCELLED'] as const
+
+const STATUS_LABELS: Record<string, string> = {
+  ON_TRACK: 'On Track',
+  AT_RISK: 'At Risk',
+  DELAYED: 'Delayed',
+  ON_HOLD: 'On Hold',
+  COMPLETED: 'Completed',
+  CANCELLED: 'Cancelled',
+}
+
+const STATUS_BADGE: Record<string, string> = {
+  ON_TRACK: 'badge-green',
+  AT_RISK: 'badge-amber',
+  DELAYED: 'badge-red',
+  ON_HOLD: 'badge-slate',
+  COMPLETED: 'badge-green',
+  CANCELLED: 'badge-red',
 }
 
 function daysAgo(dt: string) {
@@ -143,6 +195,25 @@ function daysAgo(dt: string) {
   if (days === 0) return 'today'
   if (days === 1) return '1 day'
   return `${days} days`
+}
+
+function fmtDate(dt: string | null | undefined) {
+  if (!dt) return '—'
+  return new Date(dt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+function toDateInput(dt: string | null | undefined) {
+  if (!dt) return ''
+  const d = new Date(dt)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toISOString().slice(0, 10)
+}
+
+function etaLabel(days: number | null) {
+  if (days == null) return null
+  if (days < 0) return `${Math.abs(days)} day${Math.abs(days) === 1 ? '' : 's'} overdue`
+  if (days === 0) return 'Due today'
+  return `${days} day${days === 1 ? '' : 's'} remaining`
 }
 
 function fmtDateTime(dt: string) {
@@ -163,12 +234,15 @@ function rupeesToCents(value: string): number | null {
 }
 
 export function ProductionPage() {
-  const { orgId } = useAuth()
+  const { me, orgId } = useAuth()
+  const membership = membershipForOrg(me, orgId)
+  const isOwner = isOwnerRole(membership) || !!me?.is_super_admin
   const { dayParam, appendDay, isAll } = useDateFilter()
   const qc = useQueryClient()
   const [showForm, setShowForm] = useState(false)
   const [leadId, setLeadId] = useState('')
   const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [trackingId, setTrackingId] = useState<string | null>(null)
   const [editingNameId, setEditingNameId] = useState<string | null>(null)
   const [nameDraft, setNameDraft] = useState('')
   const [budgetDraft, setBudgetDraft] = useState('')
@@ -179,16 +253,33 @@ export function ProductionPage() {
   const [paymentAmount, setPaymentAmount] = useState('')
   const [paymentStatus, setPaymentStatus] = useState('PAID')
   const [paymentNote, setPaymentNote] = useState('')
+  const [stageModal, setStageModal] = useState<{ id: string; stage: string; label: string } | null>(null)
+  const [internalNote, setInternalNote] = useState('')
+  const [customerNote, setCustomerNote] = useState('')
+  const [etaCompletion, setEtaCompletion] = useState('')
+  const [etaDispatch, setEtaDispatch] = useState('')
+  const [courierName, setCourierName] = useState('')
+  const [courierTracking, setCourierTracking] = useState('')
+  const [shippingNotes, setShippingNotes] = useState('')
+  const [filterPreset, setFilterPreset] = useState<string>('active')
+  const [filterStage, setFilterStage] = useState('')
+  const [filterStatus, setFilterStatus] = useState('')
+  const [searchText, setSearchText] = useState('')
+  const deferredSearch = useDeferredValue(searchText)
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({})
   const toggleGroup = (id: string) =>
     setCollapsedGroups((prev) => ({ ...prev, [id]: !prev[id] }))
 
   const q = useQuery({
-    queryKey: ['production', orgId, dayParam],
+    queryKey: ['production', orgId, dayParam, filterPreset, filterStage, filterStatus, deferredSearch],
     enabled: !!orgId,
     queryFn: () => {
       const params = new URLSearchParams()
       appendDay(params)
+      if (filterPreset) params.set('filter', filterPreset)
+      if (filterStage) params.set('stage', filterStage)
+      if (filterStatus) params.set('order_status', filterStatus)
+      if (deferredSearch.trim()) params.set('search', deferredSearch.trim())
       return apiFetch<{ items: Row[] }>(`/v1/orgs/${orgId}/production?${params}`)
     },
   })
@@ -220,16 +311,91 @@ export function ProductionPage() {
   })
 
   const advance = useMutation({
-    mutationFn: (p: { id: string; stage: string }) =>
-      apiFetch(`/v1/orgs/${orgId}/production/${p.id}`, { method: 'PATCH', json: { stage: p.stage } }),
-    onSuccess: () => invalidateProduction(),
+    mutationFn: (p: {
+      id: string
+      stage: string
+      internal_note?: string
+      customer_note?: string
+    }) =>
+      apiFetch(`/v1/orgs/${orgId}/production/${p.id}`, {
+        method: 'PATCH',
+        json: {
+          stage: p.stage,
+          internal_note: p.internal_note || null,
+          customer_note: p.customer_note || null,
+        },
+      }),
+    onSuccess: () => {
+      setStageModal(null)
+      setInternalNote('')
+      setCustomerNote('')
+      invalidateProduction()
+      toast.success('Stage updated')
+    },
+    onError: (err: Error) => toast.error(err.message || 'Failed to update stage'),
+  })
+
+  const patchOrder = useMutation({
+    mutationFn: (p: { id: string; json: Record<string, unknown> }) =>
+      apiFetch(`/v1/orgs/${orgId}/production/${p.id}`, { method: 'PATCH', json: p.json }),
+    onSuccess: () => {
+      invalidateProduction()
+      toast.success('Order updated')
+    },
+    onError: (err: Error) => toast.error(err.message || 'Failed to update order'),
+  })
+
+  const regenTracking = useMutation({
+    mutationFn: (id: string) =>
+      apiFetch(`/v1/orgs/${orgId}/production/${id}/tracking/regenerate`, { method: 'POST' }),
+    onSuccess: () => {
+      invalidateProduction()
+      toast.success('Tracking link regenerated')
+    },
+    onError: (err: Error) => toast.error(err.message || 'Failed to regenerate link'),
+  })
+
+  const toggleTracking = useMutation({
+    mutationFn: (p: { id: string; enabled: boolean }) =>
+      apiFetch(`/v1/orgs/${orgId}/production/${p.id}/tracking`, {
+        method: 'PATCH',
+        json: { enabled: p.enabled },
+      }),
+    onSuccess: (_d, vars) => {
+      invalidateProduction()
+      toast.success(vars.enabled ? 'Tracking enabled' : 'Tracking disabled')
+    },
+    onError: (err: Error) => toast.error(err.message || 'Failed to update tracking'),
+  })
+
+  const shareWhatsApp = useMutation({
+    mutationFn: (p: { lead_id: string; order_number: string; token: string }) => {
+      const link = `${window.location.origin}/track/${p.token}`
+      const message =
+        `Hi! You can track your order ${p.order_number} here:\n${link}\n\n— Loomrun`
+      return apiFetch<{ sent?: boolean; status?: string }>(
+        `/v1/orgs/${orgId}/integrations/whatsapp/outbound`,
+        {
+          method: 'POST',
+          json: { lead_id: p.lead_id, message },
+        },
+      )
+    },
+    onSuccess: (data) => {
+      if (data?.sent === false) {
+        toast.error('WhatsApp did not deliver the message. Check Integrations → WhatsApp.')
+        return
+      }
+      toast.success('Tracking link sent on WhatsApp')
+    },
+    onError: (err: Error) => toast.error(err.message || 'Failed to send on WhatsApp'),
   })
 
   const remove = useMutation({
     mutationFn: (id: string) =>
       apiFetch(`/v1/orgs/${orgId}/production/${id}`, { method: 'DELETE' }),
     onSuccess: () => {
-      toast.success('Production order removed')
+      toast.success('Order removed')
       invalidateProduction()
     },
     onError: (err: Error) => toast.error(err.message || 'Failed to remove order'),
@@ -324,13 +490,19 @@ export function ProductionPage() {
     onError: (err: Error) => toast.error(err.message || 'Failed to add payment'),
   })
 
-  function openFinance(row: Row) {
-    if (expandedId === row.id) {
+  function openFinance(row: Row, opts?: { force?: boolean }) {
+    if (!opts?.force && expandedId === row.id) {
       setExpandedId(null)
       return
     }
     setExpandedId(row.id)
+    setTrackingId(null)
     setBudgetDraft(row.budget_cents != null ? String(row.budget_cents / 100) : '')
+    setEtaCompletion(toDateInput(row.expected_completion_at))
+    setEtaDispatch(toDateInput(row.expected_dispatch_at))
+    setCourierName(row.courier_name ?? '')
+    setCourierTracking(row.courier_tracking_no ?? '')
+    setShippingNotes(row.shipping_notes ?? '')
     setExpenseAmount('')
     setExpenseCategory('FABRIC')
     setExpenseVendor('')
@@ -340,6 +512,21 @@ export function ProductionPage() {
     setPaymentNote('')
   }
 
+  function openTracking(row: Row, opts?: { force?: boolean }) {
+    if (!opts?.force && trackingId === row.id) {
+      setTrackingId(null)
+      return
+    }
+    setTrackingId(row.id)
+    setExpandedId(null)
+  }
+
+  function requestStageChange(id: string, stage: string) {
+    setStageModal({ id, stage, label: STAGE_LABELS[stage] ?? stage })
+    setInternalNote('')
+    setCustomerNote('')
+  }
+
   if (!orgId) return (
     <>
       <div className="page-header"><h1>Production</h1><p>Select an organization.</p></div>
@@ -347,31 +534,97 @@ export function ProductionPage() {
   )
 
   const orders = q.data?.items ?? []
-  const delayedCount = orders.filter((r) => r.delay_flag).length
-  const overrunCount = orders.filter((r) => r.pnl?.over_budget).length
+  const delayedCount = orders.filter((r) => r.order_status === 'DELAYED' || r.delay_flag).length
+  const overrunCount = isOwner ? orders.filter((r) => r.pnl?.over_budget).length : 0
+  const completedCount = orders.filter((r) => r.stage === 'DELIVERED' || r.order_status === 'COMPLETED').length
+  const inProgressCount = orders.filter((r) => r.stage !== 'DELIVERED' && r.order_status !== 'COMPLETED' && r.order_status !== 'CANCELLED').length
+  const statusOptions = isOwner ? ORDER_STATUSES : ORDER_STATUSES.filter((s) => s !== 'CANCELLED')
 
   return (
     <>
-      <div className="page-header">
-        <h1>Production</h1>
-        <p>
-          {orders.length} order{orders.length !== 1 ? 's' : ''} in pipeline
-          {isAll ? '' : ` · Started ${dayParam}`}
-          {delayedCount > 0 && <span className="error"> · {delayedCount} delayed</span>}
-          {overrunCount > 0 && <span className="error"> · {overrunCount} over budget</span>}
-        </p>
-      </div>
+      <PageHeader
+        title="Production"
+        badge={`${orders.length} orders`}
+        description="Track all production orders from start to finish."
+        actions={
+          isOwner ? (
+            <button type="button" className="btn" onClick={() => setShowForm((v) => !v)}>
+              <Plus size={15} />
+              Start order
+            </button>
+          ) : undefined
+        }
+        toolbar={
+          <FilterToolbar
+            defaultOpen={!!(filterPreset !== 'active' || filterStage || filterStatus || searchText)}
+            trailing={
+              (filterPreset !== 'active' || filterStage || filterStatus || searchText) ? (
+                <button
+                  type="button"
+                  className="btn btn-sm btn-ghost"
+                  onClick={() => {
+                    setFilterPreset('active')
+                    setFilterStage('')
+                    setFilterStatus('')
+                    setSearchText('')
+                  }}
+                >
+                  Reset
+                </button>
+              ) : null
+            }
+          >
+            <div className="form-field" style={{ margin: 0, minWidth: 160 }}>
+              <label className="input-label">Search</label>
+              <input
+                className="input"
+                placeholder="Order # or customer…"
+                value={searchText}
+                onChange={(e) => setSearchText(e.target.value)}
+              />
+            </div>
+            <div className="form-field" style={{ margin: 0 }}>
+              <label className="input-label">Show</label>
+              <select className="select" value={filterPreset} onChange={(e) => setFilterPreset(e.target.value)}>
+                <option value="">All</option>
+                <option value="active">Active</option>
+                <option value="delayed">Delayed</option>
+                <option value="on_hold">On Hold</option>
+                <option value="shipped">Shipped</option>
+                <option value="completed">Completed</option>
+              </select>
+            </div>
+            <div className="form-field" style={{ margin: 0 }}>
+              <label className="input-label">Stage</label>
+              <select className="select" value={filterStage} onChange={(e) => setFilterStage(e.target.value)}>
+                <option value="">All stages</option>
+                {STAGES.map((s) => (
+                  <option key={s} value={s}>{STAGE_LABELS[s]}</option>
+                ))}
+              </select>
+            </div>
+            <div className="form-field" style={{ margin: 0 }}>
+              <label className="input-label">Status</label>
+              <select className="select" value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
+                <option value="">All statuses</option>
+                {statusOptions.map((s) => (
+                  <option key={s} value={s}>{STATUS_LABELS[s]}</option>
+                ))}
+              </select>
+            </div>
+          </FilterToolbar>
+        }
+      />
 
       <div className="page-body stack" style={{ gap: '1.25rem' }}>
-        <div className="row spread">
-          <span />
-          <button type="button" className="btn" onClick={() => setShowForm((v) => !v)}>
-            <Plus size={15} />
-            Start order
-          </button>
+        <div className="metrics-grid">
+          <MetricCard icon={Zap} tone="purple" label="Total orders" value={orders.length} hint={isAll ? 'This period' : dayParam} />
+          <MetricCard icon={Zap} tone="green" label="In progress" value={inProgressCount} hint={orders.length ? `${((inProgressCount / orders.length) * 100).toFixed(1)}%` : '0%'} />
+          <MetricCard icon={Zap} tone="green" label="Completed" value={completedCount} hint={orders.length ? `${((completedCount / orders.length) * 100).toFixed(1)}%` : '0%'} />
+          <MetricCard icon={Zap} tone="red" label="Delayed" value={delayedCount} />
+          {isOwner && <MetricCard icon={Wallet} tone="amber" label="Over budget" value={overrunCount} />}
         </div>
-
-        {showForm && (
+        {isOwner && showForm && (
           <div className="card" style={{ maxWidth: 480 }}>
             <div style={{ fontWeight: 700, marginBottom: '1rem' }}>Start Production Order</div>
             <form
@@ -399,8 +652,22 @@ export function ProductionPage() {
           </div>
         )}
 
-        {q.isLoading && <p className="muted">Loading orders…</p>}
+        {q.isLoading && <TableSkeleton rows={5} />}
         {q.error && <p className="error">{(q.error as Error).message}</p>}
+
+        {!q.isLoading && orders.length === 0 && (
+          <EmptyState
+            title="No orders in pipeline"
+            description="Start an order from a won lead to track production."
+            action={
+              isOwner ? (
+                <button type="button" className="btn" onClick={() => setShowForm(true)}>
+                  <Plus size={15} /> Start order
+                </button>
+              ) : undefined
+            }
+          />
+        )}
 
         {orders.length > 0 ? (
           <div className="stack" style={{ gap: '0.75rem' }}>
@@ -410,14 +677,16 @@ export function ProductionPage() {
               const nextStage = STAGES[stageIdx + 1]
               const pnl = r.pnl
               const open = expandedId === r.id
+              const trackingOpen = trackingId === r.id
+              const panelOpen = open || trackingOpen
 
               return (
                 <div
                   key={r.id}
                   className="card"
-                  style={{ borderLeft: `3px solid ${r.delay_flag || pnl?.over_budget ? '#ef4444' : (STAGE_COLOR[r.stage] ?? '#6366f1')}` }}
+                  style={{ borderLeft: `3px solid ${r.order_status === 'DELAYED' || r.delay_flag || (isOwner && pnl?.over_budget) ? '#ef4444' : (STAGE_COLOR[r.stage] ?? '#6366f1')}` }}
                 >
-                  <div className="row spread" style={{ marginBottom: '0.75rem' }}>
+                  <div className="row spread" style={{ marginBottom: '0.75rem', gap: '0.75rem', flexWrap: 'wrap' }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       {editingNameId === r.id ? (
                         <form
@@ -459,6 +728,9 @@ export function ProductionPage() {
                         </form>
                       ) : (
                         <div style={{ fontWeight: 700, fontSize: '0.95rem' }} className="row" >
+                          <span style={{ marginRight: '0.35rem', fontFamily: 'var(--font-mono, monospace)', fontSize: '0.85rem', color: 'var(--muted-fg)' }}>
+                            {r.order_number}
+                          </span>
                           <span style={{ marginRight: '0.35rem' }}>
                             {r.display_name ?? r.lead_title ?? 'Unnamed lead'}
                           </span>
@@ -471,13 +743,15 @@ export function ProductionPage() {
                           >
                             <Pencil size={13} />
                           </button>
-                          {r.delay_flag && (
-                            <span style={{ marginLeft: '0.5rem', color: '#ef4444', fontSize: '0.8rem', fontWeight: 600 }}>
-                              <AlertTriangle size={13} style={{ verticalAlign: 'middle', marginRight: 3 }} />
-                              Delayed
+                          <span className="badge badge-slate" style={{ marginLeft: '0.35rem' }}>
+                            {STAGE_LABELS[r.stage] ?? r.stage}
+                          </span>
+                          {r.order_status && (
+                            <span className={`badge ${STATUS_BADGE[r.order_status] ?? 'badge-slate'}`} style={{ marginLeft: '0.35rem' }}>
+                              {STATUS_LABELS[r.order_status] ?? r.order_status}
                             </span>
                           )}
-                          {pnl?.over_budget && (
+                          {isOwner && pnl?.over_budget && (
                             <span style={{ marginLeft: '0.5rem', color: '#ef4444', fontSize: '0.8rem', fontWeight: 600 }}>
                               Over budget
                             </span>
@@ -489,58 +763,111 @@ export function ProductionPage() {
                           ? `Lead: ${r.lead_title} · `
                           : ''}
                         In {STAGE_LABELS[r.stage] ?? r.stage} for {daysAgo(r.stage_entered_at)}
+                        {r.expected_dispatch_at && (
+                          <> · Dispatch {fmtDate(r.expected_dispatch_at)}
+                            {etaLabel(r.days_until_dispatch) && (
+                              <span style={{
+                                color: (r.days_until_dispatch ?? 0) < 0 ? '#ef4444' : undefined,
+                                fontWeight: (r.days_until_dispatch ?? 0) < 0 ? 600 : undefined,
+                              }}>
+                                {' '}({etaLabel(r.days_until_dispatch)})
+                              </span>
+                            )}
+                          </>
+                        )}
                       </div>
                     </div>
-                    <div className="row" style={{ gap: '0.5rem' }}>
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-ghost"
-                        onClick={() => openFinance(r)}
-                      >
-                        <Wallet size={14} />
-                        P&amp;L
-                        {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                      </button>
+                    <div className="row" style={{ gap: '0.4rem', flexWrap: 'wrap', alignItems: 'center' }}>
                       {nextStage && (
                         <button
                           type="button"
-                          className="btn btn-sm btn-ghost"
+                          className="btn btn-sm"
                           disabled={advance.isPending}
-                          onClick={() => advance.mutate({ id: r.id, stage: nextStage })}
+                          onClick={() => requestStageChange(r.id, nextStage)}
                         >
                           <ChevronRight size={14} />
                           Next: {STAGE_LABELS[nextStage]}
                         </button>
                       )}
-                      <select
-                        className="select"
-                        value={r.stage}
-                        style={{ fontSize: '0.78rem', padding: '0.3rem 0.5rem', minWidth: 0 }}
-                        onChange={(e) => advance.mutate({ id: r.id, stage: e.target.value })}
-                      >
-                        {STAGES.map((s) => <option key={s} value={s}>{STAGE_LABELS[s]}</option>)}
-                      </select>
                       <button
                         type="button"
-                        className="btn btn-sm btn-ghost btn-danger"
-                        disabled={remove.isPending}
-                        title="Remove order from production"
-                        onClick={() => {
-                          if (
-                            window.confirm(
-                              `Remove production order for "${r.display_name ?? r.lead_title ?? 'this lead'}"? This deletes the order and its payment/expense/activity history and cannot be undone.`,
-                            )
-                          ) {
-                            remove.mutate(r.id)
-                          }
-                        }}
+                        className={`btn btn-sm ${open ? 'btn-secondary' : 'btn-ghost'}`}
+                        onClick={() => openFinance(r)}
                       >
-                        <Trash2 size={14} />
-                        Remove
+                        {isOwner ? <Wallet size={14} /> : <Zap size={14} />}
+                        {isOwner ? 'Details' : 'Details'}
+                        {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                       </button>
+                      <button
+                        type="button"
+                        className={`btn btn-sm ${trackingOpen ? 'btn-secondary' : 'btn-ghost'}`}
+                        onClick={() => openTracking(r)}
+                      >
+                        <QrCode size={14} />
+                        Tracking
+                      </button>
+                      <RowActions label="More">
+                        {(close) => (
+                          <>
+                            <div className="row-actions-menu-item" style={{ display: 'block', padding: '0.5rem 0.75rem' }}>
+                              <label className="input-label" style={{ marginBottom: '0.25rem' }}>Stage</label>
+                              <select
+                                className="select"
+                                value={r.stage}
+                                style={{ fontSize: '0.78rem', width: '100%' }}
+                                onChange={(e) => {
+                                  if (e.target.value !== r.stage) requestStageChange(r.id, e.target.value)
+                                  close()
+                                }}
+                              >
+                                {STAGES.map((s) => <option key={s} value={s}>{STAGE_LABELS[s]}</option>)}
+                              </select>
+                            </div>
+                            <div className="row-actions-menu-item" style={{ display: 'block', padding: '0.5rem 0.75rem' }}>
+                              <label className="input-label" style={{ marginBottom: '0.25rem' }}>Status</label>
+                              <select
+                                className="select"
+                                value={r.order_status}
+                                style={{ fontSize: '0.78rem', width: '100%' }}
+                                onChange={(e) => {
+                                  if (e.target.value !== r.order_status) {
+                                    patchOrder.mutate({ id: r.id, json: { order_status: e.target.value } })
+                                  }
+                                  close()
+                                }}
+                              >
+                                {statusOptions.map((s) => (
+                                  <option key={s} value={s}>{STATUS_LABELS[s]}</option>
+                                ))}
+                              </select>
+                            </div>
+                            {isOwner && (
+                              <button
+                                type="button"
+                                className="row-actions-menu-item"
+                                style={{ color: 'var(--destructive)', width: '100%', textAlign: 'left' }}
+                                disabled={remove.isPending}
+                                onClick={() => {
+                                  close()
+                                  if (
+                                    window.confirm(
+                                      `Remove production order for "${r.display_name ?? r.lead_title ?? 'this lead'}"? This deletes the order and its payment/expense/activity history and cannot be undone.`,
+                                    )
+                                  ) {
+                                    remove.mutate(r.id)
+                                  }
+                                }}
+                              >
+                                <Trash2 size={14} /> Remove order
+                              </button>
+                            )}
+                          </>
+                        )}
+                      </RowActions>
                     </div>
                   </div>
 
+                  {isOwner && open && (
                   <div
                     className="row"
                     style={{
@@ -565,13 +892,14 @@ export function ProductionPage() {
                     <span><span className="muted">Collected</span> <strong>{fmtINR(pnl?.collected_cents)}</strong></span>
                     <span><span className="muted">Budget</span> <strong>{fmtINR(pnl?.budget_cents)}</strong></span>
                   </div>
+                  )}
 
-                  <div style={{ height: 6, borderRadius: 999, background: '#f1f5f9', marginBottom: '0.5rem' }}>
+                  <div style={{ height: 6, borderRadius: 999, background: 'var(--secondary)', marginBottom: '0.5rem' }}>
                     <div
                       style={{
                         height: '100%',
                         borderRadius: 999,
-                        background: r.delay_flag ? '#ef4444' : (STAGE_COLOR[r.stage] ?? '#6366f1'),
+                        background: (r.order_status === 'DELAYED' || r.delay_flag) ? '#ef4444' : (STAGE_COLOR[r.stage] ?? '#6366f1'),
                         width: `${progress}%`,
                         transition: 'width .3s ease',
                       }}
@@ -585,19 +913,44 @@ export function ProductionPage() {
                       <label className="toggle">
                         <input
                           type="checkbox"
-                          checked={r.delay_flag}
-                          onChange={() => apiFetch(`/v1/orgs/${orgId}/production/${r.id}`, {
-                            method: 'PATCH',
-                            json: { stage: r.stage, delay_flag: !r.delay_flag },
-                          }).then(invalidateProduction)}
+                          checked={r.order_status === 'DELAYED' || r.delay_flag}
+                          onChange={() =>
+                            patchOrder.mutate({
+                              id: r.id,
+                              json: {
+                                order_status:
+                                  r.order_status === 'DELAYED' || r.delay_flag ? 'ON_TRACK' : 'DELAYED',
+                              },
+                            })
+                          }
                         />
                         <span className="toggle-slider" />
                       </label>
                     </label>
                   </div>
 
+                  {panelOpen && (
+                    <div className="panel-tabs" style={{ marginTop: '0.85rem', marginLeft: '-1.25rem', marginRight: '-1.25rem', paddingLeft: '1.25rem', paddingRight: '1.25rem' }}>
+                      <button
+                        type="button"
+                        className={`panel-tab${open ? ' active' : ''}`}
+                        onClick={() => openFinance(r, { force: true })}
+                      >
+                        {isOwner ? 'Progress & finance' : 'Progress'}
+                      </button>
+                      <button
+                        type="button"
+                        className={`panel-tab${trackingOpen ? ' active' : ''}`}
+                        onClick={() => openTracking(r, { force: true })}
+                      >
+                        Tracking
+                      </button>
+                    </div>
+                  )}
+
                   {open && (
                     <div className="stack" style={{ gap: '1rem', marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border)' }}>
+                      {isOwner && (
                       <div className="row" style={{ gap: '0.75rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
                         <div className="form-field" style={{ margin: 0, minWidth: 140 }}>
                           <label className="input-label">Budget (₹)</label>
@@ -627,7 +980,86 @@ export function ProductionPage() {
                           Save budget
                         </button>
                       </div>
+                      )}
 
+                      <div
+                        className="card"
+                        style={{ padding: '0.85rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.65rem', alignItems: 'end' }}
+                      >
+                        <div style={{ gridColumn: '1 / -1', fontWeight: 600, fontSize: '0.85rem' }}>ETA</div>
+                        <div className="form-field" style={{ margin: 0 }}>
+                          <label className="input-label">Expected completion</label>
+                          <input className="input" type="date" value={etaCompletion} onChange={(e) => setEtaCompletion(e.target.value)} />
+                        </div>
+                        <div className="form-field" style={{ margin: 0 }}>
+                          <label className="input-label">Expected dispatch</label>
+                          <input className="input" type="date" value={etaDispatch} onChange={(e) => setEtaDispatch(e.target.value)} />
+                        </div>
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          disabled={patchOrder.isPending}
+                          onClick={() =>
+                            patchOrder.mutate({
+                              id: r.id,
+                              json: {
+                                expected_completion_at: etaCompletion ? new Date(etaCompletion).toISOString() : null,
+                                expected_dispatch_at: etaDispatch ? new Date(etaDispatch).toISOString() : null,
+                                clear_expected_completion: !etaCompletion,
+                                clear_expected_dispatch: !etaDispatch,
+                              },
+                            })
+                          }
+                        >
+                          Save ETA
+                        </button>
+                        {r.actual_dispatch_at && (
+                          <div className="muted small" style={{ gridColumn: '1 / -1' }}>
+                            Actual dispatch: {fmtDate(r.actual_dispatch_at)}
+                          </div>
+                        )}
+                      </div>
+
+                      {(r.stage === 'READY_DISPATCH' || r.stage === 'SHIPPED' || r.stage === 'DELIVERED' || r.courier_name || r.courier_tracking_no) && (
+                        <div
+                          className="card"
+                          style={{ padding: '0.85rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.65rem', alignItems: 'end' }}
+                        >
+                          <div style={{ gridColumn: '1 / -1', fontWeight: 600, fontSize: '0.85rem' }}>Shipping</div>
+                          <div className="form-field" style={{ margin: 0 }}>
+                            <label className="input-label">Courier</label>
+                            <input className="input" value={courierName} onChange={(e) => setCourierName(e.target.value)} placeholder="e.g. Delhivery" />
+                          </div>
+                          <div className="form-field" style={{ margin: 0 }}>
+                            <label className="input-label">Tracking number</label>
+                            <input className="input" value={courierTracking} onChange={(e) => setCourierTracking(e.target.value)} placeholder="Optional" />
+                          </div>
+                          <div className="form-field" style={{ margin: 0, gridColumn: '1 / -1' }}>
+                            <label className="input-label">Shipping notes</label>
+                            <input className="input" value={shippingNotes} onChange={(e) => setShippingNotes(e.target.value)} placeholder="Optional" />
+                          </div>
+                          <button
+                            type="button"
+                            className="btn btn-sm"
+                            disabled={patchOrder.isPending}
+                            onClick={() =>
+                              patchOrder.mutate({
+                                id: r.id,
+                                json: {
+                                  courier_name: courierName,
+                                  courier_tracking_no: courierTracking,
+                                  shipping_notes: shippingNotes,
+                                },
+                              })
+                            }
+                          >
+                            Save shipping
+                          </button>
+                        </div>
+                      )}
+
+                      {isOwner && (
+                      <>
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '1rem' }}>
                         <form
                           className="stack card"
@@ -733,6 +1165,138 @@ export function ProductionPage() {
                           )}
                         </div>
                       </div>
+                      </>
+                      )}
+                    </div>
+                  )}
+
+                  {trackingOpen && (
+                    <div className="stack" style={{ gap: '0.85rem', marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border)' }}>
+                      {r.tracking_token ? (
+                        <>
+                          {!r.tracking_enabled && (
+                            <p className="muted small">
+                              Tracking is disabled — customers cannot open this link.
+                            </p>
+                          )}
+                          <div className="row" style={{ gap: '1rem', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                            <img
+                              className="track-qr"
+                              alt="Tracking QR"
+                              src={`https://api.qrserver.com/v1/create-qr-code/?size=140x140&data=${encodeURIComponent(`${window.location.origin}/track/${r.tracking_token}`)}`}
+                            />
+                            <div className="stack" style={{ gap: '0.5rem', flex: 1, minWidth: 220 }}>
+                              <div style={{ fontWeight: 600, fontSize: '0.85rem' }}>Customer tracking link</div>
+                              <input
+                                className="input"
+                                readOnly
+                                value={`${window.location.origin}/track/${r.tracking_token}`}
+                                onFocus={(e) => e.target.select()}
+                              />
+                              <div className="row" style={{ gap: '0.4rem', flexWrap: 'wrap' }}>
+                                <button
+                                  type="button"
+                                  className="btn btn-sm"
+                                  onClick={() => {
+                                    void navigator.clipboard.writeText(
+                                      `${window.location.origin}/track/${r.tracking_token}`,
+                                    )
+                                    toast.success('Link copied')
+                                  }}
+                                >
+                                  Copy link
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn btn-sm"
+                                  disabled={
+                                    shareWhatsApp.isPending ||
+                                    !r.tracking_enabled ||
+                                    !r.lead_phone
+                                  }
+                                  title={
+                                    !r.lead_phone
+                                      ? 'This lead has no phone number'
+                                      : !r.tracking_enabled
+                                        ? 'Enable tracking first'
+                                        : 'Send tracking link on WhatsApp'
+                                  }
+                                  onClick={() =>
+                                    shareWhatsApp.mutate({
+                                      lead_id: r.lead_id,
+                                      order_number: r.order_number,
+                                      token: r.tracking_token!,
+                                    })
+                                  }
+                                >
+                                  <MessageCircle size={14} />
+                                  {shareWhatsApp.isPending ? 'Sending…' : 'Share on WhatsApp'}
+                                </button>
+                                {isOwner && (
+                                  <>
+                                <button
+                                  type="button"
+                                  className="btn btn-sm btn-ghost"
+                                  disabled={toggleTracking.isPending}
+                                  onClick={() =>
+                                    toggleTracking.mutate({
+                                      id: r.id,
+                                      enabled: !r.tracking_enabled,
+                                    })
+                                  }
+                                >
+                                  {r.tracking_enabled ? 'Disable' : 'Enable'}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn btn-sm btn-ghost"
+                                  disabled={regenTracking.isPending}
+                                  onClick={() => {
+                                    if (
+                                      window.confirm(
+                                        'Regenerate tracking link? The old link will stop working.',
+                                      )
+                                    ) {
+                                      regenTracking.mutate(r.id)
+                                    }
+                                  }}
+                                >
+                                  Regenerate
+                                </button>
+                                  </>
+                                )}
+                                <a
+                                  className="btn btn-sm btn-ghost"
+                                  href={`/track/${r.tracking_token}`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  Open
+                                </a>
+                              </div>
+                              {!r.lead_phone && (
+                                <p className="muted small">Add a phone number on the lead to share via WhatsApp.</p>
+                              )}
+                            </div>
+                          </div>
+                        </>
+                      ) : isOwner ? (
+                        <div>
+                          <p className="muted small" style={{ marginBottom: '0.5rem' }}>
+                            No tracking link yet.
+                          </p>
+                          <button
+                            type="button"
+                            className="btn btn-sm"
+                            disabled={regenTracking.isPending}
+                            onClick={() => regenTracking.mutate(r.id)}
+                          >
+                            Generate tracking link
+                          </button>
+                        </div>
+                      ) : (
+                        <p className="muted small">No tracking link yet. Ask an owner to enable tracking.</p>
+                      )}
                     </div>
                   )}
                 </div>
@@ -831,7 +1395,142 @@ export function ProductionPage() {
             </div>
           </div>
         )}
+
+        {orders.length > 0 && (
+          <InsightGrid>
+            <InsightCard title="Production overview">
+              <DonutChart
+                segments={[
+                  { label: 'In progress', value: inProgressCount, color: '#3D7A5A' },
+                  { label: 'Completed', value: completedCount, color: '#2563eb' },
+                  { label: 'Delayed', value: delayedCount, color: '#B42318' },
+                ]}
+                center={{ value: orders.length, label: 'Orders' }}
+              />
+              <DonutLegend
+                segments={[
+                  { label: 'In progress', value: inProgressCount, color: '#3D7A5A' },
+                  { label: 'Completed', value: completedCount, color: '#2563eb' },
+                  { label: 'Delayed', value: delayedCount, color: '#B42318' },
+                ]}
+                total={orders.length}
+              />
+            </InsightCard>
+            <InsightCard title="Department progress">
+              <BarList
+                items={STAGES.map((stage) => ({
+                  label: STAGE_LABELS[stage],
+                  value: orders.filter((o) => o.stage === stage).length,
+                  color: STAGE_COLOR[stage],
+                })).filter((i) => i.value > 0)}
+              />
+            </InsightCard>
+            <InsightCard title="Upcoming deadlines">
+              {orders
+                .filter((o) => o.expected_dispatch_at && o.stage !== 'DELIVERED')
+                .sort((a, b) => +new Date(a.expected_dispatch_at!) - +new Date(b.expected_dispatch_at!))
+                .slice(0, 5).length === 0 ? (
+                <p className="muted small">No upcoming dispatch dates.</p>
+              ) : (
+                <div className="stack" style={{ gap: '0.45rem', fontSize: '0.82rem' }}>
+                  {orders
+                    .filter((o) => o.expected_dispatch_at && o.stage !== 'DELIVERED')
+                    .sort((a, b) => +new Date(a.expected_dispatch_at!) - +new Date(b.expected_dispatch_at!))
+                    .slice(0, 5)
+                    .map((o) => (
+                      <div key={o.id} className="row spread">
+                        <span>{o.display_name ?? o.lead_title ?? o.order_number}</span>
+                        <span className={o.days_until_dispatch != null && o.days_until_dispatch < 0 ? 'error' : 'muted'}>
+                          {o.days_until_dispatch == null
+                            ? new Date(o.expected_dispatch_at!).toLocaleDateString('en-IN')
+                            : o.days_until_dispatch < 0
+                              ? `${Math.abs(o.days_until_dispatch)}d overdue`
+                              : o.days_until_dispatch === 0
+                                ? 'Today'
+                                : `${o.days_until_dispatch}d left`}
+                        </span>
+                      </div>
+                    ))}
+                </div>
+              )}
+            </InsightCard>
+            <InsightCard title="Quick actions">
+              <div className="quick-action-list">
+                {isOwner && (
+                  <button type="button" onClick={() => setShowForm(true)}>
+                    <Plus size={14} /> New production order
+                  </button>
+                )}
+                <Link to="/app/expenses">
+                  <Wallet size={14} /> Expenses
+                </Link>
+              </div>
+            </InsightCard>
+          </InsightGrid>
+        )}
       </div>
+
+      {stageModal && (
+        <div className="drawer-overlay" onClick={() => setStageModal(null)}>
+          <div
+            className="card"
+            style={{
+              position: 'fixed',
+              top: '50%',
+              left: '50%',
+              transform: 'translate(-50%, -50%)',
+              width: 'min(420px, 92vw)',
+              zIndex: 60,
+              padding: '1.25rem',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontWeight: 700, marginBottom: '0.75rem' }}>
+              Move to {stageModal.label}
+            </div>
+            <div className="stack" style={{ gap: '0.65rem' }}>
+              <div className="form-field" style={{ margin: 0 }}>
+                <label className="input-label">Internal note (team only)</label>
+                <input
+                  className="input"
+                  value={internalNote}
+                  onChange={(e) => setInternalNote(e.target.value)}
+                  placeholder="Optional — not shown to customer"
+                />
+              </div>
+              <div className="form-field" style={{ margin: 0 }}>
+                <label className="input-label">Customer-visible update</label>
+                <input
+                  className="input"
+                  value={customerNote}
+                  onChange={(e) => setCustomerNote(e.target.value)}
+                  placeholder="Optional — shown on tracking page later"
+                />
+              </div>
+              <div className="row" style={{ gap: '0.5rem', marginTop: '0.25rem' }}>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={advance.isPending}
+                  onClick={() =>
+                    advance.mutate({
+                      id: stageModal.id,
+                      stage: stageModal.stage,
+                      internal_note: internalNote,
+                      customer_note: customerNote,
+                    })
+                  }
+                >
+                  {advance.isPending ? 'Updating…' : 'Confirm'}
+                </button>
+                <button type="button" className="btn btn-ghost" onClick={() => setStageModal(null)}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   )
 }

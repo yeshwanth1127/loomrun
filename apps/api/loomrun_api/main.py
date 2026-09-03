@@ -36,6 +36,11 @@ async def _poll_meta() -> None:
     await sync_all_meta_orgs()
 
 
+async def _poll_google_ads() -> None:
+    from loomrun_api.google_ads_sync import sync_all_google_ads_orgs
+    await sync_all_google_ads_orgs()
+
+
 async def _poll_qlix_sync() -> None:
     """Push CRM changes into each connected org's AI Brain.
 
@@ -66,11 +71,18 @@ async def _poll_qlix_sweep() -> None:
     await sweep_all_orgs()
 
 
+async def _poll_follow_up_reminders() -> None:
+    from loomrun_api.follow_up_reminders import send_due_whatsapp_reminders
+    await send_due_whatsapp_reminders()
+
+
 _POLL_TASKS: list[PollTask] = [
     PollTask(name="whatsapp_outbound", interval=60,  fn=_poll_whatsapp),
     PollTask(name="gmail_sync",        interval=300, fn=_poll_gmail,     startup_delay=30),
     PollTask(name="indiamart_sync",    interval=600, fn=_poll_indiamart, startup_delay=15),
-    PollTask(name="meta_leads_sync",   interval=600, fn=_poll_meta,      startup_delay=45),
+    PollTask(name="meta_leads_sync",   interval=10,  fn=_poll_meta,      startup_delay=5),
+    PollTask(name="google_ads_sync",  interval=60,  fn=_poll_google_ads, startup_delay=25),
+    PollTask(name="follow_up_reminders", interval=60, fn=_poll_follow_up_reminders, startup_delay=20),
     PollTask(name="qlix_brain_sync",   interval=30,  fn=_poll_qlix_sync,  startup_delay=20),
     # Hourly rather than nightly: a stale answer is the failure mode that
     # costs the most trust, and re-queuing only touches changed records.
@@ -89,6 +101,7 @@ from loomrun_api.routers import (
     document_templates,
     expenses,
     google_oauth,
+    google_ads_oauth,
     indiamart_hooks,
     integrations_whatsapp,
     lead_connections,
@@ -101,6 +114,7 @@ from loomrun_api.routers import (
     subscription,
     telecaller,
     telephony,
+    tracking,
     whatsapp_hooks,
 )
 from loomrun_api.ai_agent import router as ai_agent_router
@@ -167,12 +181,14 @@ app.include_router(catalog.router, prefix="/v1", tags=["catalog"])
 app.include_router(document_templates.router, prefix="/v1", tags=["document-templates"])
 app.include_router(quotations.router, prefix="/v1", tags=["quotations"])
 app.include_router(production.router, prefix="/v1", tags=["production"])
+app.include_router(tracking.router, prefix="/v1", tags=["tracking"])
 app.include_router(expenses.router, prefix="/v1", tags=["expenses"])
 app.include_router(integrations_whatsapp.router, prefix="/v1", tags=["whatsapp"])
 app.include_router(telecaller.router, prefix="/v1", tags=["telecaller"])
 app.include_router(connectors.router, prefix="/v1", tags=["connectors"])
 app.include_router(dashboard.router, prefix="/v1", tags=["dashboard"])
 app.include_router(google_oauth.router, prefix="/v1", tags=["google"])
+app.include_router(google_ads_oauth.router, prefix="/v1", tags=["google-ads"])
 
 
 app.include_router(qlix_router, prefix="/v1", tags=["qlix"])

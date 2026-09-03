@@ -1,13 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, Download, FileText, Mail, MessageCircle, Plus, Trash2 } from 'lucide-react'
+import { Check, Download, FileText, Mail, MessageCircle, Pencil, Plus, Send, ShieldCheck, Trash2, TrendingUp } from 'lucide-react'
 import type { FormEvent } from 'react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useDateFilter } from '../context/DateFilterContext'
 import { apiFetch } from '../lib/api'
 import { LeadSearchSelect, type LeadOption } from '../components/LeadSearchSelect'
 import { RowActions } from '../components/RowActions'
+import { EmptyState } from '../components/ui/EmptyState'
+import { Modal } from '../components/ui/Modal'
+import { PageHeader } from '../components/ui/PageHeader'
+import { DonutChart, DonutLegend, InsightCard, InsightGrid, MetricCard } from '../components/ui/dashboard'
 import { toast } from 'sonner'
 
 type Lead = { id: string; title: string; phone?: string | null; email?: string | null; company?: string | null }
@@ -22,6 +26,7 @@ type CatalogItem = {
 type Quotation = {
   id: string
   number: string
+  title: string | null
   invoice_number: string | null
   status: string
   total: number
@@ -57,6 +62,24 @@ const emptyLine = (): LineDraft => ({ description: '', quantity: '1', unit_price
 
 const base = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
+async function fetchPdfBlob(
+  orgId: string,
+  quotationId: string,
+  variant: 'quotation' | 'invoice' = 'quotation',
+): Promise<Blob> {
+  const params = new URLSearchParams({ variant })
+  const response = await fetch(
+    `${base}/v1/orgs/${orgId}/quotations/${quotationId}/pdf-file?${params}`,
+    {
+      headers: { Authorization: `Bearer ${localStorage.getItem('access_token') ?? ''}` },
+    },
+  )
+  if (!response.ok) {
+    throw new Error('Failed to load PDF')
+  }
+  return response.blob()
+}
+
 async function downloadPdf(
   orgId: string,
   quotationId: string,
@@ -64,17 +87,7 @@ async function downloadPdf(
   variant: 'quotation' | 'invoice' = 'quotation',
 ) {
   try {
-    const params = new URLSearchParams({ variant })
-    const response = await fetch(
-      `${base}/v1/orgs/${orgId}/quotations/${quotationId}/pdf-file?${params}`,
-      {
-        headers: { Authorization: `Bearer ${localStorage.getItem('access_token') ?? ''}` },
-      }
-    )
-    if (!response.ok) {
-      throw new Error('Failed to download PDF')
-    }
-    const blob = await response.blob()
+    const blob = await fetchPdfBlob(orgId, quotationId, variant)
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
@@ -86,6 +99,10 @@ async function downloadPdf(
   } catch (err) {
     toast.error((err as Error).message || 'Failed to download PDF')
   }
+}
+
+function quotationDisplayName(q: Pick<Quotation, 'title' | 'number' | 'invoice_number'>) {
+  return q.title?.trim() || q.invoice_number || q.number
 }
 
 export function QuotationsPage() {
@@ -102,6 +119,13 @@ export function QuotationsPage() {
   const [editLeadId, setEditLeadId] = useState('')
   const [editLines, setEditLines] = useState<LineDraft[]>([emptyLine()])
   const [templateId, setTemplateId] = useState('')
+  const [previewQuotation, setPreviewQuotation] = useState<Quotation | null>(null)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewError, setPreviewError] = useState<string | null>(null)
+  const previewUrlRef = useRef<string | null>(null)
+  const [renamingQuotation, setRenamingQuotation] = useState<Quotation | null>(null)
+  const [renameTitle, setRenameTitle] = useState('')
 
   useEffect(() => {
     const state = location.state as { leadId?: string; openForm?: boolean } | null
@@ -110,6 +134,47 @@ export function QuotationsPage() {
     if (state.openForm) setShowForm(true)
     navigate(location.pathname, { replace: true, state: null })
   }, [location, navigate])
+
+  useEffect(() => {
+    return () => {
+      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current)
+    }
+  }, [])
+
+  async function openPreview(quotation: Quotation) {
+    if (!orgId) return
+    if (!quotation.lines?.length && !quotation.pdf_url) {
+      toast.error('This quotation has no PDF to preview yet')
+      return
+    }
+    setPreviewQuotation(quotation)
+    setPreviewLoading(true)
+    setPreviewError(null)
+    try {
+      const variant = quotation.invoice_number ? 'invoice' : 'quotation'
+      const blob = await fetchPdfBlob(orgId, quotation.id, variant)
+      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current)
+      const next = URL.createObjectURL(blob)
+      previewUrlRef.current = next
+      setPreviewUrl(next)
+    } catch (err) {
+      setPreviewUrl(null)
+      setPreviewError((err as Error).message || 'Failed to load preview')
+    } finally {
+      setPreviewLoading(false)
+    }
+  }
+
+  function closePreview() {
+    setPreviewQuotation(null)
+    setPreviewError(null)
+    setPreviewLoading(false)
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current)
+      previewUrlRef.current = null
+    }
+    setPreviewUrl(null)
+  }
   const [pdfTemplateByQuotation, setPdfTemplateByQuotation] = useState<Record<string, string>>({})
   // Last action result per quotation, shown inline beside that row's Actions dropdown.
   const [rowStatus, setRowStatus] = useState<
@@ -322,14 +387,34 @@ export function QuotationsPage() {
     onError: (err: Error) => toast.error(err.message || 'Failed to delete'),
   })
 
+  const renameQuotation = useMutation({
+    mutationFn: ({ id, title }: { id: string; title: string }) =>
+      apiFetch<Quotation>(`/v1/orgs/${orgId}/quotations/${id}/title`, {
+        method: 'PATCH',
+        json: { title },
+      }),
+    onSuccess: (data) => {
+      markRow(data.id, 'Renamed')
+      toast.success(data.title ? `Renamed to “${data.title}”` : 'Name cleared')
+      setRenamingQuotation(null)
+      setRenameTitle('')
+      void qc.invalidateQueries({ queryKey: ['quotations', orgId] })
+    },
+    onError: (err: Error) => toast.error(err.message || 'Failed to rename'),
+  })
+
   if (!orgId) return (
-    <>
-      <div className="page-header"><h1>Quotations</h1><p>Select an organization.</p></div>
-    </>
+    <PageHeader title="Quotations" description="Select an organization." />
   )
 
   const quotations = q.data?.items ?? []
   const leads = leadsQ.data?.items ?? []
+  const draftCount = quotations.filter((x) => x.status === 'DRAFT').length
+  const sentCount = quotations.filter((x) => x.status === 'SENT').length
+  const acceptedCount = quotations.filter((x) => x.status === 'ACCEPTED').length
+  const rejectedCount = quotations.filter((x) => x.status === 'REJECTED').length
+  const invoicedCount = quotations.filter((x) => x.invoice_number).length
+  const totalValue = quotations.reduce((s, x) => s + (Number(x.total) || 0), 0)
 
   function addLine() {
     setLines([...lines, emptyLine()])
@@ -390,206 +475,27 @@ export function QuotationsPage() {
 
   return (
     <>
-      <div className="page-header">
-        <h1>Quotations</h1>
-        <p>
-          {quotations.length} quotation{quotations.length !== 1 ? 's' : ''}
-          {isAll ? '' : ` · Created ${dayParam}`}
-          {' · '}Generate and track quotes
-        </p>
-      </div>
-
-      <div className="page-body stack" style={{ gap: '1.25rem' }}>
-        <div className="row spread">
-          <span />
-          <button type="button" className="btn" onClick={() => setShowForm((v) => !v)}>
+      <PageHeader
+        title="Quotations"
+        badge={`${quotations.length} total`}
+        description="Create, manage and track all your quotations."
+        actions={
+          <button type="button" className="btn" onClick={() => setShowForm(true)}>
             <Plus size={15} />
             New quotation
           </button>
+        }
+      />
+
+      <div className="page-body stack" style={{ gap: '1.25rem' }}>
+        <div className="metrics-grid">
+          <MetricCard icon={FileText} tone="purple" label="Total quotations" value={quotations.length} hint={isAll ? 'This period' : dayParam} />
+          <MetricCard icon={FileText} tone="blue" label="Draft" value={draftCount} hint={quotations.length ? `${((draftCount / quotations.length) * 100).toFixed(0)}%` : '0%'} />
+          <MetricCard icon={Send} tone="amber" label="Sent" value={sentCount} hint={quotations.length ? `${((sentCount / quotations.length) * 100).toFixed(0)}%` : '0%'} />
+          <MetricCard icon={ShieldCheck} tone="green" label="Accepted" value={acceptedCount} />
+          <MetricCard icon={FileText} tone="red" label="Rejected" value={rejectedCount} />
+          <MetricCard icon={TrendingUp} tone="purple" label="Conversion rate" value={quotations.length ? `${((invoicedCount / quotations.length) * 100).toFixed(0)}%` : '0%'} hint="To invoices" />
         </div>
-
-        {showForm && (
-          <div className="card">
-            <div style={{ fontWeight: 700, marginBottom: '1rem' }}>New Quotation</div>
-            <form
-              className="stack"
-              onSubmit={(e: FormEvent) => {
-                e.preventDefault()
-                submitCreate('finalize')
-              }}
-            >
-              {quotationTemplates.length > 0 && (
-                <div className="form-field">
-                  <label className="input-label">PDF template</label>
-                  <select
-                    className="select"
-                    value={templateId || defaultTemplateId}
-                    onChange={(e) => setTemplateId(e.target.value)}
-                    style={{ minWidth: 240 }}
-                  >
-                    {quotationTemplates.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.name}
-                        {t.is_default ? ' (default)' : ''}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              <div className="form-field">
-                <label className="input-label">Lead *</label>
-                {orgId && (
-                  <LeadSearchSelect
-                    orgId={orgId}
-                    value={leadId}
-                    required
-                    onChange={(id, lead) => {
-                      setLeadId(id)
-                      setSelectedLead(lead)
-                    }}
-                  />
-                )}
-              </div>
-
-              <div>
-                <div className="row spread" style={{ marginBottom: '0.5rem', alignItems: 'center' }}>
-                  <div className="input-label">Line items</div>
-                  {catalogItems.length > 0 ? (
-                    <div className="row" style={{ gap: '0.5rem', alignItems: 'center' }}>
-                      <span className="muted small">{catalogItems.length} catalog items</span>
-                      <select
-                        className="select"
-                        defaultValue=""
-                        onChange={(e) => {
-                          if (e.target.value) addCatalogAsNewLine(e.target.value)
-                          e.target.value = ''
-                        }}
-                        style={{ minWidth: 200 }}
-                      >
-                        <option value="">+ Add from catalog…</option>
-                        {catalogItems.map((item) => (
-                          <option key={item.id} value={item.id}>
-                            {item.name} — ₹{item.unit_price.toLocaleString('en-IN')}
-                            {item.sku ? ` (${item.sku})` : ''}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  ) : (
-                    <p className="muted small">
-                      No catalog yet.{' '}
-                      <Link to="/app/brand-assets">Upload CSV in Brand assets</Link>
-                    </p>
-                  )}
-                </div>
-
-                <div className="stack" style={{ gap: '0.75rem' }}>
-                  {lines.map((line, i) => (
-                    <div key={i} className="stack" style={{ gap: '0.35rem', padding: '0.5rem', background: '#f8fafc', borderRadius: 8 }}>
-                      {catalogItems.length > 0 && (
-                        <select
-                          className="select"
-                          defaultValue=""
-                          onChange={(e) => {
-                            if (e.target.value) applyCatalogToLine(i, e.target.value)
-                            e.target.value = ''
-                          }}
-                        >
-                          <option value="">Fill from catalog…</option>
-                          {catalogItems.map((item) => (
-                            <option key={item.id} value={item.id}>
-                              {item.name} — ₹{item.unit_price.toLocaleString('en-IN')}
-                            </option>
-                          ))}
-                        </select>
-                      )}
-                      <div className="row" style={{ gap: '0.5rem', alignItems: 'center' }}>
-                        <input
-                          className="input"
-                          placeholder="Description"
-                          value={line.description}
-                          onChange={(e) => updateLine(i, 'description', e.target.value)}
-                          style={{ flex: 3 }}
-                          required
-                        />
-                        <input
-                          className="input"
-                          type="number"
-                          placeholder="Qty"
-                          value={line.quantity}
-                          onChange={(e) => updateLine(i, 'quantity', e.target.value)}
-                          style={{ flex: 1, minWidth: 60 }}
-                          min={1}
-                          required
-                        />
-                        <input
-                          className="input"
-                          type="number"
-                          placeholder="Unit price ₹"
-                          value={line.unit_price}
-                          onChange={(e) => updateLine(i, 'unit_price', e.target.value)}
-                          style={{ flex: 1.5, minWidth: 100 }}
-                          min={0}
-                          required
-                        />
-                        <span style={{ minWidth: 80, fontWeight: 600, fontSize: '0.85rem' }}>
-                          {line.quantity && line.unit_price
-                            ? `₹${(Number(line.quantity) * Number(line.unit_price)).toLocaleString('en-IN')}`
-                            : '—'}
-                        </span>
-                        {lines.length > 1 && (
-                          <button type="button" className="btn btn-ghost btn-sm" onClick={() => removeLine(i)}>✕</button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <button type="button" className="btn btn-ghost btn-sm" style={{ marginTop: '0.5rem' }} onClick={addLine}>
-                  + Add line manually
-                </button>
-              </div>
-
-              {selectedLead && (
-                <p className="muted small">
-                  Send later via {selectedLead.phone ? 'WhatsApp' : 'WhatsApp (no phone on lead)'}
-                  {' · '}
-                  {selectedLead.email ? 'Email' : 'Email (no address on lead)'}
-                </p>
-              )}
-
-              {create.error && <p className="error">{(create.error as Error).message}</p>}
-              <div className="row" style={{ gap: '0.5rem', flexWrap: 'wrap' }}>
-                <button
-                  type="submit"
-                  className="btn"
-                  disabled={create.isPending || !canSubmitForm()}
-                >
-                  {create.isPending && create.variables === 'finalize'
-                    ? 'Creating…'
-                    : 'Create quotation'}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  disabled={create.isPending || !canSubmitForm()}
-                  onClick={() => submitCreate('draft')}
-                >
-                  {create.isPending && create.variables === 'draft' ? 'Saving…' : 'Save as draft'}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  disabled={create.isPending}
-                  onClick={() => setShowForm(false)}
-                >
-                  Cancel
-                </button>
-              </div>
-            </form>
-          </div>
-        )}
-
         {q.isLoading && <p className="muted">Loading quotations…</p>}
         {q.error && <p className="error">{(q.error as Error).message}</p>}
 
@@ -598,7 +504,7 @@ export function QuotationsPage() {
             <table>
               <thead>
                 <tr>
-                  <th>Number</th>
+                  <th>Quotation</th>
                   <th>Lead</th>
                   <th>Status</th>
                   <th>Total</th>
@@ -611,17 +517,26 @@ export function QuotationsPage() {
                   const leadName = x.lead_title ?? leads.find((l) => l.id === x.lead_id)?.title ?? x.lead_id.slice(0, 8)
                   const canSend = x.status === 'DRAFT' && !!x.pdf_url
                   return (
-                    <tr key={x.id}>
+                    <tr
+                      key={x.id}
+                      className="quotation-row"
+                      onClick={() => void openPreview(x)}
+                      style={{ cursor: 'pointer' }}
+                    >
                       <td>
                         <div className="row" style={{ gap: '0.4rem' }}>
-                          <FileText size={14} style={{ color: '#6366f1' }} />
+                          <FileText size={14} style={{ color: '#6366f1', flexShrink: 0 }} />
                           <div className="stack" style={{ gap: '0.15rem' }}>
-                            <span style={{ fontWeight: 600, fontFamily: 'ui-monospace, monospace', fontSize: '0.82rem' }}>
-                              {x.invoice_number ?? x.number}
+                            <span style={{ fontWeight: 600, fontSize: '0.88rem' }}>
+                              {quotationDisplayName(x)}
                             </span>
-                            {x.invoice_number && (
-                              <span className="muted small">from {x.number}</span>
-                            )}
+                            <span className="muted small" style={{ fontFamily: 'ui-monospace, monospace' }}>
+                              {x.invoice_number
+                                ? `${x.invoice_number} · from ${x.number}`
+                                : x.title
+                                  ? x.number
+                                  : 'Click to preview'}
+                            </span>
                           </div>
                         </div>
                       </td>
@@ -631,7 +546,7 @@ export function QuotationsPage() {
                       <td className="muted small">
                         {x.sent_at ? new Date(x.sent_at).toLocaleDateString('en-IN') : '—'}
                       </td>
-                      <td>
+                      <td onClick={(e) => e.stopPropagation()}>
                         <div className="row" style={{ gap: '0.5rem', alignItems: 'center' }}>
                           {x.invoice_number && (
                             <span className="badge badge-green">
@@ -641,6 +556,29 @@ export function QuotationsPage() {
                           <RowActions>
                             {(close) => (
                               <>
+                                <button
+                                  type="button"
+                                  className="btn btn-ghost btn-sm"
+                                  onClick={() => {
+                                    void openPreview(x)
+                                    close()
+                                  }}
+                                >
+                                  <FileText size={13} />
+                                  Preview
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn btn-ghost btn-sm"
+                                  onClick={() => {
+                                    setRenamingQuotation(x)
+                                    setRenameTitle(x.title ?? '')
+                                    close()
+                                  }}
+                                >
+                                  <Pencil size={13} />
+                                  Rename
+                                </button>
                                 {!x.pdf_url ? (
                                   <>
                                     {quotationTemplates.length > 0 && (
@@ -779,7 +717,7 @@ export function QuotationsPage() {
                                   onClick={() => {
                                     const label = x.invoice_number
                                       ? `invoice ${x.invoice_number}`
-                                      : `quotation ${x.number}`
+                                      : `quotation ${quotationDisplayName(x)}`
                                     if (
                                       window.confirm(`Delete ${label}? This cannot be undone.`)
                                     ) {
@@ -820,99 +758,437 @@ export function QuotationsPage() {
           </div>
         ) : (
           !q.isLoading && (
-            <div className="empty-state card">
-              <p>No quotations yet. Create one from a lead.</p>
-            </div>
+            <EmptyState
+              icon={FileText}
+              description="No quotations yet. Create one from a lead."
+            />
           )
         )}
-      </div>
 
-      {editingId && (
-        <div className="modal-wrap">
-          <div className="modal-overlay" onClick={() => setEditingId(null)} />
-          <div className="modal card" style={{ maxWidth: 600, gap: '1rem' }}>
-            <div style={{ fontWeight: 700, fontSize: '1.1rem' }}>Edit Quotation</div>
-            <form
-              className="stack"
-              onSubmit={(e: FormEvent) => {
-                e.preventDefault()
-                if (editLeadId && editLines.every((l) => l.description && l.unit_price)) void edit.mutateAsync()
-              }}
-            >
-              <div className="form-field">
-                <label className="input-label">Lead *</label>
-                {orgId && (
-                  <LeadSearchSelect
-                    orgId={orgId}
-                    value={editLeadId}
-                    required
-                    onChange={(id) => setEditLeadId(id)}
-                  />
-                )}
-              </div>
-
-              <div>
-                <div className="input-label" style={{ marginBottom: '0.5rem' }}>Line items</div>
-                <div className="stack" style={{ gap: '0.75rem' }}>
-                  {editLines.map((line, i) => (
-                    <div key={i} className="stack" style={{ gap: '0.35rem', padding: '0.5rem', background: '#f8fafc', borderRadius: 8 }}>
-                      <div className="row" style={{ gap: '0.5rem', alignItems: 'center' }}>
-                        <input
-                          className="input"
-                          placeholder="Description"
-                          value={line.description}
-                          onChange={(e) => updateEditLine(i, 'description', e.target.value)}
-                          style={{ flex: 3 }}
-                          required
-                        />
-                        <input
-                          className="input"
-                          type="number"
-                          placeholder="Qty"
-                          value={line.quantity}
-                          onChange={(e) => updateEditLine(i, 'quantity', e.target.value)}
-                          style={{ flex: 1, minWidth: 60 }}
-                          min={1}
-                          required
-                        />
-                        <input
-                          className="input"
-                          type="number"
-                          placeholder="Unit price ₹"
-                          value={line.unit_price}
-                          onChange={(e) => updateEditLine(i, 'unit_price', e.target.value)}
-                          style={{ flex: 1.5, minWidth: 100 }}
-                          min={0}
-                          required
-                        />
-                        <span style={{ minWidth: 80, fontWeight: 600, fontSize: '0.85rem' }}>
-                          {line.quantity && line.unit_price
-                            ? `₹${(Number(line.quantity) * Number(line.unit_price)).toLocaleString('en-IN')}`
-                            : '—'}
-                        </span>
-                        {editLines.length > 1 && (
-                          <button type="button" className="btn btn-ghost btn-sm" onClick={() => removeEditLine(i)}>✕</button>
-                        )}
-                      </div>
+        <InsightGrid>
+          <InsightCard title="Top items quoted">
+            {(() => {
+              const counts = new Map<string, number>()
+              for (const qtn of quotations) {
+                for (const line of qtn.lines ?? []) {
+                  const name = line.description.trim() || 'Item'
+                  counts.set(name, (counts.get(name) ?? 0) + Number(line.quantity || 0))
+                }
+              }
+              const items = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)
+              return items.length === 0 ? (
+                <p className="muted small">No items quoted yet. Start creating quotations to see item insights.</p>
+              ) : (
+                <div className="stack" style={{ gap: '0.4rem', fontSize: '0.82rem' }}>
+                  {items.map(([name, qty]) => (
+                    <div key={name} className="row spread">
+                      <span>{name}</span>
+                      <strong>{qty}</strong>
                     </div>
                   ))}
                 </div>
-                <button type="button" className="btn btn-ghost btn-sm" style={{ marginTop: '0.5rem' }} onClick={addEditLine}>
-                  + Add line
-                </button>
-              </div>
+              )
+            })()}
+          </InsightCard>
+          <InsightCard title="Quotation value">
+            {quotations.length === 0 ? (
+              <p className="muted small">No quotation value yet.</p>
+            ) : (
+              <>
+                <DonutChart
+                  segments={[
+                    { label: 'Draft', value: quotations.filter((x) => x.status === 'DRAFT').reduce((s, x) => s + Number(x.total), 0), color: '#64748b' },
+                    { label: 'Sent', value: quotations.filter((x) => x.status === 'SENT').reduce((s, x) => s + Number(x.total), 0), color: '#f59e0b' },
+                    { label: 'Accepted', value: quotations.filter((x) => x.status === 'ACCEPTED').reduce((s, x) => s + Number(x.total), 0), color: '#3D7A5A' },
+                    { label: 'Rejected', value: quotations.filter((x) => x.status === 'REJECTED').reduce((s, x) => s + Number(x.total), 0), color: '#B42318' },
+                  ]}
+                  center={{ value: `₹${totalValue.toLocaleString('en-IN')}`, label: 'Total' }}
+                />
+                <DonutLegend
+                  segments={[
+                    { label: 'Draft', value: draftCount, color: '#64748b' },
+                    { label: 'Sent', value: sentCount, color: '#f59e0b' },
+                    { label: 'Accepted', value: acceptedCount, color: '#3D7A5A' },
+                    { label: 'Rejected', value: rejectedCount, color: '#B42318' },
+                  ]}
+                  total={quotations.length}
+                />
+              </>
+            )}
+          </InsightCard>
+          <InsightCard title="Quick actions">
+            <div className="quick-action-list">
+              <button type="button" onClick={() => setShowForm(true)}>
+                <Plus size={14} /> New quotation
+              </button>
+              <Link to="/app/document-templates">
+                <FileText size={14} /> Quotation templates
+              </Link>
+            </div>
+          </InsightCard>
+        </InsightGrid>
+      </div>
 
-              {edit.error && <p className="error">{(edit.error as Error).message}</p>}
-              <div className="row">
-                <button type="submit" className="btn" disabled={edit.isPending}>
-                  {edit.isPending ? 'Updating…' : 'Update quotation'}
-                </button>
-                <button type="button" className="btn btn-ghost" onClick={() => setEditingId(null)}>Cancel</button>
-              </div>
-            </form>
+      <Modal open={showForm} onClose={() => setShowForm(false)} title="New quotation" size="lg">
+        <form
+          className="stack"
+          onSubmit={(e: FormEvent) => {
+            e.preventDefault()
+            submitCreate('finalize')
+          }}
+        >
+          {quotationTemplates.length > 0 && (
+            <div className="form-field">
+              <label className="input-label">PDF template</label>
+              <select
+                className="select"
+                value={templateId || defaultTemplateId}
+                onChange={(e) => setTemplateId(e.target.value)}
+                style={{ minWidth: 240 }}
+              >
+                {quotationTemplates.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                    {t.is_default ? ' (default)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <div className="form-field">
+            <label className="input-label">Lead *</label>
+            {orgId && (
+              <LeadSearchSelect
+                orgId={orgId}
+                value={leadId}
+                required
+                onChange={(id, lead) => {
+                  setLeadId(id)
+                  setSelectedLead(lead)
+                }}
+              />
+            )}
           </div>
-        </div>
-      )}
+
+          <div>
+            <div className="row spread" style={{ marginBottom: '0.5rem', alignItems: 'center' }}>
+              <div className="input-label">Line items</div>
+              {catalogItems.length > 0 ? (
+                <div className="row" style={{ gap: '0.5rem', alignItems: 'center' }}>
+                  <span className="muted small">{catalogItems.length} catalog items</span>
+                  <select
+                    className="select"
+                    defaultValue=""
+                    onChange={(e) => {
+                      if (e.target.value) addCatalogAsNewLine(e.target.value)
+                      e.target.value = ''
+                    }}
+                    style={{ minWidth: 200 }}
+                  >
+                    <option value="">+ Add from catalog…</option>
+                    {catalogItems.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name} — ₹{item.unit_price.toLocaleString('en-IN')}
+                        {item.sku ? ` (${item.sku})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : (
+                <p className="muted small">
+                  No catalog yet.{' '}
+                  <Link to="/app/brand-assets">Upload CSV in Brand assets</Link>
+                </p>
+              )}
+            </div>
+
+            <div className="stack" style={{ gap: '0.75rem' }}>
+              {lines.map((line, i) => (
+                <div key={i} className="stack surface-muted" style={{ gap: '0.35rem', padding: '0.5rem' }}>
+                  {catalogItems.length > 0 && (
+                    <select
+                      className="select"
+                      defaultValue=""
+                      onChange={(e) => {
+                        if (e.target.value) applyCatalogToLine(i, e.target.value)
+                        e.target.value = ''
+                      }}
+                    >
+                      <option value="">Fill from catalog…</option>
+                      {catalogItems.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.name} — ₹{item.unit_price.toLocaleString('en-IN')}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  <div className="row" style={{ gap: '0.5rem', alignItems: 'center' }}>
+                    <input
+                      className="input"
+                      placeholder="Description"
+                      value={line.description}
+                      onChange={(e) => updateLine(i, 'description', e.target.value)}
+                      style={{ flex: 3 }}
+                      required
+                    />
+                    <input
+                      className="input"
+                      type="number"
+                      placeholder="Qty"
+                      value={line.quantity}
+                      onChange={(e) => updateLine(i, 'quantity', e.target.value)}
+                      style={{ flex: 1, minWidth: 60 }}
+                      min={1}
+                      required
+                    />
+                    <input
+                      className="input"
+                      type="number"
+                      placeholder="Unit price ₹"
+                      value={line.unit_price}
+                      onChange={(e) => updateLine(i, 'unit_price', e.target.value)}
+                      style={{ flex: 1.5, minWidth: 100 }}
+                      min={0}
+                      required
+                    />
+                    <span style={{ minWidth: 80, fontWeight: 600, fontSize: '0.85rem' }}>
+                      {line.quantity && line.unit_price
+                        ? `₹${(Number(line.quantity) * Number(line.unit_price)).toLocaleString('en-IN')}`
+                        : '—'}
+                    </span>
+                    {lines.length > 1 && (
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => removeLine(i)}>✕</button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <button type="button" className="btn btn-ghost btn-sm" style={{ marginTop: '0.5rem' }} onClick={addLine}>
+              + Add line manually
+            </button>
+          </div>
+
+          {selectedLead && (
+            <p className="muted small">
+              Send later via {selectedLead.phone ? 'WhatsApp' : 'WhatsApp (no phone on lead)'}
+              {' · '}
+              {selectedLead.email ? 'Email' : 'Email (no address on lead)'}
+            </p>
+          )}
+
+          {create.error && <p className="error">{(create.error as Error).message}</p>}
+          <div className="row" style={{ gap: '0.5rem', flexWrap: 'wrap' }}>
+            <button type="submit" className="btn" disabled={create.isPending || !canSubmitForm()}>
+              {create.isPending && create.variables === 'finalize' ? 'Creating…' : 'Create quotation'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              disabled={create.isPending || !canSubmitForm()}
+              onClick={() => submitCreate('draft')}
+            >
+              {create.isPending && create.variables === 'draft' ? 'Saving…' : 'Save as draft'}
+            </button>
+            <button type="button" className="btn btn-ghost" disabled={create.isPending} onClick={() => setShowForm(false)}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal open={!!editingId} onClose={() => setEditingId(null)} title="Edit quotation" size="lg">
+        <form
+          className="stack"
+          onSubmit={(e: FormEvent) => {
+            e.preventDefault()
+            if (editLeadId && editLines.every((l) => l.description && l.unit_price)) void edit.mutateAsync()
+          }}
+        >
+          <div className="form-field">
+            <label className="input-label">Lead *</label>
+            {orgId && (
+              <LeadSearchSelect
+                orgId={orgId}
+                value={editLeadId}
+                required
+                onChange={(id) => setEditLeadId(id)}
+              />
+            )}
+          </div>
+
+          <div>
+            <div className="input-label" style={{ marginBottom: '0.5rem' }}>Line items</div>
+            <div className="stack" style={{ gap: '0.75rem' }}>
+              {editLines.map((line, i) => (
+                <div key={i} className="stack surface-muted" style={{ gap: '0.35rem', padding: '0.5rem' }}>
+                  <div className="row" style={{ gap: '0.5rem', alignItems: 'center' }}>
+                    <input
+                      className="input"
+                      placeholder="Description"
+                      value={line.description}
+                      onChange={(e) => updateEditLine(i, 'description', e.target.value)}
+                      style={{ flex: 3 }}
+                      required
+                    />
+                    <input
+                      className="input"
+                      type="number"
+                      placeholder="Qty"
+                      value={line.quantity}
+                      onChange={(e) => updateEditLine(i, 'quantity', e.target.value)}
+                      style={{ flex: 1, minWidth: 60 }}
+                      min={1}
+                      required
+                    />
+                    <input
+                      className="input"
+                      type="number"
+                      placeholder="Unit price ₹"
+                      value={line.unit_price}
+                      onChange={(e) => updateEditLine(i, 'unit_price', e.target.value)}
+                      style={{ flex: 1.5, minWidth: 100 }}
+                      min={0}
+                      required
+                    />
+                    <span style={{ minWidth: 80, fontWeight: 600, fontSize: '0.85rem' }}>
+                      {line.quantity && line.unit_price
+                        ? `₹${(Number(line.quantity) * Number(line.unit_price)).toLocaleString('en-IN')}`
+                        : '—'}
+                    </span>
+                    {editLines.length > 1 && (
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => removeEditLine(i)}>✕</button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <button type="button" className="btn btn-ghost btn-sm" style={{ marginTop: '0.5rem' }} onClick={addEditLine}>
+              + Add line
+            </button>
+          </div>
+
+          {edit.error && <p className="error">{(edit.error as Error).message}</p>}
+          <div className="row">
+            <button type="submit" className="btn" disabled={edit.isPending}>
+              {edit.isPending ? 'Updating…' : 'Update quotation'}
+            </button>
+            <button type="button" className="btn btn-ghost" onClick={() => setEditingId(null)}>Cancel</button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal
+        open={!!renamingQuotation}
+        onClose={() => {
+          setRenamingQuotation(null)
+          setRenameTitle('')
+        }}
+        title="Rename quotation"
+        size="sm"
+        footer={
+          <>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => {
+                setRenamingQuotation(null)
+                setRenameTitle('')
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn"
+              disabled={renameQuotation.isPending || !renamingQuotation}
+              onClick={() => {
+                if (!renamingQuotation) return
+                renameQuotation.mutate({ id: renamingQuotation.id, title: renameTitle })
+              }}
+            >
+              {renameQuotation.isPending ? 'Saving…' : 'Save name'}
+            </button>
+          </>
+        }
+      >
+        {renamingQuotation && (
+          <div className="stack" style={{ gap: '0.75rem' }}>
+            <p className="muted small">
+              Document number <strong>{renamingQuotation.number}</strong> stays the same. This name is only for
+              your list.
+            </p>
+            <div className="form-field">
+              <label className="input-label" htmlFor="quotation-rename-title">
+                Display name
+              </label>
+              <input
+                id="quotation-rename-title"
+                className="input"
+                value={renameTitle}
+                onChange={(e) => setRenameTitle(e.target.value)}
+                placeholder={renamingQuotation.number}
+                maxLength={200}
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && renamingQuotation) {
+                    e.preventDefault()
+                    renameQuotation.mutate({ id: renamingQuotation.id, title: renameTitle })
+                  }
+                }}
+              />
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        open={!!previewQuotation}
+        onClose={closePreview}
+        title={
+          previewQuotation
+            ? `${quotationDisplayName(previewQuotation)}${
+                previewQuotation.title ? ` · ${previewQuotation.number}` : ''
+              }`
+            : 'Preview'
+        }
+        size="xl"
+        footer={
+          previewQuotation ? (
+            <>
+              <button type="button" className="btn btn-ghost" onClick={closePreview}>
+                Close
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => {
+                  if (!previewQuotation || !orgId) return
+                  void downloadPdf(
+                    orgId,
+                    previewQuotation.id,
+                    previewQuotation.invoice_number ?? previewQuotation.number,
+                    previewQuotation.invoice_number ? 'invoice' : 'quotation',
+                  )
+                }}
+              >
+                <Download size={14} />
+                Download
+              </button>
+            </>
+          ) : undefined
+        }
+      >
+        {previewLoading && <p className="muted" style={{ padding: '1.5rem' }}>Loading preview…</p>}
+        {previewError && <p className="error" style={{ padding: '1.5rem' }}>{previewError}</p>}
+        {!previewLoading && !previewError && previewUrl && (
+          <iframe
+            title="Quotation preview"
+            src={previewUrl}
+            className="quotation-preview-frame"
+          />
+        )}
+      </Modal>
     </>
   )
 }
