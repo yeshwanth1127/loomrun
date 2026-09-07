@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     # Facebook Login for Business configuration ID (from Meta → Configurations).
     # When set, OAuth uses config_id instead of scope (recommended for Lead Ads apps).
     meta_fb_login_config_id: str = ""
-    meta_webhook_verify_token: str = "[REDACTED]"
+    meta_webhook_verify_token: str = ""
     google_client_id: str = ""
     google_client_secret: str = ""
     google_ads_developer_token: str = ""

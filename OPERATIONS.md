@@ -76,18 +76,18 @@ The API reads this file via `pydantic-settings`. Every setting here overrides th
 
 | Variable | Value | Purpose |
 |---|---|---|
-| `DATABASE_URL` | `postgresql://postgres:[REDACTED]@localhost:5432/loomrun` | Postgres connection |
+| `DATABASE_URL` | *(from root `.env` — never commit)* | Postgres connection |
 | `REDIS_URL` | `redis://localhost:6379/0` | ARQ worker queue |
-| `SECRET_KEY` | *(32-byte hex)* | JWT signing key |
+| `SECRET_KEY` | *(32-byte hex from `.env`)* | JWT signing key |
 | `CORS_ORIGINS` | `https://loomrun.exora.solutions` | Allowed browser origins |
 | `PUBLIC_API_URL` | `https://loomrun.exora.solutions` | Used in Meta OAuth redirect URI |
-| `META_APP_ID` | `[REDACTED]` | Meta / Facebook App ID |
-| `META_APP_SECRET` | `[REDACTED]` | Meta App Secret |
-| `META_WEBHOOK_VERIFY_TOKEN` | `[REDACTED]` | Verify token set in Meta dashboard |
-| `SUPER_ADMIN_EMAILS` | `[REDACTED]` | Comma-separated super-admin emails |
+| `META_APP_ID` | *(from `.env`)* | Meta / Facebook App ID |
+| `META_APP_SECRET` | *(from `.env`)* | Meta App Secret |
+| `META_WEBHOOK_VERIFY_TOKEN` | *(from `.env`)* | Verify token set in Meta dashboard |
+| `SUPER_ADMIN_EMAILS` | *(from `.env`)* | Comma-separated super-admin emails |
 | `STORAGE_DIR` | `/var/www/loomrun/apps/api/storage` | Where PDFs/assets are written |
 
-> **Note:** The `@` in the password is URL-encoded as `%40` in `DATABASE_URL`.
+> **Note:** Never put real passwords or API secrets in this doc. Read values from `/var/www/loomrun/.env` on the server. URL-encode special characters in `DATABASE_URL` (e.g. `@` → `%40`).
 
 ### Frontend `.env` — `/var/www/loomrun/apps/web/.env`
 These are baked into the JS bundle at build time — changing them requires a **frontend rebuild**.
@@ -104,14 +104,17 @@ These are baked into the JS bundle at build time — changing them requires a **
 - **Engine:** PostgreSQL 15 (server), client tools on this host are v16 — that's fine, pg_dump is forward-compatible
 - **Database:** `loomrun`
 - **User:** `postgres`
-- **Password:** `[REDACTED]`
+- **Password:** *(from `DATABASE_URL` / root `.env` — never commit)*
 - **Host:** `10.0.0.1:5432`, reached over the WireGuard VPN (`wg0`, this host is `10.0.0.5`) — **not `localhost`**, despite what this doc used to say. Do not trust "localhost:5432" — that's a *different*, unrelated local Postgres instance on this same app server.
 - **⚠️ Shared instance:** that Postgres server hosts 8 databases for unrelated products (`loomrun`, `n8n`, `sunkidz_lms`, `exora_crm`, `exora_os`, `qlix`, `dexler_db`, `postgres`) all under the same `postgres` superuser login. There is no database-level isolation between them — a mistake in any one project's tooling (wrong `DATABASE_URL`, a stray `TRUNCATE`/`prisma migrate reset` against the wrong target) can wipe another project's data with no permission barrier. Treat any script that touches `DATABASE_URL` with extreme care, and double-check which database you're pointed at before running anything destructive.
 - **No WAL archiving:** `archive_mode` is `off` on this server, so there is no point-in-time recovery from Postgres itself. The nightly/hourly `pg_dump` backups below (added 2026-07-15, after a full data-loss incident) are the only recovery mechanism — see [Backups](#backups) below.
 
 ### Connect manually
 ```bash
-PGPASSWORD='[REDACTED]' psql -U postgres -h 10.0.0.1 -d loomrun
+# Load password from root .env (do not hardcode secrets in docs or shell history)
+set -a && source /var/www/loomrun/.env && set +a
+# Prefer using DATABASE_URL with psql, or export PGPASSWORD from .env yourself
+psql "$DATABASE_URL"
 ```
 
 ### Useful queries
@@ -163,11 +166,13 @@ automated restore verification (previously backups were never test-restored).
 
 ### Restore from a backup
 ```bash
+# Load credentials from root .env first (never hardcode PGPASSWORD here)
+set -a && source /var/www/loomrun/.env && set +a
 # Restore into a NEW scratch database first to verify before touching prod:
-PGPASSWORD='[REDACTED]' createdb -U postgres -h 10.0.0.1 loomrun_restore_test
-PGPASSWORD='[REDACTED]' pg_restore -U postgres -h 10.0.0.1 -d loomrun_restore_test /var/backups/loomrun-postgres/loomrun_<timestamp>.dump
+createdb -U postgres -h 10.0.0.1 loomrun_restore_test
+pg_restore -U postgres -h 10.0.0.1 -d loomrun_restore_test /var/backups/loomrun-postgres/loomrun_<timestamp>.dump
 # Verify row counts etc., then either promote it or restore into the real `loomrun` db:
-PGPASSWORD='[REDACTED]' pg_restore -U postgres -h 10.0.0.1 -d loomrun --clean --if-exists /var/backups/loomrun-postgres/loomrun_<timestamp>.dump
+pg_restore -U postgres -h 10.0.0.1 -d loomrun --clean --if-exists /var/backups/loomrun-postgres/loomrun_<timestamp>.dump
 ```
 
 ---
@@ -354,12 +359,13 @@ In the **Meta Developer Console** → your App → Webhooks:
 | Field | Value |
 |---|---|
 | Callback URL | `https://loomrun.exora.solutions/v1/hooks/meta` |
-| Verify Token | `[REDACTED]` |
+| Verify Token | *(same as `META_WEBHOOK_VERIFY_TOKEN` in `.env`)* |
 | Subscribe to field | `leadgen` |
 
 Test verification:
 ```bash
-curl "https://loomrun.exora.solutions/v1/hooks/meta?hub.mode=subscribe&hub.verify_token=[REDACTED]&hub.challenge=TEST123"
+set -a && source /var/www/loomrun/.env && set +a
+curl "https://loomrun.exora.solutions/v1/hooks/meta?hub.mode=subscribe&hub.verify_token=${META_WEBHOOK_VERIFY_TOKEN}&hub.challenge=TEST123"
 # Expected: "TEST123"
 ```
 
@@ -377,9 +383,8 @@ GET /v1/orgs/{org_id}/meta/oauth-url
 This redirects to Facebook, then Meta calls back to `/v1/meta/oauth/callback`, which stores the page access token in the DB.
 
 ### Meta App credentials
-- **App ID:** `[REDACTED]`
-- **App Secret:** `[REDACTED]`
-- Stored in `/var/www/loomrun/.env` as `META_APP_ID` / `META_APP_SECRET`
+- Stored only in `/var/www/loomrun/.env` as `META_APP_ID` / `META_APP_SECRET`
+- Do not copy these values into docs, tickets, or git
 
 ---
 
@@ -549,7 +554,8 @@ tail -f /var/log/nginx/loomrun_error.log   # nginx errors
 tail -f /root/.pm2/logs/loomrun-api-error.log  # API stderr
 
 # ── Database ───────────────────────────────────────────────
-PGPASSWORD='[REDACTED]' psql -U postgres -h localhost -d loomrun
+set -a && source /var/www/loomrun/.env && set +a
+psql "$DATABASE_URL"
 
 # ── SSL ────────────────────────────────────────────────────
 certbot renew --dry-run                    # test SSL renewal

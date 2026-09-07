@@ -4,7 +4,16 @@ dist/
 __pycache__/
 *.pyc
 .env
-.env.local
+.env.*
+!.env.example
+!.env.*.example
+*.bak
+*creds*
+*credentials*
+*.pem
+*.p12
+*.key
+!*.key.example
 *.egg-info/
 .pytest_cache/
 .mypy_cache/
