@@ -13,13 +13,14 @@ import {
   X,
 } from 'lucide-react'
 import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { useAgentActivity } from '../context/AgentActivityContext'
 import { AgentActivityTrace } from '../components/AgentActivityTrace'
 import { useAuth } from '../context/AuthContext'
 import { useDateFilter } from '../context/DateFilterContext'
 import { useSpeechSynthesis } from '../hooks/useSpeechSynthesis'
 import { useSpeechToText } from '../hooks/useSpeechToText'
+import { routes } from '../lib/appRoutes'
 import { apiFetch, apiStream } from '../lib/api'
 import { aiModeLabel, qlixCrmSyncing, type AiStatus } from '../lib/entitlements'
 import { QlixActivation, QlixDocuments, QlixSyncNote } from '../components/QlixActivation'
@@ -123,7 +124,11 @@ type StreamEvent = {
   run_id?: string
   conversation_id?: string
   detail?: string
-  tool?: { name: string; phase: 'running' | 'done' | 'error'; args?: Record<string, string | number | boolean> }
+  tool?: {
+    name: string
+    phase: 'running' | 'done' | 'error'
+    args?: Record<string, string | number | boolean>
+  }
 } & Partial<ChatResponse>
 
 type ActionResult = {
@@ -337,7 +342,12 @@ function Citations({ items }: { items: Citation[] }) {
             key={`${label}-${i}`}
             className="badge badge-slate"
             title={label}
-            style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+            style={{
+              maxWidth: 220,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
           >
             {label}
           </span>
@@ -351,10 +361,14 @@ export function AiChatPage() {
   const { orgId } = useAuth()
   const { dayParam, isAll } = useDateFilter()
   const queryClient = useQueryClient()
-  const [input, setInput] = useState('')
+  const [searchParams] = useSearchParams()
+  // Contextual entry points (a lead, an order) link here with the question ready.
+  const [input, setInput] = useState(() => searchParams.get('ask') ?? '')
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [busyActionId, setBusyActionId] = useState<string | null>(null)
-  const [conversationId, setConversationId] = useState<string | null>(() => readStored(CONV_STORAGE_KEY))
+  const [conversationId, setConversationId] = useState<string | null>(() =>
+    readStored(CONV_STORAGE_KEY),
+  )
   const [voiceError, setVoiceError] = useState<string | null>(null)
   const [voiceEnabled, setVoiceEnabled] = useState(() => readStored(VOICE_STORAGE_KEY) === '1')
   const [convSearch, setConvSearch] = useState('')
@@ -387,12 +401,14 @@ export function AiChatPage() {
   const conversationIdRef = useRef<string | null>(conversationId)
   const streamTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const streamAbortRef = useRef<AbortController | null>(null)
-  const mutateChatRef = useRef<(payload: {
-    message: string
-    history: ChatMessage[]
-    model: string
-    conversation_id: string | null
-  }) => void>(() => {})
+  const mutateChatRef = useRef<
+    (payload: {
+      message: string
+      history: ChatMessage[]
+      model: string
+      conversation_id: string | null
+    }) => void
+  >(() => {})
 
   useEffect(() => {
     if (activationDismissed) writeStored(ACTIVATION_SEEN_KEY, '1')
@@ -664,10 +680,7 @@ export function AiChatPage() {
     },
     onError: (err: Error) => {
       setStreamingReply(null)
-      setMessages((prev) => [
-        ...prev,
-        { role: 'assistant', content: `Sorry — ${err.message}` },
-      ])
+      setMessages((prev) => [...prev, { role: 'assistant', content: `Sorry — ${err.message}` }])
     },
   })
 
@@ -714,7 +727,10 @@ export function AiChatPage() {
 
   const createConv = useMutation({
     mutationFn: () =>
-      apiFetch<ConversationDetail>(`/v1/orgs/${orgId}/ai/conversations`, { method: 'POST', json: {} }),
+      apiFetch<ConversationDetail>(`/v1/orgs/${orgId}/ai/conversations`, {
+        method: 'POST',
+        json: {},
+      }),
     onSuccess: (data) => {
       setConversationId(data.id)
       writeStored(CONV_STORAGE_KEY, data.id)
@@ -743,7 +759,14 @@ export function AiChatPage() {
   const sendMessage = useCallback(
     (text: string) => {
       const trimmed = text.trim()
-      if (!trimmed || !orgId || chatPendingRef.current || streamingActiveRef.current || !activeModel) return
+      if (
+        !trimmed ||
+        !orgId ||
+        chatPendingRef.current ||
+        streamingActiveRef.current ||
+        !activeModel
+      )
+        return
       const history = messagesRef.current
       setMessages((prev) => [...prev, { role: 'user', content: trimmed }])
       setInput('')
@@ -808,7 +831,9 @@ export function AiChatPage() {
 
   const confirmMut = useMutation({
     mutationFn: (actionId: string) =>
-      apiFetch<ActionResult>(`/v1/orgs/${orgId}/ai/actions/${actionId}/confirm`, { method: 'POST' }),
+      apiFetch<ActionResult>(`/v1/orgs/${orgId}/ai/actions/${actionId}/confirm`, {
+        method: 'POST',
+      }),
     onSuccess: (data) => {
       setMessages((prev) => {
         const next = prev.map((m) => {
@@ -901,13 +926,14 @@ export function AiChatPage() {
   return (
     <div className="ai-chat-page">
       <div className="page-header">
-        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
+        <div
+          className="row"
+          style={{ justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}
+        >
           <div>
             <h1>
               Loomrun AI
-              {status && (
-                <span className="page-title-badge">{aiModeLabel(status.mode)}</span>
-              )}
+              {status && <span className="page-title-badge">{aiModeLabel(status.mode)}</span>}
             </h1>
             <p>
               Ask questions, get insights and automate your business tasks.
@@ -919,7 +945,6 @@ export function AiChatPage() {
             <span className={`badge ${available ? 'badge-indigo' : 'badge-slate'}`}>
               {aiModeLabel(status.mode)}
               {status.multilingual ? ' · Multilingual' : ''}
-              {status.usage?.limit != null ? ` · ${status.usage.used}/${status.usage.limit} today` : ''}
             </span>
           )}
         </div>
@@ -927,28 +952,36 @@ export function AiChatPage() {
 
       <div className="page-body">
         {statusQ.isLoading && <p className="muted ai-chat-notice">Checking AI access…</p>}
-        {statusQ.error && <p className="error ai-chat-notice">{(statusQ.error as Error).message}</p>}
+        {statusQ.error && (
+          <p className="error ai-chat-notice">{(statusQ.error as Error).message}</p>
+        )}
 
         {status?.upgrade_required && (
           <div className="card" style={{ maxWidth: 560, margin: '1.5rem 2rem 0' }}>
-            <div className="row" style={{ gap: '0.5rem', alignItems: 'center', marginBottom: '0.5rem' }}>
+            <div
+              className="row"
+              style={{ gap: '0.5rem', alignItems: 'center', marginBottom: '0.5rem' }}
+            >
               <Sparkles size={18} />
               <strong>Upgrade to continue with Loomrun AI</strong>
             </div>
             <p className="muted small" style={{ marginBottom: '1rem' }}>
-              Your free trial has ended. Growth includes basic AI Q&amp;A; Scale includes advanced multilingual AI that can act on leads and quotations.
+              Your free trial has ended. Growth includes basic AI Q&amp;A; Scale includes advanced
+              multilingual AI that can act on leads and quotations.
             </p>
-            <Link className="btn" to="/app/subscription">View subscription plans</Link>
+            <Link className="btn" to={routes.settings('plan')}>
+              View subscription plans
+            </Link>
           </div>
         )}
 
         {available && showActivation && orgId && (
           <div className="ai-chat-notice">
-          <QlixActivation
-            orgId={orgId}
-            qlix={qlix}
-            onStartChatting={() => setActivationDismissed(true)}
-          />
+            <QlixActivation
+              orgId={orgId}
+              qlix={qlix}
+              onStartChatting={() => setActivationDismissed(true)}
+            />
           </div>
         )}
 
@@ -991,9 +1024,15 @@ export function AiChatPage() {
                   </p>
                 </div>
                 <div style={{ flex: 1, overflow: 'auto', padding: '0.35rem' }}>
-                  {conversationsQ.isLoading && <p className="muted small" style={{ padding: 8 }}>Loading…</p>}
+                  {conversationsQ.isLoading && (
+                    <p className="muted small" style={{ padding: 8 }}>
+                      Loading…
+                    </p>
+                  )}
                   {!conversationsQ.isLoading && conversations.length === 0 && (
-                    <p className="muted small" style={{ padding: 8 }}>No chats for this period.</p>
+                    <p className="muted small" style={{ padding: 8 }}>
+                      No chats for this period.
+                    </p>
                   )}
                   {conversations.map((c) => {
                     const active = c.id === conversationId
@@ -1044,7 +1083,9 @@ export function AiChatPage() {
                   })}
                 </div>
                 {qlix?.connected && orgId && (
-                  <div style={{ borderTop: '1px solid var(--border, #e2e8f0)', padding: '0.75rem' }}>
+                  <div
+                    style={{ borderTop: '1px solid var(--border, #e2e8f0)', padding: '0.75rem' }}
+                  >
                     <button
                       type="button"
                       className="btn-ghost btn-sm"
@@ -1067,7 +1108,9 @@ export function AiChatPage() {
                   </div>
                 )}
                 {writesEnabled && (
-                  <div style={{ borderTop: '1px solid var(--border, #e2e8f0)', padding: '0.75rem' }}>
+                  <div
+                    style={{ borderTop: '1px solid var(--border, #e2e8f0)', padding: '0.75rem' }}
+                  >
                     <div className="small" style={{ fontWeight: 600, marginBottom: 6 }}>
                       Standing approvals
                     </div>
@@ -1088,13 +1131,21 @@ export function AiChatPage() {
                       overflow: 'auto',
                     }}
                   >
-                    <div className="small" style={{ fontWeight: 600, marginBottom: 4 }}>Org memory</div>
-                    {memorySummary && <p className="muted small" style={{ marginBottom: 6 }}>{memorySummary}</p>}
-                    {Object.entries(memoryFacts).slice(0, 6).map(([k, v]) => (
-                      <div key={k} className="muted" style={{ fontSize: '0.75rem' }}>
-                        <strong>{k}</strong>: {String(v)}
-                      </div>
-                    ))}
+                    <div className="small" style={{ fontWeight: 600, marginBottom: 4 }}>
+                      Org memory
+                    </div>
+                    {memorySummary && (
+                      <p className="muted small" style={{ marginBottom: 6 }}>
+                        {memorySummary}
+                      </p>
+                    )}
+                    {Object.entries(memoryFacts)
+                      .slice(0, 6)
+                      .map(([k, v]) => (
+                        <div key={k} className="muted" style={{ fontSize: '0.75rem' }}>
+                          <strong>{k}</strong>: {String(v)}
+                        </div>
+                      ))}
                   </div>
                 )}
               </div>
@@ -1139,12 +1190,24 @@ export function AiChatPage() {
                 </button>
               </div>
 
-              <div style={{ flex: 1, overflow: 'auto', padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+              <div
+                style={{
+                  flex: 1,
+                  overflow: 'auto',
+                  padding: '1.25rem',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.85rem',
+                }}
+              >
                 {conversationQ.isLoading && conversationId && (
                   <p className="muted small">Loading conversation…</p>
                 )}
                 {messages.length === 0 && !conversationQ.isLoading && (
-                  <div className="muted small" style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start' }}>
+                  <div
+                    className="muted small"
+                    style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start' }}
+                  >
                     <Bot size={16} style={{ marginTop: 2 }} />
                     <div>
                       {writesEnabled ? (
@@ -1221,7 +1284,9 @@ export function AiChatPage() {
                             <span>Confirm action</span>
                             <ApprovalCountdown expiresAt={action.expires_at} />
                           </div>
-                          <p className="small" style={{ marginBottom: 10 }}>{action.summary}</p>
+                          <p className="small" style={{ marginBottom: 10 }}>
+                            {action.summary}
+                          </p>
                           <div className="row" style={{ gap: 8 }}>
                             <button
                               type="button"
@@ -1233,7 +1298,9 @@ export function AiChatPage() {
                               }}
                             >
                               <Check size={14} />
-                              {busyActionId === action.id && confirmMut.isPending ? 'Working…' : 'Confirm'}
+                              {busyActionId === action.id && confirmMut.isPending
+                                ? 'Working…'
+                                : 'Confirm'}
                             </button>
                             <button
                               type="button"
@@ -1253,7 +1320,9 @@ export function AiChatPage() {
                     </div>
                   )
                 })}
-                {speech.listening && <p className="muted small">Listening… tap the mic again when done</p>}
+                {speech.listening && (
+                  <p className="muted small">Listening… tap the mic again when done</p>
+                )}
                 {/* The thinking state, the tools the agent is calling and the
                     Stop button read as part of the conversation, so they sit in
                     the thread itself. The global dock stands down while this is
@@ -1317,26 +1386,32 @@ export function AiChatPage() {
                   }}
                 />
                 {voiceEnabled && (
-                <button
-                  type="button"
-                  className={`btn ${speech.listening ? '' : 'btn-ghost'}`}
-                  title={speech.listening ? 'Stop and send' : 'Speak'}
-                  aria-pressed={speech.listening}
-                  disabled={chat.isPending || !!streamingReply}
-                  onClick={onToggleVoice}
-                  style={
-                    speech.listening
-                      ? { background: '#dc2626', borderColor: '#dc2626', color: '#fff' }
-                      : undefined
-                  }
-                >
-                  {speech.listening ? <MicOff size={15} /> : <Mic size={15} />}
-                </button>
+                  <button
+                    type="button"
+                    className={`btn ${speech.listening ? '' : 'btn-ghost'}`}
+                    title={speech.listening ? 'Stop and send' : 'Speak'}
+                    aria-pressed={speech.listening}
+                    disabled={chat.isPending || !!streamingReply}
+                    onClick={onToggleVoice}
+                    style={
+                      speech.listening
+                        ? { background: '#dc2626', borderColor: '#dc2626', color: '#fff' }
+                        : undefined
+                    }
+                  >
+                    {speech.listening ? <MicOff size={15} /> : <Mic size={15} />}
+                  </button>
                 )}
                 <button
                   type="submit"
                   className="btn"
-                  disabled={chat.isPending || !!streamingReply || !input.trim() || !activeModel || speech.listening}
+                  disabled={
+                    chat.isPending ||
+                    !!streamingReply ||
+                    !input.trim() ||
+                    !activeModel ||
+                    speech.listening
+                  }
                 >
                   <Send size={15} />
                   Send

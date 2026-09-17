@@ -532,7 +532,7 @@ export function ExpensesPage() {
                   segments={[...byCategory.entries()].map(([label, value], i) => ({
                     label,
                     value,
-                    color: ['#5B2C87', '#2563eb', '#f59e0b', '#3D7A5A', '#64748b'][i % 5],
+                    color: ['#0F766E', '#0E7490', '#f59e0b', '#3D7A5A', '#64748b'][i % 5],
                   }))}
                   center={{ value: fmtINR(summary?.total_cents ?? 0), label: 'Total' }}
                 />
@@ -540,7 +540,7 @@ export function ExpensesPage() {
                   segments={[...byCategory.entries()].map(([label, value], i) => ({
                     label,
                     value: value / 100,
-                    color: ['#5B2C87', '#2563eb', '#f59e0b', '#3D7A5A', '#64748b'][i % 5],
+                    color: ['#0F766E', '#0E7490', '#f59e0b', '#3D7A5A', '#64748b'][i % 5],
                   }))}
                 />
               </>

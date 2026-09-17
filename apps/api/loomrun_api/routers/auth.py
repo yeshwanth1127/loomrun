@@ -5,7 +5,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr, Field
 
 from loomrun_api.config import settings
-from loomrun_api.deps import get_current_user_id
+from loomrun_api.auth_limits import limit_auth_attempts
+from loomrun_api.deps import get_current_user_id, require_super_admin
 from loomrun_api.entitlements import default_trial_ends_at, trial_payload
 from loomrun_api.prisma_client import prisma
 from loomrun_api.security import (
@@ -17,7 +18,7 @@ from loomrun_api.security import (
 )
 from prisma.enums import MembershipRole
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(limit_auth_attempts)])
 
 
 def slugify(name: str) -> str:
@@ -34,7 +35,7 @@ class RegisterBody(BaseModel):
 
 
 class RegisterSuperAdminBody(BaseModel):
-    """Self-serve platform admin account (no tenant org). Email must be listed in SUPER_ADMIN_EMAILS."""
+    """Admin-provisioned platform account. Email must be listed in SUPER_ADMIN_EMAILS."""
 
     email: EmailStr
     password: str = Field(min_length=8)
@@ -65,8 +66,7 @@ async def register(body: RegisterBody) -> dict:
         slug = f"{base_slug}-{secrets.token_hex(3)}"
 
     password_hash = hash_password(body.password)
-    email_norm = str(body.email).lower().strip()
-    is_super = email_norm in settings.super_admin_email_set
+    is_super = False
     org = await prisma.organization.create(
         data={
             "name": body.organization_name,
@@ -99,7 +99,7 @@ async def register(body: RegisterBody) -> dict:
 
 
 @router.post("/register-super-admin", status_code=status.HTTP_201_CREATED)
-async def register_super_admin(body: RegisterSuperAdminBody) -> dict:
+async def register_super_admin(body: RegisterSuperAdminBody, _admin=Depends(require_super_admin)) -> dict:
     email_norm = str(body.email).lower().strip()
     if email_norm not in settings.super_admin_email_set:
         raise HTTPException(
@@ -128,12 +128,6 @@ async def login(body: LoginBody) -> dict:
     user = await prisma.user.find_unique(where={"email": body.email})
     if not user or not verify_password(body.password, user.passwordHash):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-    email_norm = str(body.email).lower().strip()
-    if email_norm in settings.super_admin_email_set and not user.isSuperAdmin:
-        user = await prisma.user.update(
-            where={"id": user.id},
-            data={"isSuperAdmin": True},
-        )
     access = create_access_token(user.id)
     refresh = create_refresh_token(user.id)
     return {"access_token": access, "refresh_token": refresh, "token_type": "bearer"}

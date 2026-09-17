@@ -60,10 +60,19 @@ _quotation_lines = quote_svc.quotation_lines
 async def list_quotations(
     org_id: str,
     day: str | None = Query(None, description="YYYY-MM-DD or all"),
+    doc: str = Query(
+        "quotation",
+        pattern="^(quotation|invoice|all)$",
+        description="quotation = not yet invoiced; invoice = converted; all = both",
+    ),
     ctx: OrgContext = Depends(require_roles("OWNER", "SALES", "TELECALLER")),
 ) -> dict:
     where: dict = {"organizationId": ctx.organization_id}
     apply_created_at(where, day)
+    if doc == "quotation":
+        where["invoiceNumber"] = None
+    elif doc == "invoice":
+        where["invoiceNumber"] = {"not": None}
     items = await prisma.quotation.find_many(
         where=where,
         order={"createdAt": "desc"},
@@ -72,8 +81,23 @@ async def list_quotations(
     return {"items": [quote_svc.serialize_quotation(q) for q in items]}
 
 
+@router.get("/orgs/{org_id}/quotations/{quotation_id}")
+async def get_quotation(
+    org_id: str,
+    quotation_id: str,
+    ctx: OrgContext = Depends(require_roles("OWNER", "SALES", "TELECALLER")),
+) -> dict:
+    q = await prisma.quotation.find_first(
+        where={"id": quotation_id, "organizationId": ctx.organization_id},
+        include={"lines": True, "lead": True},
+    )
+    if not q:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Quotation not found")
+    return quote_svc.serialize_quotation(q)
+
+
 @router.post("/orgs/{org_id}/quotations", status_code=status.HTTP_201_CREATED)
-async def create_quotation(org_id: str, body: QuotationCreate, ctx: OrgContext = Depends(require_roles("OWNER"))) -> dict:
+async def create_quotation(org_id: str, body: QuotationCreate, ctx: OrgContext = Depends(require_roles("OWNER", "SALES", "TELECALLER"))) -> dict:
     return await quote_svc.create_quotation(
         organization_id=ctx.organization_id,
         user_id=ctx.membership.userId,
@@ -106,7 +130,7 @@ async def generate_pdf(
     org_id: str,
     quotation_id: str,
     body: GeneratePdfBody | None = Body(default=None),
-    ctx: OrgContext = Depends(require_roles("OWNER")),
+    ctx: OrgContext = Depends(require_roles("OWNER", "SALES", "TELECALLER")),
 ) -> dict:
     q = await prisma.quotation.find_first(
         where={"id": quotation_id, "organizationId": ctx.organization_id},
@@ -124,7 +148,7 @@ async def update_quotation(
     org_id: str,
     quotation_id: str,
     body: QuotationCreate,
-    ctx: OrgContext = Depends(require_roles("OWNER")),
+    ctx: OrgContext = Depends(require_roles("OWNER", "SALES", "TELECALLER")),
 ) -> dict:
     q = await prisma.quotation.find_first(
         where={"id": quotation_id, "organizationId": ctx.organization_id},
@@ -210,7 +234,7 @@ async def rename_quotation(
     org_id: str,
     quotation_id: str,
     body: QuotationRenameBody,
-    ctx: OrgContext = Depends(require_roles("OWNER", "SALES")),
+    ctx: OrgContext = Depends(require_roles("OWNER", "SALES", "TELECALLER")),
 ) -> dict:
     q = await prisma.quotation.find_first(
         where={"id": quotation_id, "organizationId": ctx.organization_id},

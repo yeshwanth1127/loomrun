@@ -1,4 +1,7 @@
-"""Daily usage counters for plan capacity limits."""
+"""Daily usage counters for plan capacity limits (WhatsApp).
+
+AI chat uses dual credit windows in loomrun_api.ai_usage instead.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +9,8 @@ from datetime import date, datetime, timezone
 
 from fastapi import HTTPException, status
 
-from loomrun_api.entitlements import Entitlements, METRIC_AI_CHAT, METRIC_WHATSAPP
+from loomrun_api.ai_usage import ai_usage_snapshot
+from loomrun_api.entitlements import Entitlements, METRIC_WHATSAPP
 from loomrun_api.prisma_client import prisma
 
 
@@ -82,15 +86,12 @@ async def require_capacity(
 
 async def usage_snapshot(organization_id: str, ents: Entitlements) -> dict:
     wa = await get_usage_count(organization_id, METRIC_WHATSAPP)
-    ai = await get_usage_count(organization_id, METRIC_AI_CHAT)
+    ai = await ai_usage_snapshot(organization_id, ents)
     return {
         "day": date.today().isoformat(),
         "whatsapp_outbound": {
             "used": wa,
             "limit": ents.messages_per_day,
         },
-        "ai_chat": {
-            "used": ai,
-            "limit": ents.ai_messages_per_day,
-        },
+        "ai": ai,
     }

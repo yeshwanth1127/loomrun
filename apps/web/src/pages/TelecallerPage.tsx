@@ -336,7 +336,7 @@ export function TelecallerPage() {
           pdf_url: string | null
           number: string
         }>
-      }>(`/v1/orgs/${orgId}/quotations?day=all`)
+      }>(`/v1/orgs/${orgId}/quotations?day=all&doc=quotation`)
 
       const forLead = items.filter((q) => q.lead_id === leadId)
       const ready = forLead.find((q) => !!q.pdf_url)
@@ -652,7 +652,7 @@ export function TelecallerPage() {
                         gap: '0.6rem',
                         padding: '0.65rem 0.75rem',
                         borderRadius: '8px',
-                        border: `1px solid ${selectedProvider === p.provider_name ? '#6366f1' : '#e2e8f0'}`,
+                        border: `1px solid ${selectedProvider === p.provider_name ? 'var(--primary)' : '#e2e8f0'}`,
                         background: selectedProvider === p.provider_name ? '#f5f3ff' : '#fff',
                         cursor: 'pointer',
                         transition: 'all 0.15s',
@@ -680,7 +680,7 @@ export function TelecallerPage() {
                       gap: '0.6rem',
                       padding: '0.65rem 0.75rem',
                       borderRadius: '8px',
-                      border: `1px solid ${selectedProvider === 'MANUAL' ? '#6366f1' : '#e2e8f0'}`,
+                      border: `1px solid ${selectedProvider === 'MANUAL' ? 'var(--primary)' : '#e2e8f0'}`,
                       background: selectedProvider === 'MANUAL' ? '#f5f3ff' : '#fff',
                       cursor: 'pointer',
                       transition: 'all 0.15s',
@@ -1069,7 +1069,7 @@ export function TelecallerPage() {
                       segments={Object.entries(byOutcome).map(([k, v], i) => ({
                         label: CALL_STATUS_MAP[k]?.label ?? k,
                         value: v,
-                        color: ['#3D7A5A', '#B42318', '#2563eb', '#B07A2E', '#5B2C87', '#64748b'][i % 6],
+                        color: ['#3D7A5A', '#B42318', '#0E7490', '#B07A2E', '#0F766E', '#64748b'][i % 6],
                       }))}
                       center={{ value: data.total_calls, label: 'Calls' }}
                     />
@@ -1077,7 +1077,7 @@ export function TelecallerPage() {
                       segments={Object.entries(byOutcome).map(([k, v], i) => ({
                         label: CALL_STATUS_MAP[k]?.label ?? k,
                         value: v,
-                        color: ['#3D7A5A', '#B42318', '#2563eb', '#B07A2E', '#5B2C87', '#64748b'][i % 6],
+                        color: ['#3D7A5A', '#B42318', '#0E7490', '#B07A2E', '#0F766E', '#64748b'][i % 6],
                       }))}
                       total={data.total_calls}
                     />

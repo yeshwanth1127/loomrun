@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { Link } from 'react-router-dom'
+import { NoolrunWordmark } from '../components/react-bits/NoolrunWordmark'
 import { ThemeToggle } from '../components/ui/ThemeToggle'
 import '../styles/landing.css'
 
@@ -106,16 +107,9 @@ const SheetIcon = ({ size = 16 }: { size?: number }) => (
   </svg>
 )
 
-const MarkIcon = ({ size = 14 }: { size?: number }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" {...stroke} strokeWidth={2}>
-    <path d="M5 4v16h14" />
-    <path d="M9 15l3.5-5 3 3.5L20 7" />
-  </svg>
-)
-
 export function LandingPage() {
   useEffect(() => {
-    document.title = 'Loomrun — Operations platform for garment manufacturers'
+    document.title = 'Noolrun — Operations platform for garment manufacturers'
     const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
     const nodes = Array.from(document.querySelectorAll<HTMLElement>('.landing .reveal'))
     if (reduce || !('IntersectionObserver' in window)) {
@@ -140,9 +134,8 @@ export function LandingPage() {
   return (
     <div className="landing">
       <nav className="landing-nav">
-        <div className="logo">
-          <span className="logo-mark"><MarkIcon /></span>
-          Loomrun
+        <div className="logo" aria-label="Noolrun">
+          <img src="/noolrun-logo.png?v=3" alt="Noolrun" className="logo-img" />
         </div>
         <div className="nav-links">
           <a href="#workflow">Workflow</a>
@@ -151,19 +144,19 @@ export function LandingPage() {
           <a href="#pricing">Pricing</a>
           <ThemeToggle />
           <Link to="/login" className="nav-cta">Log in</Link>
-          <Link to="/login" className="nav-btn">Sign up</Link>
+          <Link to="/register" className="nav-btn">Sign up</Link>
         </div>
       </nav>
 
       <header className="hero">
-        <div className="eyebrow">Operations platform for garment manufacturers</div>
+        <NoolrunWordmark className="hero-wordmark" />
         <h1>Every order, every follow-up, one place.</h1>
         <p>
-          Loomrun replaces scattered WhatsApp threads and spreadsheets with one system built around
+          Noolrun replaces scattered WhatsApp threads and spreadsheets with one system built around
           how garment manufacturing actually runs — from first enquiry to final dispatch.
         </p>
         <div className="cta-row">
-          <Link to="/login" className="btn">Sign up</Link>
+          <Link to="/register" className="btn">Sign up</Link>
           <Link to="/login" className="link-underline">Log in</Link>
           <a href="#workflow" className="link-underline">See how it works</a>
         </div>
@@ -659,7 +652,7 @@ export function LandingPage() {
         <h2>See Loomrun on your own orders.</h2>
         <p>We'll walk through your current pipeline and show you what it looks like once it's in one place.</p>
         <div className="cta-row">
-          <Link to="/login" className="btn">Sign up</Link>
+          <Link to="/register" className="btn">Sign up</Link>
           <Link to="/login" className="link-underline">Log in</Link>
         </div>
       </section>
@@ -667,7 +660,9 @@ export function LandingPage() {
       <footer>
         <div className="footer-inner">
           <div>
-            <div className="footer-brand">Loomrun</div>
+            <div className="footer-brand">
+              <img src="/noolrun-logo.png?v=3" alt="Noolrun" className="footer-brand-img" />
+            </div>
             <div>by Exora Solutions Pvt Limited</div>
             <div>AECS Layout, Brookfield, Bangalore</div>
           </div>
@@ -682,7 +677,7 @@ export function LandingPage() {
             <div className="footer-col">
               <div className="footer-col-title">Account</div>
               <Link to="/login">Log in</Link>
-              <Link to="/login">Sign up</Link>
+              <Link to="/register">Sign up</Link>
             </div>
           </div>
           <div>© 2026 Exora Solutions Pvt Limited</div>

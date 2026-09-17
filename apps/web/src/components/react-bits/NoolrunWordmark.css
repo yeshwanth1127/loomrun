@@ -1,0 +1,32 @@
+.noolrun-wordmark {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  object-fit: contain;
+  user-select: none;
+  pointer-events: none;
+  background: transparent;
+}
+
+.noolrun-wordmark--hero {
+  width: min(100%, 42rem);
+  margin-inline: auto;
+}
+
+.noolrun-wordmark--nav {
+  width: auto;
+  height: 2.75rem;
+  max-width: 16rem;
+}
+
+.noolrun-wordmark--auth {
+  width: min(100%, 24rem);
+  height: auto;
+}
+
+/* Keep dark-green mark readable on dark chrome without a plate */
+.dark .noolrun-wordmark--nav,
+.dark .sidebar .noolrun-wordmark {
+  filter: brightness(1.55) contrast(1.05);
+}

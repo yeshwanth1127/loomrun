@@ -1,24 +1,18 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
-  BarChart2,
   Bot,
   Building2,
-  CalendarClock,
-  ChevronDown,
-  FileText,
+  Home,
+  IndianRupee,
   LayoutDashboard,
   LogOut,
   Menu,
-  MessageCircle,
   Moon,
-  Phone,
-  Receipt,
+  Package,
   Settings,
-  Store,
   Sun,
   X,
-  Zap,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -28,13 +22,16 @@ import { useAuth } from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
 import { AgentActivityDock } from './AgentActivityDock'
 import { DateFilterBar } from './DateFilterBar'
+import { GlobalSearch } from './GlobalSearch'
+import { NoolrunWordmark } from './react-bits/NoolrunWordmark'
 import { SmoothScroll } from './SmoothScroll'
 import { apiFetch } from '../lib/api'
+import { routes } from '../lib/appRoutes'
 import { planBadgeClass } from '../lib/entitlements'
-import { membershipForOrg } from '../lib/membership'
+import { isProductionRole, isTelecallerRole, membershipForOrg, roleLabel } from '../lib/membership'
+import { isHomePath, isMoneyPath, isOrdersPath, isSalesPath, isSettingsPath } from '../lib/navPaths'
 
 const apiBase = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
-const NAV_GROUPS_KEY = 'loomrun-nav-groups-v1'
 
 type OrgBrandMeta = {
   legal_name: string | null
@@ -42,125 +39,80 @@ type OrgBrandMeta = {
   updated_at: string
 }
 
-type NavItem = {
+type PrimaryNavItem = {
+  id: string
   to: string
   icon: LucideIcon
   label: string
-  end?: boolean
   badge?: 'follow-ups'
+  match: (pathname: string) => boolean
+  /** Owner / super-admin only */
+  fullAccessOnly?: boolean
+  /** Telecaller (+ sales) personal connections */
+  telecallerConnections?: boolean
 }
 
-type NavGroup = {
-  id: string
-  label: string
-  items: NavItem[]
-}
-
-const SETTINGS_PATHS = [
-  '/app/leads/connections',
-  '/app/settings/telephony',
-  '/app/document-templates',
-  '/app/brand-assets',
-  '/app/team',
-  '/app/subscription',
-] as const
-
-const CEO_NAV: NavItem[] = [
-  { to: '/app/ceo', icon: BarChart2, label: 'CEO Dashboard' },
+const PRIMARY_NAV: PrimaryNavItem[] = [
+  {
+    id: 'home',
+    to: routes.home,
+    icon: Home,
+    label: 'Home',
+    match: isHomePath,
+  },
+  {
+    id: 'sales',
+    to: routes.sales(),
+    icon: LayoutDashboard,
+    label: 'Sales',
+    badge: 'follow-ups',
+    match: isSalesPath,
+  },
+  {
+    id: 'orders',
+    to: routes.orders(),
+    icon: Package,
+    label: 'Orders',
+    match: isOrdersPath,
+  },
+  {
+    id: 'money',
+    to: routes.money(),
+    icon: IndianRupee,
+    label: 'Money',
+    match: isMoneyPath,
+    fullAccessOnly: true,
+  },
+  {
+    id: 'my-connections',
+    to: '/app/my-connections',
+    icon: Settings,
+    label: 'My Connections',
+    match: (pathname) => pathname.startsWith('/app/my-connections'),
+    telecallerConnections: true,
+  },
+  {
+    id: 'settings',
+    to: routes.settings(),
+    icon: Settings,
+    label: 'Settings',
+    match: isSettingsPath,
+    fullAccessOnly: true,
+  },
 ]
 
-function isSettingsPath(pathname: string) {
-  return (SETTINGS_PATHS as readonly string[]).includes(pathname)
-}
-
-function buildWorkspaceGroups(hasFullAccess: boolean, isProduction: boolean): NavGroup[] {
-  const crm: NavItem[] = [
-    { to: '/app/leads', icon: LayoutDashboard, label: 'Leads', end: true },
-    { to: '/app/leads/follow-ups', icon: CalendarClock, label: 'Follow ups', badge: 'follow-ups' },
-    { to: '/app/telecaller', icon: Phone, label: 'Telecaller' },
-  ]
-  const ai: NavItem[] = [
-    { to: '/app/ai', icon: Bot, label: 'Loomrun AI' },
-  ]
-
-  if (!hasFullAccess) {
-    const groups: NavGroup[] = [{ id: 'crm', label: 'CRM', items: crm }]
-    if (isProduction) {
-      groups.push({
-        id: 'ops',
-        label: 'Ops',
-        items: [{ to: '/app/production', icon: Zap, label: 'Production' }],
-      })
-    }
-    groups.push({ id: 'ai', label: 'AI', items: ai })
-    return groups
-  }
-
-  return [
-    { id: 'crm', label: 'CRM', items: crm },
-    {
-      id: 'commerce',
-      label: 'Commerce',
-      items: [
-        { to: '/app/quotations', icon: FileText, label: 'Quotations' },
-        { to: '/app/invoices', icon: FileText, label: 'Invoices' },
-      ],
-    },
-    {
-      id: 'ops',
-      label: 'Ops',
-      items: [
-        { to: '/app/production', icon: Zap, label: 'Production' },
-        { to: '/app/vendors', icon: Store, label: 'Vendors' },
-        { to: '/app/expenses', icon: Receipt, label: 'Expenses' },
-        { to: '/app/whatsapp', icon: MessageCircle, label: 'WhatsApp' },
-      ],
-    },
-    { id: 'ai', label: 'AI', items: ai },
-  ]
-}
-
-function loadOpenGroups(ids: string[]): Record<string, boolean> {
-  try {
-    const raw = localStorage.getItem(NAV_GROUPS_KEY)
-    if (raw) {
-      const parsed = JSON.parse(raw) as Record<string, boolean>
-      const next: Record<string, boolean> = {}
-      for (const id of ids) next[id] = parsed[id] ?? true
-      return next
-    }
-  } catch {
-    /* ignore */
-  }
-  return Object.fromEntries(ids.map((id) => [id, true]))
-}
-
-function NavItemLink({
-  item,
-  dueCount,
-}: {
-  item: NavItem
-  dueCount: number
-}) {
-  const { to, icon: Icon, label, end, badge } = item
-  return (
-    <NavLink
-      to={to}
-      end={end}
-      className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
-    >
-      <Icon size={16} />
-      <span style={{ flex: 1 }}>{label}</span>
-      {badge === 'follow-ups' && dueCount > 0 && (
-        <span
-          className="badge badge-red"
-          style={{ marginLeft: 'auto', fontSize: '0.65rem', minWidth: '1.25rem', textAlign: 'center' }}
-        >
-          {dueCount > 99 ? '99+' : dueCount}
-        </span>
-      )}
-    </NavLink>
-  )
+function navVisible(
+  item: PrimaryNavItem,
+  hasFullAccess: boolean,
+  isProduction: boolean,
+  isTelecaller: boolean,
+): boolean {
+  if (item.telecallerConnections) return !hasFullAccess && (isTelecaller || false)
+  if (item.fullAccessOnly) return hasFullAccess
+  // Production roles: Home + Orders (+ Ask AI), not Sales/Money/Settings
+  if (item.id === 'sales' && isProduction && !hasFullAccess) return false
+  if (item.id === 'orders') return hasFullAccess || isProduction
+  return true
 }
 
 export function AppShell() {
@@ -171,10 +123,11 @@ export function AppShell() {
   const membership = membershipForOrg(me, orgId)
   const isOwner = membership?.role === 'OWNER'
   const hasFullAccess = isOwner || !!me?.is_super_admin
-  const isProduction = membership?.role === 'PRODUCTION'
-  const workspaceGroups = useMemo(
-    () => buildWorkspaceGroups(hasFullAccess, isProduction),
-    [hasFullAccess, isProduction],
+  const isProduction = isProductionRole(membership)
+  const isTelecaller = isTelecallerRole(membership)
+  const visibleNav = useMemo(
+    () => PRIMARY_NAV.filter((item) => navVisible(item, hasFullAccess, isProduction, isTelecaller)),
+    [hasFullAccess, isProduction, isTelecaller],
   )
   const orgName = membership?.organization?.name ?? ''
   const org = membership?.organization
@@ -182,10 +135,11 @@ export function AppShell() {
   const trialActive = !!org?.trial_active
   const trialDaysLeft = org?.days_left ?? null
   const settingsActive = isSettingsPath(location.pathname)
+  const aiActive = location.pathname === '/app/ai' || location.pathname.startsWith('/app/ai/')
   const onSpecialScrollPage =
-    location.pathname === '/app/leads' ||
+    location.pathname === '/app/sales' ||
+    location.pathname === '/app/home' ||
     location.pathname === '/app/ai' ||
-    location.pathname === '/app/telecaller' ||
     settingsActive
 
   const brandMeta = useQuery({
@@ -198,9 +152,10 @@ export function AppShell() {
     queryKey: ['follow-ups-due', orgId],
     enabled: !!orgId && !!membership && !trialExpired,
     queryFn: () =>
-      apiFetch<{ items: Array<{ id: string; title: string; in_app_pending: boolean }>; count: number }>(
-        `/v1/orgs/${orgId}/follow-ups/due`,
-      ),
+      apiFetch<{
+        items: Array<{ id: string; title: string; in_app_pending: boolean }>
+        count: number
+      }>(`/v1/orgs/${orgId}/follow-ups/due`),
     refetchInterval: 30_000,
   })
   const dueCount = dueFollowUps.data?.count ?? 0
@@ -219,59 +174,35 @@ export function AppShell() {
       .filter((i) => fresh.includes(i.id))
       .map((i) => i.title)
     toast.message(
-      fresh.length === 1
-        ? `Follow-up due: ${titles[0]}`
-        : `${fresh.length} follow-ups due`,
+      fresh.length === 1 ? `Follow-up due: ${titles[0]}` : `${fresh.length} follow-ups due`,
       {
         description: titles.slice(0, 3).join(', ') + (titles.length > 3 ? '…' : ''),
         action: {
           label: 'Open',
-          onClick: () => navigate('/app/leads/follow-ups'),
+          onClick: () => navigate(routes.sales('follow-ups')),
         },
       },
     )
     void apiFetch(`/v1/orgs/${orgId}/follow-ups/ack`, {
       method: 'POST',
       json: { lead_ids: fresh },
-    }).then(() => {
-      void qc.invalidateQueries({ queryKey: ['follow-ups-due', orgId] })
-    }).catch(() => { /* ignore */ })
+    })
+      .then(() => {
+        void qc.invalidateQueries({ queryKey: ['follow-ups-due', orgId] })
+      })
+      .catch(() => {
+        /* ignore */
+      })
   }, [orgId, pendingToastIds.join(','), dueFollowUps.data, navigate, qc])
 
   useEffect(() => {
     if (!trialExpired) return
-    if (location.pathname.startsWith('/app/subscription')) return
-    navigate('/app/subscription', { replace: true })
+    if (location.pathname.startsWith(routes.settings('plan'))) return
+    navigate(routes.settings('plan'), { replace: true })
   }, [trialExpired, location.pathname, navigate])
 
   const [sidebarLogoUrl, setSidebarLogoUrl] = useState<string | null>(null)
   const [navOpen, setNavOpen] = useState(false)
-  const groupIds = workspaceGroups.map((g) => g.id)
-  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() =>
-    loadOpenGroups(groupIds),
-  )
-
-  useEffect(() => {
-    setOpenGroups((prev) => {
-      const next = { ...prev }
-      let changed = false
-      for (const id of groupIds) {
-        if (next[id] === undefined) {
-          next[id] = true
-          changed = true
-        }
-      }
-      return changed ? next : prev
-    })
-  }, [groupIds.join(',')])
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(NAV_GROUPS_KEY, JSON.stringify(openGroups))
-    } catch {
-      /* ignore */
-    }
-  }, [openGroups])
 
   useEffect(() => {
     setNavOpen(false)
@@ -312,12 +243,11 @@ export function AppShell() {
 
   const legal = brandMeta.data?.legal_name?.trim()
   const sidebarTitle = legal || orgName || 'Workspace'
-  const sidebarSubtitle = legal && legal !== orgName ? orgName : undefined
 
   if (loading) {
     return (
       <div className="app-loading">
-        <div className="app-loading-mark">L</div>
+        <img src="/noolrun-mark.png?v=3" alt="" className="app-loading-mark" />
         <p className="muted">Loading workspace…</p>
       </div>
     )
@@ -331,10 +261,21 @@ export function AppShell() {
 
   if (!orgId && me.organizations.length === 0) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          minHeight: '100vh',
+        }}
+      >
         <div style={{ textAlign: 'center' }}>
-          <p className="muted" style={{ marginBottom: '1rem' }}>No organization yet.</p>
-          <button type="button" className="btn" onClick={() => navigate('/register')}>Create account</button>
+          <p className="muted" style={{ marginBottom: '1rem' }}>
+            No organization yet.
+          </p>
+          <button type="button" className="btn" onClick={() => navigate('/register')}>
+            Create account
+          </button>
         </div>
       </div>
     )
@@ -342,18 +283,12 @@ export function AppShell() {
 
   const initials = (me.name ?? me.email).slice(0, 2).toUpperCase()
 
-  function toggleGroup(id: string) {
-    setOpenGroups((prev) => ({ ...prev, [id]: !prev[id] }))
-  }
-
   return (
     <div className="layout">
       <aside className={navOpen ? 'sidebar open' : 'sidebar'}>
         <div className="sidebar-brand">
-          <img className="sidebar-brand-logo-img" src="/loomrun-mark.jpg" alt="Loom Run" />
-          <div style={{ minWidth: 0 }}>
-            <div className="sidebar-brand-name">Loom Run</div>
-            <div className="sidebar-brand-sub">Business OS</div>
+          <div className="sidebar-brand-copy">
+            <NoolrunWordmark size="nav" className="sidebar-noolrun-wordmark" />
           </div>
         </div>
 
@@ -367,78 +302,86 @@ export function AppShell() {
             >
               {me.organizations.map((o) => (
                 <option key={o.organization.id} value={o.organization.id}>
-                  {o.organization.name}{o.organization.suspended ? ' (suspended)' : ''}
+                  {o.organization.name}
+                  {o.organization.suspended ? ' (suspended)' : ''}
                 </option>
               ))}
             </select>
           </div>
         )}
 
-        <nav className="sidebar-nav">
-          {workspaceGroups.map((group) => {
-            const open = openGroups[group.id] !== false
-            return (
-              <div key={group.id} className="sidebar-section">
-                <button
-                  type="button"
-                  className="sidebar-group-toggle"
-                  onClick={() => toggleGroup(group.id)}
-                  aria-expanded={open}
-                >
-                  <span className="sidebar-group-toggle-label">{group.label}</span>
-                  <ChevronDown
-                    size={14}
-                    style={{
-                      transform: open ? undefined : 'rotate(-90deg)',
-                      transition: 'transform 0.15s ease',
-                      opacity: 0.7,
-                    }}
-                  />
-                </button>
-                <div className="sidebar-group-items" hidden={!open}>
-                  {group.items.map((item) => (
-                    <NavItemLink key={item.to} item={item} dueCount={dueCount} />
-                  ))}
-                </div>
-              </div>
-            )
-          })}
+        <GlobalSearch />
 
-          {hasFullAccess && (
-            <div className="sidebar-section" style={{ marginTop: '0.5rem' }}>
-              <div className="sidebar-section-label">Analytics</div>
-              {CEO_NAV.map((item) => (
-                <NavItemLink key={item.to} item={item} dueCount={dueCount} />
-              ))}
+        <nav className="sidebar-nav" aria-label="Primary">
+          <div className="sidebar-section">
+            <div className="sidebar-group-items">
+              {visibleNav.map((item) => {
+                const Icon = item.icon
+                const active = item.match(location.pathname)
+                return (
+                  <NavLink
+                    key={item.id}
+                    to={item.to}
+                    end={item.id === 'home'}
+                    className={() => `nav-item${active ? ' active' : ''}`}
+                  >
+                    <Icon size={16} />
+                    <span style={{ flex: 1 }}>{item.label}</span>
+                    {item.badge === 'follow-ups' && dueCount > 0 && (
+                      <span
+                        className="badge badge-red"
+                        style={{
+                          marginLeft: 'auto',
+                          fontSize: '0.65rem',
+                          minWidth: '1.25rem',
+                          textAlign: 'center',
+                        }}
+                      >
+                        {dueCount > 99 ? '99+' : dueCount}
+                      </span>
+                    )}
+                  </NavLink>
+                )
+              })}
             </div>
-          )}
+          </div>
 
-          {hasFullAccess && (
-            <div className="sidebar-section" style={{ marginTop: '0.5rem' }}>
-              <div className="sidebar-section-label">Settings</div>
-              {isOwner && (
-                <NavLink
-                  to="/app/leads/connections"
-                  className={() => `nav-item${settingsActive ? ' active' : ''}`}
-                >
-                  <Settings size={16} />
-                  Settings
-                </NavLink>
-              )}
-              {me.is_super_admin && (
-                <NavLink to="/platform" className="nav-item">
-                  <Building2 size={16} />
-                  Platform Admin
-                </NavLink>
-              )}
+          {me.is_super_admin && (
+            <div className="sidebar-section" style={{ marginTop: '0.75rem' }}>
+              <div className="sidebar-section-label">Platform</div>
+              <NavLink to="/platform" className="nav-item">
+                <Building2 size={16} />
+                Platform Admin
+              </NavLink>
             </div>
           )}
         </nav>
 
         <div className="sidebar-footer">
+          {/* Global / contextual AI entry — full AiChatPage capability preserved */}
+          <NavLink
+            to="/app/ai"
+            className={() => `nav-item nav-item-ai${aiActive ? ' active' : ''}`}
+            title="Ask Loomrun AI"
+          >
+            <Bot size={16} />
+            <span style={{ flex: 1 }}>Ask AI</span>
+          </NavLink>
+
           {membership?.organization?.plan && (
-            <div className="row" style={{ gap: '0.4rem', padding: '0 0.25rem 0.35rem', alignItems: 'center', flexWrap: 'wrap' }}>
-              <span className={`badge ${planBadgeClass(membership.organization.plan)}`} style={{ textTransform: 'capitalize' }}>
+            <div
+              className="row"
+              style={{
+                gap: '0.4rem',
+                padding: '0.35rem 0.25rem',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+              }}
+            >
+              <span
+                className={`badge ${planBadgeClass(membership.organization.plan)}`}
+                style={{ textTransform: 'capitalize' }}
+              >
                 {membership.organization.plan}
               </span>
               {trialActive && trialDaysLeft != null && (
@@ -446,7 +389,11 @@ export function AppShell() {
               )}
               {trialExpired && <span className="badge badge-red">Trial ended</span>}
               {isOwner && (
-                <NavLink to="/app/subscription" className="muted small" style={{ textDecoration: 'none' }}>
+                <NavLink
+                  to={routes.settings('plan')}
+                  className="muted small"
+                  style={{ textDecoration: 'none' }}
+                >
                   Manage
                 </NavLink>
               )}
@@ -454,9 +401,16 @@ export function AppShell() {
           )}
           <div className="user-row">
             {sidebarLogoUrl ? (
-              <img className="user-avatar" src={sidebarLogoUrl} alt="" style={{ objectFit: 'cover' }} />
+              <img
+                className="user-avatar"
+                src={sidebarLogoUrl}
+                alt=""
+                style={{ objectFit: 'cover' }}
+              />
             ) : (
-              <div className="user-avatar">{orgName ? orgName.slice(0, 2).toUpperCase() : initials}</div>
+              <div className="user-avatar">
+                {orgName ? orgName.slice(0, 2).toUpperCase() : initials}
+              </div>
             )}
             <div style={{ flex: 1, minWidth: 0 }}>
               <div className="user-email">{sidebarTitle || me.name || me.email}</div>
@@ -466,7 +420,12 @@ export function AppShell() {
                 </div>
               )}
             </div>
-            <button type="button" className="btn-logout" onClick={() => toggleDark()} title={isDark ? 'Light mode' : 'Dark mode'}>
+            <button
+              type="button"
+              className="btn-logout"
+              onClick={() => toggleDark()}
+              title={isDark ? 'Light mode' : 'Dark mode'}
+            >
               {isDark ? <Sun size={15} /> : <Moon size={15} />}
             </button>
             <button type="button" className="btn-logout" onClick={() => logout()} title="Sign out">
@@ -479,11 +438,7 @@ export function AppShell() {
       <AgentActivityDock />
 
       {navOpen && (
-        <div
-          className="sidebar-overlay"
-          onClick={() => setNavOpen(false)}
-          aria-hidden="true"
-        />
+        <div className="sidebar-overlay" onClick={() => setNavOpen(false)} aria-hidden="true" />
       )}
 
       <main className="main">
@@ -504,15 +459,13 @@ export function AppShell() {
             <span>
               Free trial: <strong>{trialDaysLeft}</strong> day{trialDaysLeft === 1 ? '' : 's'} left
             </span>
-            {isOwner && (
-              <NavLink to="/app/subscription">View plans</NavLink>
-            )}
+            {isOwner && <NavLink to={routes.settings('plan')}>View plans</NavLink>}
           </div>
         )}
         {trialExpired && (
           <div className="trial-banner trial-banner--expired">
             <span>Trial ended — upgrade to continue</span>
-            <NavLink to="/app/subscription">Upgrade now</NavLink>
+            <NavLink to={routes.settings('plan')}>Upgrade now</NavLink>
           </div>
         )}
         {!trialExpired && <DateFilterBar compact />}
@@ -523,11 +476,23 @@ export function AppShell() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -6 }}
             transition={{ duration: 0.32, ease: [0.22, 1, 0.36, 1] }}
-            style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
+            style={{
+              flex: 1,
+              minHeight: 0,
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
+            }}
           >
             <SmoothScroll
               enabled={!onSpecialScrollPage}
-              style={{ flex: 1, minHeight: 0, overflow: 'auto', display: 'flex', flexDirection: 'column' }}
+              style={{
+                flex: 1,
+                minHeight: 0,
+                overflow: 'auto',
+                display: 'flex',
+                flexDirection: 'column',
+              }}
             >
               <Outlet />
             </SmoothScroll>

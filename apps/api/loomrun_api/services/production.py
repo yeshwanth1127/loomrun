@@ -163,6 +163,8 @@ def serialize_order(r) -> dict[str, Any]:
         "stage_entered_at": _iso(r.stageEnteredAt),
         "lead_title": r.lead.title if getattr(r, "lead", None) else None,
         "lead_phone": r.lead.phone if getattr(r, "lead", None) else None,
+        "design_garment_type": getattr(r, "designGarmentType", None),
+        "design_garment_color": getattr(r, "designGarmentColor", None),
         "payments": [
             {
                 "id": p.id,
@@ -303,10 +305,23 @@ async def create_production_order(
             "expected_dispatch_at": _iso(expected_dispatch_at),
         },
     )
+    from loomrun_api.pipeline_stage_move import mark_lead_won_on_order_placed
+
+    await mark_lead_won_on_order_placed(
+        db=prisma,
+        lead=lead,
+        user_id=user_id,
+        order_number=order_number,
+    )
     org_events.record_changed(
         organization_id=organization_id,
         entity_type=org_events.qlix_docs.ENTITY_PRODUCTION,
         entity_id=row.id,
+    )
+    org_events.record_changed(
+        organization_id=organization_id,
+        entity_type=org_events.qlix_docs.ENTITY_LEAD,
+        entity_id=lead.id,
     )
     return await get_production_order(organization_id=organization_id, order_id=row.id)
 

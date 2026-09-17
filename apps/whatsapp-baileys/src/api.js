@@ -4,6 +4,7 @@ import {
   getSessionStatus,
   listSessions,
   sendDocument,
+  sendImage,
   sendText,
   startSession,
   stopSession,
@@ -124,6 +125,22 @@ export function createApiRouter() {
     const resolvedMime = mimetype || MIME_MAP[ext] || 'application/octet-stream';
     const resolvedName = fileName || path.basename(filePath);
     const result = await sendDocument(connectorId, toPhone, filePath, resolvedName, resolvedMime);
+    res.status(result.ok ? 200 : 503).json(result);
+  });
+
+  router.post('/send-image', async (req, res) => {
+    const connectorId = req.body?.org_id;
+    const toPhone = req.body?.to_phone;
+    const filePath = req.body?.file_path;
+    const caption = typeof req.body?.caption === 'string' ? req.body.caption : '';
+    const mimetype = req.body?.mimetype;
+    if (!connectorId || !toPhone || typeof filePath !== 'string' || !filePath.trim()) {
+      res.status(400).json({ ok: false, error: 'org_id, to_phone and file_path required' });
+      return;
+    }
+    const ext = path.extname(filePath).toLowerCase();
+    const resolvedMime = mimetype || MIME_MAP[ext] || 'image/jpeg';
+    const result = await sendImage(connectorId, toPhone, filePath, resolvedMime, caption);
     res.status(result.ok ? 200 : 503).json(result);
   });
 

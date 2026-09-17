@@ -17,7 +17,7 @@ EXTRA_USER_PRICE_INR = 750
 TRIAL_DAYS = 14
 
 METRIC_WHATSAPP = "whatsapp_outbound"
-METRIC_AI_CHAT = "ai_chat"
+METRIC_AI_CHAT = "ai_chat"  # legacy daily counter; AI now uses dual credit windows
 
 
 @dataclass(frozen=True)
@@ -35,7 +35,8 @@ class Entitlements:
     event_automations: bool
     # Capacity limits (None = unlimited)
     messages_per_day: int | None
-    ai_messages_per_day: int | None
+    ai_credits_per_5h: int | None
+    ai_credits_per_week: int | None
     max_leads: int | None
 
     def to_dict(self) -> dict[str, Any]:
@@ -59,7 +60,8 @@ _FREE = Entitlements(
     gmail_calendar=True,
     event_automations=True,
     messages_per_day=15,
-    ai_messages_per_day=15,
+    ai_credits_per_5h=80,
+    ai_credits_per_week=400,
     max_leads=100,
 )
 
@@ -76,7 +78,8 @@ _GROWTH = Entitlements(
     gmail_calendar=False,
     event_automations=False,
     messages_per_day=50,
-    ai_messages_per_day=30,
+    ai_credits_per_5h=120,
+    ai_credits_per_week=700,
     max_leads=None,
 )
 
@@ -93,7 +96,8 @@ _SCALE = Entitlements(
     gmail_calendar=True,
     event_automations=True,
     messages_per_day=500,
-    ai_messages_per_day=200,
+    ai_credits_per_5h=400,
+    ai_credits_per_week=2500,
     max_leads=None,
 )
 
@@ -116,7 +120,8 @@ _LOCKED = Entitlements(
     gmail_calendar=False,
     event_automations=False,
     messages_per_day=0,
-    ai_messages_per_day=0,
+    ai_credits_per_5h=0,
+    ai_credits_per_week=0,
     max_leads=0,
 )
 
@@ -139,7 +144,7 @@ PLAN_CATALOG: list[dict[str, Any]] = [
             "13-stage production tracking pipeline",
             "Automated messaging up to 50 messages/day",
             "Message templates for quotations, invoices, and follow-ups",
-            "Minimal AI chat assistant for basic questions",
+            "Minimal AI chat assistant (120 credits / 5h, 700 / week)",
             "Call logging and telecaller workflow",
             "Payment tracking and expense management",
             "P&L visibility per order",
@@ -169,7 +174,7 @@ PLAN_CATALOG: list[dict[str, Any]] = [
             "Automated reporting and insights",
             "Per-provider usage and cost tracking",
             "Priority support and dedicated onboarding",
-            "Higher messaging & AI capacity",
+            "Higher WhatsApp capacity + AI credits (400 / 5h, 2,500 / week)",
         ],
     },
 ]

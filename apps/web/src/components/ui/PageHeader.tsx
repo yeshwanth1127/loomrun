@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react'
 
 type PageHeaderProps = {
-  title: string
+  /** Usually a string; a node lets a page put an inline rename control in the title. */
+  title: ReactNode
   badge?: ReactNode
   description?: ReactNode
   actions?: ReactNode

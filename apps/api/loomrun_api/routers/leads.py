@@ -10,8 +10,11 @@ from loomrun_api import org_events
 from loomrun_api.prisma_client import prisma
 from loomrun_api.prisma_json import json_meta
 from loomrun_api.services import leads as lead_svc
-from loomrun_api.whatsapp_template_service import schedule_greeting
 from prisma.enums import CallOutcome, LeadActivityType, LeadSource, LeadStage, LeadStatus
+
+
+def _outcome_name(val) -> str:
+    return val.name if hasattr(val, "name") else str(val)
 
 router = APIRouter()
 
@@ -79,6 +82,12 @@ class LeadCreate(BaseModel):
     assignee_id: str | None = None
     next_follow_up_at: datetime | None = None
     estimated_value: float | None = None
+    region: str | None = None
+    sector: str | None = None
+    campaign_id: str | None = None
+    campaign_name: str | None = None
+    pipeline_id: str | None = None
+    pipeline_stage_id: str | None = None
 
 
 class LeadUpdate(BaseModel):
@@ -98,6 +107,13 @@ class LeadUpdate(BaseModel):
     assignee_id: str | None = None
     next_follow_up_at: datetime | None = None
     estimated_value: float | None = None
+    region: str | None = None
+    sector: str | None = None
+    campaign_id: str | None = None
+    campaign_name: str | None = None
+    pipeline_id: str | None = None
+    pipeline_stage_id: str | None = None
+    reroute: bool = False
 
 
 class ActivityCreate(BaseModel):
@@ -115,8 +131,12 @@ class LeadIngestPayload(BaseModel):
     product_interest: str | None = None
     quantity_estimate: str | None = None
     campaign: str | None = None
+    campaign_id: str | None = None
     ad_id: str | None = None
     notes: str | None = None
+    region: str | None = None
+    sector: str | None = None
+    pipeline_id: str | None = None
 
 
 def _normalize_source(src: str) -> LeadSource:
@@ -136,6 +156,22 @@ def _normalize_source(src: str) -> LeadSource:
         "telecaller": LeadSource.TELECALLER,
     }
     return mapping.get(src.lower().replace(" ", "_"), LeadSource.OTHER)
+
+
+@router.get("/orgs/{org_id}/lead-attribution/campaigns")
+async def list_attribution_campaigns(
+    org_id: str,
+    source: str | None = Query(
+        None,
+        description="LeadSource enum (e.g. META_ADS, GOOGLE_ADS) or short alias META/GOOGLE",
+    ),
+    ctx: OrgContext = Depends(get_org_context),
+) -> dict:
+    """Distinct normalized campaigns seen on org leads (for routing-rule pickers)."""
+    return await lead_svc.list_attribution_campaigns(
+        organization_id=ctx.organization_id,
+        source=source,
+    )
 
 
 @router.get("/orgs/{org_id}/leads/meta-campaigns")
@@ -182,9 +218,14 @@ async def list_leads(
     score_max: int | None = Query(None),
     search: str | None = Query(None),
     day: str | None = Query(None, description="YYYY-MM-DD or all"),
-    campaign_id: str | None = Query(None, description="Filter by Meta campaign ID"),
+    campaign_id: str | None = Query(None, description="Filter by campaign ID (normalized or Meta)"),
+    pipeline_id: str | None = Query(None, description="Filter by pipeline workspace"),
+    pipeline_stage_id: str | None = Query(None, description="Filter by pipeline stage"),
     has_follow_up: bool | None = Query(None, description="Only leads with a scheduled follow-up"),
-    last_call_outcome: CallOutcome | None = Query(None, description="Only leads whose latest call had this outcome"),
+    last_call_outcome: str | None = Query(
+        None,
+        description="Only leads whose latest call had this outcome (comma-separated for multiple)",
+    ),
     limit: int | None = Query(None, ge=1, le=100, description="Max rows (for pickers/search)"),
     include_last_call: bool = Query(True, description="Include last call summary per lead"),
     ctx: OrgContext = Depends(get_org_context),
@@ -201,6 +242,10 @@ async def list_leads(
         where["assigneeId"] = assignee_id
     if lead_status is not None:
         where["leadStatus"] = lead_status
+    if pipeline_id is not None:
+        where["pipelineId"] = pipeline_id
+    if pipeline_stage_id is not None:
+        where["pipelineStageId"] = pipeline_stage_id
     if score_min is not None:
         where["leadScore"] = {**(where.get("leadScore") or {}), "gte": score_min}
     if score_max is not None:
@@ -213,9 +258,17 @@ async def list_leads(
             {"email": {"contains": search, "mode": "insensitive"}},
         ]
     if campaign_id is not None:
-        where["metaCampaignId"] = campaign_id
+        campaign_clause = [{"campaignId": campaign_id}, {"metaCampaignId": campaign_id}]
+        if "OR" in where:
+            where["AND"] = [{"OR": where.pop("OR")}, {"OR": campaign_clause}]
+        else:
+            where["OR"] = campaign_clause
     order = {"nextFollowUpAt": "asc"} if has_follow_up else {"updatedAt": "desc"}
-    find_args: dict = {"where": where, "order": order}
+    find_args: dict = {
+        "where": where,
+        "order": order,
+        "include": {"pipeline": True, "pipelineStage": True},
+    }
     # When filtering by latest call outcome we must inspect every matching lead's
     # last call, so the row limit is applied after that filter (below) instead.
     if limit is not None and last_call_outcome is None:
@@ -226,7 +279,13 @@ async def list_leads(
     if with_last_call and leads:
         latest_calls = await _latest_calls_by_lead(ctx.organization_id, [lead.id for lead in leads])
     if last_call_outcome is not None:
-        leads = [lead for lead in leads if latest_calls.get(lead.id) and latest_calls[lead.id].outcome == last_call_outcome]
+        wanted = {p.strip().upper() for p in last_call_outcome.split(",") if p.strip()}
+        leads = [
+            lead
+            for lead in leads
+            if latest_calls.get(lead.id)
+            and _outcome_name(latest_calls[lead.id].outcome) in wanted
+        ]
         if limit is not None:
             leads = leads[:limit]
     return {
@@ -261,6 +320,12 @@ async def create_lead(org_id: str, body: LeadCreate, ctx: OrgContext = Depends(g
         assignee_id=body.assignee_id,
         next_follow_up_at=body.next_follow_up_at,
         estimated_value=body.estimated_value,
+        region=body.region,
+        sector=body.sector,
+        campaign_id=body.campaign_id,
+        campaign_name=body.campaign_name,
+        pipeline_id=body.pipeline_id,
+        pipeline_stage_id=body.pipeline_stage_id,
         organization=ctx.organization,
     )
 
@@ -299,54 +364,45 @@ async def ingest_lead(org_id: str, body: LeadIngestPayload, ctx: OrgContext = De
         )
         return {**_serialize_lead(existing), "duplicate": True}
 
-    score = _compute_lead_score(source, body.phone, body.email, body.product_interest, body.city)
-    parts = []
-    if body.campaign:
-        parts.append(f"campaign:{body.campaign}")
-    if body.ad_id:
-        parts.append(f"ad:{body.ad_id}")
-    source_detail = ", ".join(parts) if parts else None
-
-    lead = await prisma.lead.create(
-        data={
-            "organizationId": ctx.organization_id,
-            "title": body.name or f"Lead via {SOURCE_LABELS.get(source.name if hasattr(source, 'name') else str(source), body.source)}",
-            "source": source,
-            "phone": body.phone,
-            "email": body.email,
-            "city": body.city,
-            "productInterest": body.product_interest,
-            "quantityEstimate": body.quantity_estimate,
-            "leadScore": score,
-            "sourceDetail": source_detail,
-            "notes": body.notes,
-            "tags": [],
-            "lastActivityAt": datetime.utcnow(),
-        }
+    campaign_name = (body.campaign or "").strip() or None
+    campaign_id = (body.campaign_id or "").strip() or None
+    created = await lead_svc.create_lead(
+        organization_id=ctx.organization_id,
+        user_id=ctx.membership.userId,
+        title=body.name
+        or f"Lead via {SOURCE_LABELS.get(source.name if hasattr(source, 'name') else str(source), body.source)}",
+        source=source,
+        phone=body.phone,
+        email=body.email,
+        city=body.city,
+        product_interest=body.product_interest,
+        quantity_estimate=body.quantity_estimate,
+        notes=body.notes,
+        region=body.region,
+        sector=body.sector,
+        campaign_id=campaign_id,
+        campaign_name=campaign_name,
+        pipeline_id=body.pipeline_id,
+        source_detail=(
+            ", ".join(
+                p
+                for p in [
+                    f"campaign:{body.campaign}" if body.campaign else None,
+                    f"ad:{body.ad_id}" if body.ad_id else None,
+                ]
+                if p
+            )
+            or None
+        ),
+        organization=ctx.organization,
+        activity_body="Lead ingested",
+        activity_metadata={
+            "source": source.name if hasattr(source, "name") else str(source),
+            "campaign": body.campaign,
+            "ad_id": body.ad_id,
+        },
     )
-    await prisma.leadactivity.create(
-        data={
-            "leadId": lead.id,
-            "type": LeadActivityType.SYSTEM,
-            "body": "Lead ingested",
-            "metadata": json_meta(
-                {
-                    "source": source.name if hasattr(source, "name") else str(source),
-                    "campaign": body.campaign,
-                    "ad_id": body.ad_id,
-                }
-            ),
-        }
-    )
-    schedule_greeting(ctx.organization_id, lead.id)
-    org_events.emit(
-        ctx.organization_id,
-        "lead.created",
-        {"lead": _serialize_lead(lead)},
-        entity_type=org_events.qlix_docs.ENTITY_LEAD,
-        entity_id=lead.id,
-    )
-    return {**_serialize_lead(lead), "duplicate": False}
+    return {**created, "duplicate": False}
 
 
 _MAX_CSV_BYTES = 8 * 1024 * 1024
@@ -455,6 +511,13 @@ async def update_lead(
         assignee_id=body.assignee_id,
         next_follow_up_at=body.next_follow_up_at,
         estimated_value=body.estimated_value,
+        region=body.region,
+        sector=body.sector,
+        campaign_id=body.campaign_id,
+        campaign_name=body.campaign_name,
+        pipeline_id=body.pipeline_id,
+        pipeline_stage_id=body.pipeline_stage_id,
+        reroute=body.reroute,
     )
 
 

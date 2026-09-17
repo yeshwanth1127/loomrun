@@ -481,3 +481,50 @@ export async function sendDocument(connectorId, toPhone, filePath, fileName, mim
     }
   }
 }
+
+export async function sendImage(connectorId, toPhone, filePath, mimetype = 'image/jpeg', caption = '') {
+  let entry = await ensureConnected(connectorId);
+  if (!entry?.connected || !entry.sock) {
+    const hint = entry?.lastError ? ` (${entry.lastError})` : '';
+    return { ok: false, error: `WhatsApp not connected${hint}` };
+  }
+  let buffer;
+  try {
+    buffer = fs.readFileSync(filePath);
+  } catch (err) {
+    return { ok: false, error: `Cannot read file: ${err.message}` };
+  }
+  const resolved = await resolveRecipientJid(entry.sock, toPhone);
+  if (resolved.error) return { ok: false, error: resolved.error };
+  const payload = {
+    image: buffer,
+    mimetype,
+  };
+  if (caption && String(caption).trim()) {
+    payload.caption = String(caption).trim();
+  }
+  try {
+    const sent = await entry.sock.sendMessage(resolved.jid, payload);
+    console.log(`[loomrun-whatsapp] sent image connector=${connectorId} to=${resolved.jid}`);
+    return { ok: true, timestamp: new Date().toISOString(), jid: resolved.jid, message_id: sent?.key?.id ?? null };
+  } catch (err) {
+    const error = err?.message || 'Send failed';
+    console.warn(`[loomrun-whatsapp] send image failed connector=${connectorId} to=${resolved.jid}:`, error);
+    markSendFailure(entry, error);
+
+    entry = await ensureConnected(connectorId);
+    if (!entry?.connected || !entry.sock) {
+      return { ok: false, error };
+    }
+    try {
+      const sent = await entry.sock.sendMessage(resolved.jid, payload);
+      console.log(`[loomrun-whatsapp] sent image (retry) connector=${connectorId} to=${resolved.jid}`);
+      return { ok: true, timestamp: new Date().toISOString(), jid: resolved.jid, message_id: sent?.key?.id ?? null };
+    } catch (retryErr) {
+      const retryError = retryErr?.message || error;
+      markSendFailure(entry, retryError);
+      console.warn(`[loomrun-whatsapp] send image retry failed connector=${connectorId}:`, retryError);
+      return { ok: false, error: retryError };
+    }
+  }
+}

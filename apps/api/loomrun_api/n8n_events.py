@@ -58,6 +58,7 @@ async def emit_automation_event(
             "organizationId": organization_id,
             "serviceName": N8N_SERVICE,
             "status": "connected",
+            "membershipId": None,
         }
     )
     if not connection or not connection.credentials:

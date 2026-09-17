@@ -13,13 +13,23 @@ from loomrun_api.ai_agent.conversations import append_message, ensure_conversati
 from loomrun_api.ai_agent.knowledge import build_knowledge_pack
 from loomrun_api.ai_agent.memory import get_org_memory, schedule_memory_extraction
 from loomrun_api.ai_agent.models import models_payload, resolve_chat_model
-from loomrun_api.ai_agent.prompts import build_system_prompt
+from loomrun_api.ai_agent.prompts import build_system_prompt, build_write_intent_prompt
 from loomrun_api.ai_agent.tools import pending as pending_store
-from loomrun_api.ai_agent.tools.registry import ToolContext, openai_tools_for_mode
+from loomrun_api.ai_agent.tools.registry import (
+    ToolContext,
+    get_tool,
+    is_simple_create_lead,
+    openai_tools_for_message,
+)
 from loomrun_api.ai_agent.tools.runtime import dispatch_tool_call, execute_confirmed_tool
+from loomrun_api.ai_usage import (
+    accumulate_usage,
+    debit_ai_usage,
+    get_ai_windows,
+    require_ai_capacity,
+)
 from loomrun_api.config import settings
 from loomrun_api.entitlements import (
-    METRIC_AI_CHAT,
     ai_mode_label,
     get_org_entitlements,
     is_access_locked,
@@ -27,18 +37,19 @@ from loomrun_api.entitlements import (
     trial_payload,
 )
 from loomrun_api.llm_client import LlmError, chat_messages
+from loomrun_api.logging_setup import kv, sanitize_log_text
 from loomrun_api.qlix import chat as qlix_chat
 from loomrun_api.qlix import connection as qlix_conn
 from loomrun_api.qlix.client import QlixError
 from loomrun_api.prisma_client import prisma
-from loomrun_api.usage import get_usage_count, increment_usage, require_capacity
 
 logger = logging.getLogger(__name__)
 
-_HISTORY_LIMIT = {"minimal": 6, "advanced": 16}
+_HISTORY_LIMIT = {"minimal": 6, "advanced": 8}
 _MAX_MESSAGE_LEN = 4000
 _MAX_TOOL_ITERATIONS = 6
-_MAX_TOOL_RESULT_CHARS = 6000
+_MAX_TOOL_RESULT_CHARS = 1500
+_WRAP_UP_RESULT_CHARS = 800
 
 
 async def get_ai_status(organization_id: str) -> dict[str, Any]:
@@ -57,7 +68,7 @@ async def get_ai_status(organization_id: str) -> dict[str, Any]:
     plan = normalize_plan(org.plan)
     ents = get_org_entitlements(org)
     mode = ai_mode_label(ents)
-    used = await get_usage_count(organization_id, METRIC_AI_CHAT)
+    usage = await get_ai_windows(organization_id, ents, org_created_at=org.createdAt)
     return {
         "available": ents.ai_chat is not False and not is_access_locked(org),
         "mode": mode,
@@ -65,7 +76,7 @@ async def get_ai_status(organization_id: str) -> dict[str, Any]:
         "multilingual": ents.ai_multilingual,
         "upgrade_required": is_access_locked(org),
         "trial": trial_payload(org),
-        "usage": {"used": used, "limit": ents.ai_messages_per_day},
+        "usage": usage,
         "models": models,
         "memory": {
             "summary": (memory or {}).get("summary") or "",
@@ -126,8 +137,9 @@ async def _begin_turn(
     """Validate, gate and open a chat turn.
 
     Everything here applies whichever agent answers: message limits, trial and
-    plan checks, the daily cap, the conversation record, and persisting the
-    user's message. Loomrun keeps owning these even when Qlix runs the agent.
+    plan checks, dual AI credit windows (5h + weekly), the conversation record,
+    and persisting the user's message. Loomrun keeps owning these even when Qlix
+    runs the agent.
     """
     text = (message or "").strip()
     if not text:
@@ -172,12 +184,10 @@ async def _begin_turn(
         if blocked:
             raise HTTPException(status.HTTP_409_CONFLICT, detail=blocked)
 
-    await require_capacity(
+    await require_ai_capacity(
         organization_id,
         ents=ents,
-        metric=METRIC_AI_CHAT,
-        limit=ents.ai_messages_per_day,
-        label="AI chat",
+        org_created_at=org.createdAt,
     )
 
     # Prefer persisted conversation history when available
@@ -200,6 +210,19 @@ async def _begin_turn(
         set_title_from_user=True,
     )
 
+    logger.info(
+        "ai turn start %s",
+        kv(
+            org=organization_id,
+            user=user_id,
+            conversation=conv_id,
+            model=chosen_model,
+            plan=plan,
+            mode=str(ents.ai_chat),
+            message=sanitize_log_text(text, limit=2000) if settings.log_ai_messages else f"len={len(text)}",
+        ),
+    )
+
     return {
         "text": text,
         "chosen_model": chosen_model,
@@ -220,12 +243,14 @@ async def _persist_abandoned_turn(
     pending_actions: list[dict[str, Any]],
     citations: list[Any],
     auto_approved: list[dict[str, Any]],
+    ents: Any | None = None,
 ) -> None:
     """Save a reply whose reader disconnected before the turn could settle.
 
     Best-effort and deliberately quiet: the caller is already unwinding on a
     cancellation, so anything raised here would replace a normal shutdown with
-    a spurious error.
+    a spurious error. Still meters usage when entitlements are available — the
+    LLM work already happened.
     """
     try:
         await append_message(
@@ -240,6 +265,14 @@ async def _persist_abandoned_turn(
                 "abandoned": True,
             },
         )
+        if ents is not None:
+            await debit_ai_usage(
+                organization_id,
+                ents=ents,
+                source="qlix",
+                model="qlix",
+                conversation_id=conv_id,
+            )
     except Exception:
         logger.exception(
             "Could not persist abandoned turn for org %s conversation %s",
@@ -288,6 +321,10 @@ async def stream_chat(
     )
 
     if can_stream:
+        logger.info(
+            "ai turn path %s",
+            kv(org=organization_id, conversation=conv_id, path="qlix"),
+        )
         text_parts: list[str] = []
         pending_actions: list[dict[str, Any]] = []
         auto_approved: list[dict[str, Any]] = []
@@ -339,6 +376,7 @@ async def stream_chat(
                         mode=mode,
                         plan=turn["plan"],
                         ents=turn["ents"],
+                        usage_source="qlix",
                     )
                     settled = True
                     yield {"type": "done", **result}
@@ -356,6 +394,7 @@ async def stream_chat(
                     pending_actions=pending_actions,
                     citations=citations,
                     auto_approved=auto_approved,
+                    ents=turn.get("ents"),
                 )
             raise
         except (QlixError, qlix_conn.NotConnectedError) as exc:
@@ -383,12 +422,17 @@ async def stream_chat(
                 mode=mode,
                 plan=turn["plan"],
                 ents=turn["ents"],
+                usage_source="qlix",
             )
             yield {"type": "done", **result}
             return
 
         yield {"type": "reset"}
 
+    logger.info(
+        "ai turn path %s",
+        kv(org=organization_id, conversation=conv_id, path="local"),
+    )
     local_result: dict[str, Any] = {}
     async for kind, payload in _local_turn_events(
         turn=turn, organization_id=organization_id, user_id=user_id, role=role, model=model
@@ -452,6 +496,7 @@ async def run_chat(
             mode=mode,
             plan=plan,
             ents=ents,
+            usage_source="qlix",
         )
 
     return await _run_local_turn(
@@ -489,17 +534,24 @@ async def _local_turn_events(
     mode = turn["mode"]
     history = turn["history"]
 
-    knowledge = await build_knowledge_pack(organization_id=organization_id, mode=mode)
-    memory = await get_org_memory(organization_id)
-    system = build_system_prompt(
-        mode=mode,
-        org_name=org.name,
-        knowledge=knowledge,
-        memory=memory.get("formatted") or "",
-    )
+    # Obvious single-write turns skip the heavy knowledge pack + history so
+    # create-lead style requests do not re-pay thousands of prompt tokens.
+    simple_write = mode == "advanced" and is_simple_create_lead(text)
+    if simple_write:
+        system = build_write_intent_prompt(org_name=org.name)
+        hist_limit = 0
+    else:
+        knowledge = await build_knowledge_pack(organization_id=organization_id, mode=mode)
+        memory = await get_org_memory(organization_id)
+        system = build_system_prompt(
+            mode=mode,
+            org_name=org.name,
+            knowledge=knowledge,
+            memory=memory.get("formatted") or "",
+        )
+        hist_limit = _HISTORY_LIMIT.get(mode, 6)
 
     messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
-    hist_limit = _HISTORY_LIMIT.get(mode, 6)
     # Named `past` rather than `turn`/`role`: both of those are live names in
     # this function (the turn dict and the caller's org role), and rebinding
     # them here left `role` holding a chat role like "user" for the rest of the
@@ -511,13 +563,34 @@ async def _local_turn_events(
             messages.append({"role": past_role, "content": content[:_MAX_MESSAGE_LEN]})
     messages.append({"role": "user", "content": text})
 
-    tools = openai_tools_for_mode(mode, role=role)
+    tools = openai_tools_for_message(mode, role=role, message=text)
     tool_ctx = ToolContext(organization_id=organization_id, user_id=user_id, mode=mode, role=role)
     pending_actions: list[dict[str, Any]] = []
     temperature = 0.3 if mode == "minimal" else 0.4
     model_used: str | None = chosen_model
     final_reply = ""
     citations = []
+    token_totals: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0}
+    write_summaries: list[str] = []
+
+    logger.info(
+        "ai local tools %s",
+        kv(
+            org=organization_id,
+            conversation=conv_id,
+            simple_write=simple_write,
+            tool_count=len(tools),
+            tools=",".join(
+                sorted(
+                    {
+                        (t.get("function") or {}).get("name") or "?"
+                        for t in tools
+                        if isinstance(t, dict)
+                    }
+                )
+            ),
+        ),
+    )
 
     try:
         for _ in range(_MAX_TOOL_ITERATIONS):
@@ -528,6 +601,7 @@ async def _local_turn_events(
                 tools=tools or None,
             )
             model_used = result.get("model") or model_used
+            accumulate_usage(token_totals, result.get("usage"))
             tool_calls = result.get("tool_calls") or []
             content = (result.get("content") or "").strip()
 
@@ -543,6 +617,7 @@ async def _local_turn_events(
             messages.append(raw_msg)
 
             stop_for_confirmation = False
+            executed_write = False
             for tc in tool_calls:
                 fn = (tc.get("function") or {}) if isinstance(tc, dict) else {}
                 name = fn.get("name") or ""
@@ -574,6 +649,13 @@ async def _local_turn_events(
                     if pa:
                         pending_actions.append(pa)
                     stop_for_confirmation = True
+                elif outcome.get("status") == "ok":
+                    spec = get_tool(name)
+                    if spec and spec.kind == "write":
+                        executed_write = True
+                        write_summaries.append(
+                            f"{name}: {_clip_tool_result(outcome)[:_WRAP_UP_RESULT_CHARS]}"
+                        )
 
                 messages.append(
                     {
@@ -583,14 +665,37 @@ async def _local_turn_events(
                     }
                 )
 
-            if stop_for_confirmation:
+            if stop_for_confirmation or executed_write:
+                # Cheap wrap-up: do not re-send the full system+history+tools
+                # transcript just to phrase "Done."
+                if executed_write and write_summaries:
+                    wrap_messages = [
+                        {
+                            "role": "system",
+                            "content": (
+                                f'You are Loomrun AI for "{org.name}". '
+                                "Reply in one short sentence confirming what you did. "
+                                "Do not invent extra actions."
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": (
+                                f"User asked: {text}\n"
+                                f"Tool results:\n" + "\n".join(write_summaries)
+                            ),
+                        },
+                    ]
+                else:
+                    wrap_messages = messages
                 follow = await chat_messages(
-                    messages=messages,
+                    messages=wrap_messages,
                     model=chosen_model,
-                    temperature=temperature,
+                    temperature=0.2,
                     tools=None,
                 )
                 model_used = follow.get("model") or model_used
+                accumulate_usage(token_totals, follow.get("usage"))
                 final_reply = (follow.get("content") or "").strip()
                 if not final_reply and pending_actions:
                     final_reply = (
@@ -604,6 +709,10 @@ async def _local_turn_events(
             final_reply = final_reply or "I hit the tool step limit. Please try a simpler request."
 
     except LlmError as exc:
+        logger.warning(
+            "ai turn llm error %s",
+            kv(org=organization_id, conversation=conv_id, error=str(exc), status=exc.status_code),
+        )
         code = status.HTTP_502_BAD_GATEWAY
         if "not configured" in str(exc).lower():
             code = status.HTTP_503_SERVICE_UNAVAILABLE
@@ -624,6 +733,9 @@ async def _local_turn_events(
             mode=mode,
             plan=plan,
             ents=ents,
+            prompt_tokens=token_totals["prompt_tokens"],
+            completion_tokens=token_totals["completion_tokens"],
+            usage_source="chat",
         ),
     )
 
@@ -698,6 +810,9 @@ async def _finish_turn(
     mode: str,
     plan: str,
     ents: Any,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    usage_source: str = "chat",
 ) -> dict[str, Any]:
     """Persist the reply and meter the turn — shared by both agent paths."""
     if not final_reply:
@@ -723,13 +838,41 @@ async def _finish_turn(
         metadata=metadata or None,
     )
 
-    await increment_usage(organization_id, METRIC_AI_CHAT)
+    source = "qlix" if usage_source == "qlix" or model_used == "qlix" else "chat"
+    usage = await debit_ai_usage(
+        organization_id,
+        ents=ents,
+        source=source,  # type: ignore[arg-type]
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        model=model_used or chosen_model,
+        conversation_id=conv_id,
+    )
 
     schedule_memory_extraction(
         organization_id=organization_id,
         user_message=text,
         assistant_reply=final_reply,
         model=settings.openrouter_default_model or chosen_model,
+    )
+
+    logger.info(
+        "ai turn done %s",
+        kv(
+            org=organization_id,
+            conversation=conv_id,
+            model=model_used or chosen_model,
+            path=source,
+            pending_actions=len(pending_actions),
+            auto_approved=len(auto_approved or []),
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            reply=(
+                sanitize_log_text(final_reply, limit=2000)
+                if settings.log_ai_messages
+                else f"len={len(final_reply)}"
+            ),
+        ),
     )
 
     return {
@@ -743,6 +886,7 @@ async def _finish_turn(
         "multilingual": ents.ai_multilingual,
         "model": model_used,
         "requested_model": chosen_model,
+        "usage": usage,
     }
 
 

@@ -15,6 +15,7 @@ enum MembershipRole {
   SALES
   TELECALLER
   PRODUCTION
+  PRODUCTION_MANAGER
   VIEWER
 }
 
@@ -48,6 +49,22 @@ enum LeadStage {
   SAMPLE
   WON
   LOST
+}
+
+enum PipelineStageKind {
+  OPEN
+  WON
+  LOST
+}
+
+enum PipelineType {
+  GENERAL
+  CAMPAIGN
+  REGION
+  PRODUCT
+  SECTOR
+  TEAM
+  CUSTOM
 }
 
 enum LeadActivityType {
@@ -153,6 +170,26 @@ enum CallOutcome {
   RINGING_NO_RESPONSE
   SWITCHED_OFF
   ORDER_CONFIRMED
+  // Canonical Call Status (client 2026-09) — keep legacy values above for old logs
+  NOT_REACHABLE
+  CALL_BACK_LATER
+  WHATSAPP_SENT
+  EMAIL_SENT
+  FOLLOW_UP
+  FOLLOW_UP_DATE_SET
+  PHYSICAL_MEETING_REQUESTED
+  PHYSICAL_MEETING_PENDING
+  PHYSICAL_MEETING_DONE
+  SAMPLE_REQUESTED
+  SAMPLE_PRODUCTION_IN_PROGRESS
+  SAMPLE_SENT
+  FOLLOW_UP_AFTER_SAMPLE
+  DEAL_WON_AFTER_SAMPLE
+  DEAL_WON
+  DEAL_REJECTED_AFTER_SAMPLE
+  DEAL_LOST
+  CLOSED_NOT_NOW
+  DO_NOT_CONTACT
 }
 
 model User {
@@ -216,7 +253,7 @@ model Organization {
   payments          Payment[]
   subscriptions     Subscription[]
   whatsappThreads   WhatsAppThread[]
-  whatsappConnection WhatsAppConnection?
+  whatsappConnections WhatsAppConnection[]
   whatsappTemplates WhatsAppTemplate[]
   outboundMessages  OutboundMessage[]
   telecallerCalls   TelecallerCallLog[]
@@ -228,7 +265,11 @@ model Organization {
   documentTemplates DocumentTemplate[]
   productionActivities ProductionActivity[]
   expenses          Expense[]
+  productionDesignAssets ProductionDesignAsset[]
+  productionMockups ProductionMockup[]
   usageDaily        UsageDaily[]
+  aiUsageWindows    AiUsageWindow[]
+  aiUsageEvents     AiUsageEvent[]
   aiPendingActions  AiPendingAction[]
   aiOrgMemory       AiOrgMemory?
   aiConversations   AiConversation[]
@@ -236,10 +277,80 @@ model Organization {
   qlixSyncQueue     QlixSyncQueue[]
   qlixDocuments     QlixDocument[]
   qlixToolGrants    QlixToolGrant[]
+  pipelines         Pipeline[]
+  pipelineRoutingRules PipelineRoutingRule[]
   defaultQuotationTemplate DocumentTemplate? @relation("OrgDefaultQuotationTemplate", fields: [defaultQuotationTemplateId], references: [id], onDelete: SetNull)
   defaultInvoiceTemplate   DocumentTemplate? @relation("OrgDefaultInvoiceTemplate", fields: [defaultInvoiceTemplateId], references: [id], onDelete: SetNull)
 
   @@map("organizations")
+}
+
+model Pipeline {
+  id             String       @id @default(cuid())
+  organizationId String       @map("organization_id")
+  name           String
+  type           PipelineType @default(GENERAL)
+  isDefault      Boolean      @default(false) @map("is_default")
+  isActive       Boolean      @default(true) @map("is_active")
+  sortOrder      Int          @default(0) @map("sort_order")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  stages       PipelineStage[]
+  leads        Lead[]
+  routingRules PipelineRoutingRule[]
+
+  @@index([organizationId])
+  @@index([organizationId, isDefault])
+  @@index([organizationId, isActive])
+  @@map("pipelines")
+}
+
+model PipelineStage {
+  id          String            @id @default(cuid())
+  pipelineId  String            @map("pipeline_id")
+  name        String
+  slug        String
+  sortOrder   Int               @default(0) @map("sort_order")
+  kind        PipelineStageKind @default(OPEN)
+  /// 0–100 win probability for weighted pipeline value (OPEN stages).
+  probability Int?              @map("probability")
+  /// Maps to LeadStage enum for call/quote automation hooks (NEW, CONTACTED, …).
+  systemKey   String?           @map("system_key")
+  createdAt   DateTime          @default(now()) @map("created_at")
+  updatedAt   DateTime          @updatedAt @map("updated_at")
+
+  pipeline Pipeline @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  leads    Lead[]
+
+  @@unique([pipelineId, slug])
+  @@index([pipelineId, sortOrder])
+  @@index([pipelineId, systemKey])
+  @@map("pipeline_stages")
+}
+
+model PipelineRoutingRule {
+  id             String      @id @default(cuid())
+  organizationId String      @map("organization_id")
+  pipelineId     String      @map("pipeline_id")
+  priority       Int         @default(0)
+  isActive       Boolean     @default(true) @map("is_active")
+  /// Optional AND-match fields; null means "any". Exact-value matching only.
+  source         LeadSource?
+  campaignId     String?     @map("campaign_id")
+  campaignName   String?     @map("campaign_name")
+  region         String?
+  productInterest String?    @map("product_interest")
+  sector         String?
+  createdAt      DateTime    @default(now()) @map("created_at")
+  updatedAt      DateTime    @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  pipeline     Pipeline     @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, priority])
+  @@map("pipeline_routing_rules")
 }
 
 model Membership {
@@ -251,8 +362,10 @@ model Membership {
   whatsappPhone  String?        @map("whatsapp_phone")
   createdAt      DateTime       @default(now()) @map("created_at")
 
-  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user                  User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization          Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  whatsappConnections   WhatsAppConnection[]
+  automationConnections AutomationConnection[]
 
   @@unique([userId, organizationId])
   @@index([organizationId])
@@ -265,6 +378,13 @@ model Lead {
   source           LeadSource  @default(OTHER)
   stage            LeadStage   @default(NEW)
   leadStatus       LeadStatus  @default(ACTIVE) @map("lead_status")
+  pipelineId       String?     @map("pipeline_id")
+  pipelineStageId  String?     @map("pipeline_stage_id")
+  region           String?
+  sector           String?
+  /// Normalized campaign attribution (string IDs). Connectors mirror Meta/Google into these.
+  campaignId       String?     @map("campaign_id")
+  campaignName     String?     @map("campaign_name")
   title            String
   company          String?
   phone            String?
@@ -303,18 +423,23 @@ model Lead {
   createdAt        DateTime    @default(now()) @map("created_at")
   updatedAt        DateTime    @updatedAt @map("updated_at")
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  assignee     User?        @relation("LeadAssignee", fields: [assigneeId], references: [id])
-  activities   LeadActivity[]
-  quotations           Quotation[]
-  productionOrders     ProductionOrder[]
-  productionActivities ProductionActivity[]
-  threads      WhatsAppThread[]
-  outbound     OutboundMessage[]
-  calls        TelecallerCallLog[]
-  expenses     Expense[]
+  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  pipeline      Pipeline?      @relation(fields: [pipelineId], references: [id], onDelete: SetNull)
+  pipelineStage PipelineStage? @relation(fields: [pipelineStageId], references: [id], onDelete: SetNull)
+  assignee      User?          @relation("LeadAssignee", fields: [assigneeId], references: [id])
+  activities    LeadActivity[]
+  quotations            Quotation[]
+  productionOrders      ProductionOrder[]
+  productionActivities  ProductionActivity[]
+  threads       WhatsAppThread[]
+  outbound      OutboundMessage[]
+  calls         TelecallerCallLog[]
+  expenses      Expense[]
 
   @@index([organizationId, stage])
+  @@index([organizationId, pipelineId])
+  @@index([organizationId, pipelineStageId])
+  @@index([organizationId, campaignId])
   @@index([organizationId, nextFollowUpAt])
   @@index([organizationId, metaCampaignId])
   @@index([organizationId, indiamartQueryId])
@@ -430,6 +555,10 @@ model ProductionOrder {
   trackingToken        String?          @unique @map("tracking_token")
   trackingEnabled      Boolean          @default(true) @map("tracking_enabled")
   stageEnteredAt       DateTime         @default(now()) @map("stage_entered_at")
+  /// Design workspace: selected blank garment visualization (T_SHIRT, POLO_T_SHIRT, …)
+  designGarmentType    String?          @map("design_garment_type")
+  /// Design workspace: hex colour for default mockups, e.g. #1E3A5F
+  designGarmentColor   String?          @map("design_garment_color")
   createdAt            DateTime         @default(now()) @map("created_at")
   updatedAt            DateTime         @updatedAt @map("updated_at")
 
@@ -439,12 +568,66 @@ model ProductionOrder {
   payments     Payment[]
   expenses     Expense[]
   activities   ProductionActivity[]
+  designAssets ProductionDesignAsset[]
+  mockups      ProductionMockup[]
 
   @@unique([organizationId, orderNumber])
   @@index([organizationId, stage])
   @@index([organizationId, orderStatus])
   @@index([leadId])
   @@map("production_orders")
+}
+
+model ProductionDesignAsset {
+  id                String   @id @default(cuid())
+  organizationId    String   @map("organization_id")
+  productionOrderId String   @map("production_order_id")
+  fileName          String   @map("file_name")
+  storagePath       String   @map("storage_path")
+  mimeType          String   @map("mime_type")
+  byteSize          Int      @map("byte_size")
+  /// SOURCE = customer tech-pack / reference; DESIGN = garment view for production
+  kind              String   @default("SOURCE")
+  /// FRONT | BACK | LEFT_SLEEVE | … — only meaningful for kind=DESIGN
+  viewType          String?  @map("view_type")
+  title             String?
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  organization    Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  productionOrder ProductionOrder   @relation(fields: [productionOrderId], references: [id], onDelete: Cascade)
+  mockups         ProductionMockup[]
+
+  @@index([productionOrderId])
+  @@index([organizationId, productionOrderId])
+  @@index([productionOrderId, kind])
+  @@map("production_design_assets")
+}
+
+model ProductionMockup {
+  id                String   @id @default(cuid())
+  organizationId    String   @map("organization_id")
+  productionOrderId String   @map("production_order_id")
+  designAssetId     String   @map("design_asset_id")
+  garmentType       String   @map("garment_type")
+  view              String
+  /// Normalized placement inside print area: { x, y, scale, rotation }
+  placement         Json
+  engine            String   @default("TEMPLATE_2D")
+  status            String   @default("READY")
+  storagePath       String?  @map("storage_path")
+  lastError         String?  @map("last_error") @db.Text
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  organization    Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  productionOrder ProductionOrder      @relation(fields: [productionOrderId], references: [id], onDelete: Cascade)
+  designAsset     ProductionDesignAsset @relation(fields: [designAssetId], references: [id], onDelete: Cascade)
+
+  @@index([productionOrderId])
+  @@index([designAssetId])
+  @@index([organizationId, productionOrderId])
+  @@map("production_mockups")
 }
 
 model Expense {
@@ -560,7 +743,9 @@ model WhatsAppMessage {
 
 model WhatsAppConnection {
   id              String    @id @default(cuid())
-  organizationId  String    @unique @map("organization_id")
+  organizationId  String    @map("organization_id")
+  /// null = org/CEO shared connector; set = personal membership connector
+  membershipId    String?   @map("membership_id")
   status          String    @default("disconnected") // connecting | connected | disconnected
   phoneNumber     String?   @map("phone_number")
   lastConnectedAt DateTime? @map("last_connected_at")
@@ -568,7 +753,10 @@ model WhatsAppConnection {
   updatedAt       DateTime  @updatedAt @map("updated_at")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  membership   Membership?  @relation(fields: [membershipId], references: [id], onDelete: Cascade)
 
+  @@index([organizationId])
+  @@index([membershipId])
   @@map("whatsapp_connections")
 }
 
@@ -630,6 +818,8 @@ model LeadConnection {
 model AutomationConnection {
   id             String    @id @default(cuid())
   organizationId String    @map("organization_id")
+  /// null = org/CEO shared connector; set = personal membership connector
+  membershipId   String?   @map("membership_id")
   serviceName    String    @map("service_name")
   status         String    @default("disconnected")
   credentials    Json?
@@ -639,9 +829,10 @@ model AutomationConnection {
   updatedAt      DateTime  @updatedAt @map("updated_at")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  membership   Membership?  @relation(fields: [membershipId], references: [id], onDelete: Cascade)
 
-  @@unique([organizationId, serviceName])
-  @@index([organizationId])
+  @@index([organizationId, serviceName])
+  @@index([membershipId, serviceName])
   @@map("automation_connections")
 }
 
@@ -746,6 +937,46 @@ model UsageDaily {
   @@unique([organizationId, day, metric])
   @@index([organizationId, day])
   @@map("usage_daily")
+}
+
+/// Dual AI credit pools: rolling 5h session + weekly (Claude Code–style).
+model AiUsageWindow {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  /// session_5h | weekly
+  windowType     String   @map("window_type")
+  periodStart    DateTime @map("period_start")
+  periodEnd      DateTime @map("period_end")
+  limitCredits   Int      @map("limit_credits")
+  usedCredits    Int      @default(0) @map("used_credits")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, windowType])
+  @@index([organizationId, periodEnd])
+  @@map("ai_usage_windows")
+}
+
+/// Per-turn AI usage audit (tokens + credits) for metering and COGS tuning.
+model AiUsageEvent {
+  id               String   @id @default(cuid())
+  organizationId   String   @map("organization_id")
+  conversationId   String?  @map("conversation_id")
+  /// chat | memory | automation | qlix
+  source           String
+  promptTokens     Int      @default(0) @map("prompt_tokens")
+  completionTokens Int      @default(0) @map("completion_tokens")
+  credits          Int
+  model            String?
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, source, createdAt])
+  @@map("ai_usage_events")
 }
 
 model AiPendingAction {

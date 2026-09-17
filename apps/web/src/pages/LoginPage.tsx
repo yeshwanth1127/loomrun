@@ -2,6 +2,7 @@ import { motion } from 'framer-motion'
 import type { FormEvent } from 'react'
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { NoolrunWordmark } from '../components/react-bits/NoolrunWordmark'
 import { ThemeToggle } from '../components/ui/ThemeToggle'
 import { useAuth } from '../context/AuthContext'
 
@@ -18,7 +19,7 @@ export function LoginPage() {
       <div className="login-brand">
         <div className="login-brand-inner">
           <div className="brand-logo-wrap">
-            <span className="brand-logo-text">Loomrun</span>
+            <NoolrunWordmark size="auth" />
           </div>
           <div className="brand-accent-line" />
           <p className="brand-tagline">

@@ -9,7 +9,7 @@ export function EmployeeRouteGuard({ children }: { children: React.ReactNode }) 
   const hasFullAccess = isOwnerRole(membership) || !!me?.is_super_admin
 
   if (!hasFullAccess && !employeeMayAccess(pathname, membership?.role)) {
-    return <Navigate to="/app/leads" replace />
+    return <Navigate to="/app/home" replace />
   }
 
   return children

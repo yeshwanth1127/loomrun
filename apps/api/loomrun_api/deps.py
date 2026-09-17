@@ -61,6 +61,10 @@ async def get_org_context(
     )
     if not membership:
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Not a member of this organization")
+    role = membership.role.name if hasattr(membership.role, "name") else str(membership.role)
+    if role == "VIEWER" and request.method not in {"GET", "HEAD", "OPTIONS"}:
+        if request.url.path != f"/v1/orgs/{org_id}/me":
+            raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Viewer access is read-only")
     org = membership.organization
     if org and org.suspended:
         raise HTTPException(

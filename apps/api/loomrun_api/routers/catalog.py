@@ -26,7 +26,7 @@ class CatalogItemCreate(BaseModel):
 
 
 @router.get("/orgs/{org_id}/catalog")
-async def list_catalog(org_id: str, ctx: OrgContext = Depends(require_roles("OWNER"))) -> dict:
+async def list_catalog(org_id: str, ctx: OrgContext = Depends(require_roles("OWNER", "SALES", "TELECALLER"))) -> dict:
     items = await prisma.catalogitem.find_many(
         where={"organizationId": ctx.organization_id},
         order={"createdAt": "desc"},

@@ -1,0 +1,424 @@
+{
+  "templates": [
+    {
+      "key": "tshirt_front",
+      "garment_type": "TSHIRT",
+      "view": "FRONT",
+      "label": "T-Shirt \u2014 Front",
+      "image": "tshirt_front.png",
+      "width": 1000,
+      "height": 1200,
+      "print_area": {
+        "x": 365,
+        "y": 390,
+        "w": 270,
+        "h": 310
+      }
+    },
+    {
+      "key": "tshirt_back",
+      "garment_type": "TSHIRT",
+      "view": "BACK",
+      "label": "T-Shirt \u2014 Back",
+      "image": "tshirt_back.png",
+      "width": 1000,
+      "height": 1200,
+      "print_area": {
+        "x": 340,
+        "y": 340,
+        "w": 320,
+        "h": 360
+      }
+    },
+    {
+      "key": "tshirt_left",
+      "garment_type": "TSHIRT",
+      "view": "LEFT",
+      "label": "T-Shirt \u2014 Left",
+      "image": "tshirt_left.png",
+      "width": 1000,
+      "height": 1200,
+      "print_area": {
+        "x": 420,
+        "y": 340,
+        "w": 160,
+        "h": 320
+      }
+    },
+    {
+      "key": "tshirt_right",
+      "garment_type": "TSHIRT",
+      "view": "RIGHT",
+      "label": "T-Shirt \u2014 Right",
+      "image": "tshirt_right.png",
+      "width": 1000,
+      "height": 1200,
+      "print_area": {
+        "x": 420,
+        "y": 340,
+        "w": 160,
+        "h": 320
+      }
+    },
+    {
+      "key": "polo_front",
+      "garment_type": "POLO",
+      "view": "FRONT",
+      "label": "Polo \u2014 Front",
+      "image": "polo_front.png",
+      "width": 1000,
+      "height": 1200,
+      "print_area": {
+        "x": 385,
+        "y": 430,
+        "w": 230,
+        "h": 250
+      }
+    },
+    {
+      "key": "polo_back",
+      "garment_type": "POLO",
+      "view": "BACK",
+      "label": "Polo \u2014 Back",
+      "image": "polo_back.png",
+      "width": 1000,
+      "height": 1200,
+      "print_area": {
+        "x": 350,
+        "y": 360,
+        "w": 300,
+        "h": 340
+      }
+    },
+    {
+      "key": "polo_left",
+      "garment_type": "POLO",
+      "view": "LEFT",
+      "label": "Polo \u2014 Left",
+      "image": "polo_left.png",
+      "width": 1000,
+      "height": 1200,
+      "print_area": {
+        "x": 420,
+        "y": 340,
+        "w": 160,
+        "h": 320
+      }
+    },
+    {
+      "key": "polo_right",
+      "garment_type": "POLO",
+      "view": "RIGHT",
+      "label": "Polo \u2014 Right",
+      "image": "polo_right.png",
+      "width": 1000,
+      "height": 1200,
+      "print_area": {
+        "x": 420,
+        "y": 340,
+        "w": 160,
+        "h": 320
+      }
+    },
+    {
+      "key": "shirt_front",
+      "garment_type": "SHIRT",
+      "view": "FRONT",
+      "label": "Shirt \u2014 Front",
+      "image": "tshirt_front.png",
+      "width": 1000,
+      "height": 1200,
+      "print_area": {
+        "x": 365,
+        "y": 390,
+        "w": 270,
+        "h": 310
+      }
+    },
+    {
+      "key": "shirt_back",
+      "garment_type": "SHIRT",
+      "view": "BACK",
+      "label": "Shirt \u2014 Back",
+      "image": "tshirt_back.png",
+      "width": 1000,
+      "height": 1200,
+      "print_area": {
+        "x": 340,
+        "y": 340,
+        "w": 320,
+        "h": 360
+      }
+    },
+    {
+      "key": "shirt_left",
+      "garment_type": "SHIRT",
+      "view": "LEFT",
+      "label": "Shirt \u2014 Left",
+      "image": "shirt_left.png",
+      "width": 1000,
+      "height": 1200,
+      "print_area": {
+        "x": 420,
+        "y": 340,
+        "w": 160,
+        "h": 320
+      }
+    },
+    {
+      "key": "shirt_right",
+      "garment_type": "SHIRT",
+      "view": "RIGHT",
+      "label": "Shirt \u2014 Right",
+      "image": "shirt_right.png",
+      "width": 1000,
+      "height": 1200,
+      "print_area": {
+        "x": 420,
+        "y": 340,
+        "w": 160,
+        "h": 320
+      }
+    },
+    {
+      "key": "hoodie_front",
+      "garment_type": "HOODIE",
+      "view": "FRONT",
+      "label": "Hoodie \u2014 Front",
+      "image": "tshirt_front.png",
+      "width": 1000,
+      "height": 1200,
+      "print_area": {
+        "x": 365,
+        "y": 390,
+        "w": 270,
+        "h": 310
+      }
+    },
+    {
+      "key": "hoodie_back",
+      "garment_type": "HOODIE",
+      "view": "BACK",
+      "label": "Hoodie \u2014 Back",
+      "image": "tshirt_back.png",
+      "width": 1000,
+      "height": 1200,
+      "print_area": {
+        "x": 340,
+        "y": 340,
+        "w": 320,
+        "h": 360
+      }
+    },
+    {
+      "key": "hoodie_left",
+      "garment_type": "HOODIE",
+      "view": "LEFT",
+      "label": "Hoodie \u2014 Left",
+      "image": "hoodie_left.png",
+      "width": 1000,
+      "height": 1200,
+      "print_area": {
+        "x": 420,
+        "y": 340,
+        "w": 160,
+        "h": 320
+      }
+    },
+    {
+      "key": "hoodie_right",
+      "garment_type": "HOODIE",
+      "view": "RIGHT",
+      "label": "Hoodie \u2014 Right",
+      "image": "hoodie_right.png",
+      "width": 1000,
+      "height": 1200,
+      "print_area": {
+        "x": 420,
+        "y": 340,
+        "w": 160,
+        "h": 320
+      }
+    },
+    {
+      "key": "pant_front",
+      "garment_type": "PANT",
+      "view": "FRONT",
+      "label": "Pant \u2014 Front",
+      "image": "pant_front.png",
+      "width": 1000,
+      "height": 1200,
+      "print_area": {
+        "x": 370,
+        "y": 260,
+        "w": 260,
+        "h": 170
+      }
+    },
+    {
+      "key": "pant_back",
+      "garment_type": "PANT",
+      "view": "BACK",
+      "label": "Pant \u2014 Back",
+      "image": "pant_back.png",
+      "width": 1000,
+      "height": 1200,
+      "print_area": {
+        "x": 370,
+        "y": 280,
+        "w": 260,
+        "h": 180
+      }
+    },
+    {
+      "key": "pant_left",
+      "garment_type": "PANT",
+      "view": "LEFT",
+      "label": "Pant \u2014 Left",
+      "image": "pant_left.png",
+      "width": 1000,
+      "height": 1200,
+      "print_area": {
+        "x": 440,
+        "y": 280,
+        "w": 120,
+        "h": 220
+      }
+    },
+    {
+      "key": "pant_right",
+      "garment_type": "PANT",
+      "view": "RIGHT",
+      "label": "Pant \u2014 Right",
+      "image": "pant_right.png",
+      "width": 1000,
+      "height": 1200,
+      "print_area": {
+        "x": 440,
+        "y": 280,
+        "w": 120,
+        "h": 220
+      }
+    },
+    {
+      "key": "shorts_front",
+      "garment_type": "SHORTS",
+      "view": "FRONT",
+      "label": "Shorts \u2014 Front",
+      "image": "shorts_front.png",
+      "width": 1000,
+      "height": 1200,
+      "print_area": {
+        "x": 360,
+        "y": 320,
+        "w": 280,
+        "h": 200
+      }
+    },
+    {
+      "key": "shorts_back",
+      "garment_type": "SHORTS",
+      "view": "BACK",
+      "label": "Shorts \u2014 Back",
+      "image": "shorts_back.png",
+      "width": 1000,
+      "height": 1200,
+      "print_area": {
+        "x": 360,
+        "y": 300,
+        "w": 280,
+        "h": 200
+      }
+    },
+    {
+      "key": "shorts_left",
+      "garment_type": "SHORTS",
+      "view": "LEFT",
+      "label": "Shorts \u2014 Left",
+      "image": "shorts_left.png",
+      "width": 1000,
+      "height": 1200,
+      "print_area": {
+        "x": 440,
+        "y": 280,
+        "w": 120,
+        "h": 220
+      }
+    },
+    {
+      "key": "shorts_right",
+      "garment_type": "SHORTS",
+      "view": "RIGHT",
+      "label": "Shorts \u2014 Right",
+      "image": "shorts_right.png",
+      "width": 1000,
+      "height": 1200,
+      "print_area": {
+        "x": 440,
+        "y": 280,
+        "w": 120,
+        "h": 220
+      }
+    },
+    {
+      "key": "denim_pant_front",
+      "garment_type": "DENIM_PANT",
+      "view": "FRONT",
+      "label": "Denim Pants \u2014 Front",
+      "image": "denim_pant_front.png",
+      "width": 1000,
+      "height": 1200,
+      "print_area": {
+        "x": 370,
+        "y": 280,
+        "w": 260,
+        "h": 180
+      }
+    },
+    {
+      "key": "denim_pant_back",
+      "garment_type": "DENIM_PANT",
+      "view": "BACK",
+      "label": "Denim Pants \u2014 Back",
+      "image": "denim_pant_back.png",
+      "width": 1000,
+      "height": 1200,
+      "print_area": {
+        "x": 360,
+        "y": 300,
+        "w": 280,
+        "h": 200
+      }
+    },
+    {
+      "key": "denim_shorts_front",
+      "garment_type": "DENIM_SHORTS",
+      "view": "FRONT",
+      "label": "Denim Shorts \u2014 Front",
+      "image": "denim_shorts_front.png",
+      "width": 1000,
+      "height": 1200,
+      "print_area": {
+        "x": 360,
+        "y": 340,
+        "w": 280,
+        "h": 200
+      }
+    },
+    {
+      "key": "denim_shorts_back",
+      "garment_type": "DENIM_SHORTS",
+      "view": "BACK",
+      "label": "Denim Shorts \u2014 Back",
+      "image": "denim_shorts_back.png",
+      "width": 1000,
+      "height": 1200,
+      "print_area": {
+        "x": 360,
+        "y": 320,
+        "w": 280,
+        "h": 200
+      }
+    }
+  ]
+}

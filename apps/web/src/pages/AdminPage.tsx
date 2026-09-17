@@ -18,6 +18,8 @@ import { useState } from 'react'
 import { Navigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { apiFetch } from '../lib/api'
+import { MetricCard } from '../components/ui/dashboard'
+import { PageHeader } from '../components/ui/PageHeader'
 
 type AdminOrg = {
   id: string
@@ -334,49 +336,49 @@ export function AdminPage() {
 
   return (
     <>
-      <div className="page-header">
-        <h1>Platform Admin</h1>
-        <p>SaaS analytics across all organizations, users, and product activity</p>
-      </div>
+      <PageHeader
+        title="Platform Admin"
+        description="SaaS analytics across all organizations, users, and product activity"
+      />
 
       <div className="page-body stack" style={{ gap: '2rem' }}>
         {analyticsQ.error && <p className="error">{(analyticsQ.error as Error).message}</p>}
 
         {/* Primary KPIs */}
         <div className="metrics-grid">
-          <div className="metric-card indigo">
-            <div className="metric-icon indigo"><Building2 size={18} /></div>
-            <div className="metric-label">Organizations</div>
-            <div className="metric-value">{t?.organizations ?? '—'}</div>
-            <div className="metric-sub">
-              {(t?.suspended_organizations ?? 0) > 0 ? `${t?.suspended_organizations} suspended · ` : ''}
-              +{g?.orgs_last_7d ?? 0} this week
-            </div>
-          </div>
-          <div className="metric-card blue">
-            <div className="metric-icon blue"><Users size={18} /></div>
-            <div className="metric-label">Platform users</div>
-            <div className="metric-value">{t?.users ?? '—'}</div>
-            <div className="metric-sub">
-              {t?.super_admins ?? 0} super admins · +{g?.users_last_7d ?? 0} this week
-            </div>
-          </div>
-          <div className="metric-card green">
-            <div className="metric-icon green"><Activity size={18} /></div>
-            <div className="metric-label">Total leads</div>
-            <div className="metric-value">{t?.leads ?? '—'}</div>
-            <div className="metric-sub">
-              {g?.leads_last_24h ?? 0} last 24h · +{g?.leads_last_7d ?? 0} this week
-            </div>
-          </div>
-          <div className="metric-card purple">
-            <div className="metric-icon purple"><CreditCard size={18} /></div>
-            <div className="metric-label">Est. MRR</div>
-            <div className="metric-value" style={{ fontSize: '1.35rem' }}>
-              {a ? formatInr(a.plans.estimated_mrr_inr) : '—'}
-            </div>
-            <div className="metric-sub">{t?.active_subscriptions ?? 0} active subscriptions</div>
-          </div>
+          <MetricCard
+            icon={Building2}
+            tone="purple"
+            label="Organizations"
+            value={t?.organizations ?? '—'}
+            hint={
+              <>
+                {(t?.suspended_organizations ?? 0) > 0 ? `${t?.suspended_organizations} suspended · ` : ''}
+                +{g?.orgs_last_7d ?? 0} this week
+              </>
+            }
+          />
+          <MetricCard
+            icon={Users}
+            tone="blue"
+            label="Platform users"
+            value={t?.users ?? '—'}
+            hint={`${t?.super_admins ?? 0} super admins · +${g?.users_last_7d ?? 0} this week`}
+          />
+          <MetricCard
+            icon={Activity}
+            tone="green"
+            label="Total leads"
+            value={t?.leads ?? '—'}
+            hint={`${g?.leads_last_24h ?? 0} last 24h · +${g?.leads_last_7d ?? 0} this week`}
+          />
+          <MetricCard
+            icon={CreditCard}
+            tone="purple"
+            label="Est. MRR"
+            value={a ? formatInr(a.plans.estimated_mrr_inr) : '—'}
+            hint={`${t?.active_subscriptions ?? 0} active subscriptions`}
+          />
         </div>
 
         {/* Product volume */}

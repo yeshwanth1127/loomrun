@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 import httpx
 
 from loomrun_api.config import settings
+from loomrun_api.logging_setup import kv, sanitize_log_text
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +35,27 @@ def _openrouter_headers() -> dict[str, str]:
     if title:
         headers["X-Title"] = title
     return headers
+
+
+def _message_preview(messages: list[dict[str, Any]]) -> str:
+    """Compact role/content summary of the outbound OpenRouter messages."""
+    if not settings.log_ai_messages:
+        return f"messages={len(messages)}"
+    parts: list[str] = []
+    for msg in messages:
+        role = msg.get("role") or "?"
+        content = msg.get("content")
+        if content is None and msg.get("tool_calls"):
+            names = []
+            for call in msg.get("tool_calls") or []:
+                fn = (call.get("function") or {}).get("name")
+                if fn:
+                    names.append(fn)
+            parts.append(f"{role}:[tool_calls:{','.join(names) or 'n'}]")
+            continue
+        text = content if isinstance(content, str) else str(content or "")
+        parts.append(f"{role}:{sanitize_log_text(text, limit=1500)}")
+    return " | ".join(parts)
 
 
 async def chat_messages(
@@ -64,15 +87,54 @@ async def chat_messages(
         if tool_choice is not None:
             payload["tool_choice"] = tool_choice
 
-    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-        response = await client.post(
-            OPENROUTER_CHAT_URL,
-            json=payload,
-            headers=_openrouter_headers(),
+    tool_names = [
+        (t.get("function") or {}).get("name")
+        for t in (tools or [])
+        if isinstance(t, dict)
+    ]
+    tool_names = [n for n in tool_names if n]
+
+    logger.info(
+        "openrouter request %s",
+        kv(
+            model=chosen_model,
+            message_count=len(messages),
+            tool_count=len(tool_names),
+            tools=",".join(tool_names) if tool_names else None,
+            preview=_message_preview(messages),
+        ),
+    )
+
+    started = time.perf_counter()
+    # Ignore HTTP(S)_PROXY from the process env — a leaked agent/sandbox proxy
+    # has taken Loomrun AI offline before by blocking OpenRouter.
+    try:
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT, trust_env=False) as client:
+            response = await client.post(
+                OPENROUTER_CHAT_URL,
+                json=payload,
+                headers=_openrouter_headers(),
+            )
+    except httpx.HTTPError as exc:
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        logger.error(
+            "openrouter network error %s",
+            kv(model=chosen_model, latency_ms=latency_ms, error=type(exc).__name__, detail=str(exc)[:300]),
         )
+        raise LlmError(f"LLM provider unreachable: {type(exc).__name__}") from exc
+
+    latency_ms = int((time.perf_counter() - started) * 1000)
 
     if response.status_code >= 400:
-        logger.warning("OpenRouter error %s: %s", response.status_code, response.text[:500])
+        logger.warning(
+            "openrouter error %s",
+            kv(
+                status=response.status_code,
+                model=chosen_model,
+                latency_ms=latency_ms,
+                body=sanitize_log_text(response.text, limit=500),
+            ),
+        )
         raise LlmError(
             "LLM provider request failed",
             status_code=response.status_code,
@@ -81,6 +143,10 @@ async def chat_messages(
     data = response.json()
     choices = data.get("choices") or []
     if not choices:
+        logger.warning(
+            "openrouter empty choices %s",
+            kv(model=chosen_model, latency_ms=latency_ms),
+        )
         raise LlmError("LLM provider returned no choices")
 
     message = choices[0].get("message") or {}
@@ -97,16 +163,49 @@ async def chat_messages(
         tool_calls = []
 
     if not content_str.strip() and not tool_calls:
+        logger.warning(
+            "openrouter empty content %s",
+            kv(model=chosen_model, latency_ms=latency_ms),
+        )
         raise LlmError("LLM provider returned empty content")
 
     usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+    called_tools = [
+        ((c.get("function") or {}).get("name") or "?")
+        for c in tool_calls
+        if isinstance(c, dict)
+    ]
+    resolved_model = data.get("model", chosen_model)
+    finish_reason = choices[0].get("finish_reason")
+
+    reply_preview = None
+    if settings.log_ai_messages:
+        if content_str.strip():
+            reply_preview = sanitize_log_text(content_str, limit=1500)
+        elif called_tools:
+            reply_preview = f"tool_calls:{','.join(called_tools)}"
+
+    logger.info(
+        "openrouter response %s",
+        kv(
+            model=resolved_model,
+            latency_ms=latency_ms,
+            finish_reason=finish_reason,
+            prompt_tokens=usage.get("prompt_tokens"),
+            completion_tokens=usage.get("completion_tokens"),
+            total_tokens=usage.get("total_tokens"),
+            tool_calls=",".join(called_tools) if called_tools else None,
+            reply=reply_preview,
+        ),
+    )
+
     return {
         "content": content_str,
         "tool_calls": tool_calls,
         "raw_message": message,
-        "model": data.get("model", chosen_model),
+        "model": resolved_model,
         "usage": usage,
-        "finish_reason": choices[0].get("finish_reason"),
+        "finish_reason": finish_reason,
     }
 
 

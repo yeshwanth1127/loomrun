@@ -2,7 +2,8 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from loomrun_api.oauth_state import encode_state, decode_state
 from fastapi.responses import RedirectResponse
 
 from loomrun_api.config import settings
@@ -65,6 +66,7 @@ def _parse_state(state: str) -> tuple[str, str, str] | None:
 @router.get("/orgs/{org_id}/meta/oauth-url")
 async def get_meta_oauth_url(
     org_id: str,
+    response: Response,
     base_url: str | None = Query(None, description="Deprecated; server uses PUBLIC_API_URL"),
     return_url: str = Query(..., description="Frontend URL to return to after OAuth"),
     ctx: OrgContext = Depends(require_feature("meta_lead_ads")),
@@ -77,18 +79,20 @@ async def get_meta_oauth_url(
     safe_return = _normalize_return_url(return_url)
     url = build_oauth_url(
         redirect_uri=redirect_uri,
-        state=f"{org_id}|{api_base}|{safe_return}",
+        state=encode_state("meta", f"{org_id}|{api_base}|{safe_return}", response),
     )
     return {"url": url, "redirect_uri": redirect_uri}
 
 
 @router.get("/meta/oauth/callback")
 async def meta_oauth_callback(
+    request: Request,
     code: str | None = Query(None),
     state: str | None = Query(None),
     error: str | None = Query(None),
     error_description: str | None = Query(None),
 ) -> RedirectResponse:
+    state = decode_state("meta", state, request) if state else None
     fallback = _return_with_status(
         f"{settings.cors_origin_list[0] if settings.cors_origin_list else 'http://localhost:5173'}{DEFAULT_RETURN_PATH}",
         "error",

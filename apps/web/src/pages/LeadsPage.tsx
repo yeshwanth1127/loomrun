@@ -50,6 +50,14 @@ type Lead = {
   stage: string
   source: string
   lead_status: string
+  pipeline_id?: string | null
+  pipeline_stage_id?: string | null
+  pipeline_name?: string | null
+  pipeline_stage_name?: string | null
+  region?: string | null
+  sector?: string | null
+  campaign_id?: string | null
+  campaign_name?: string | null
   company: string | null
   phone: string | null
   email: string | null
@@ -184,6 +192,46 @@ function ScoreRing({ score }: { score: number }) {
   )
 }
 
+// ── Pipeline select (manual override; no silent reroute) ──────────────────────
+
+function PipelineSelect({
+  orgId,
+  value,
+  onChange,
+}: {
+  orgId: string
+  value: string
+  onChange: (pipelineId: string) => void
+}) {
+  const q = useQuery({
+    queryKey: ['pipelines', orgId, 'lead-drawer'],
+    enabled: !!orgId,
+    queryFn: () =>
+      apiFetch<{ items: Array<{ id: string; name: string; is_default: boolean }> }>(
+        `/v1/orgs/${orgId}/pipelines?include_archived=false`,
+      ),
+  })
+  return (
+    <select
+      className="select"
+      value={value}
+      style={{ fontSize: '0.8rem', width: '100%' }}
+      onChange={(e) => onChange(e.target.value)}
+      disabled={q.isLoading}
+    >
+      {!value && <option value="">Select pipeline…</option>}
+      {value && !(q.data?.items ?? []).some((p) => p.id === value) && (
+        <option value={value}>Current pipeline</option>
+      )}
+      {(q.data?.items ?? []).map((p) => (
+        <option key={p.id} value={p.id}>
+          {p.name}{p.is_default ? ' (default)' : ''}
+        </option>
+      ))}
+    </select>
+  )
+}
+
 // ── Lead Detail Drawer ────────────────────────────────────────────────────────
 
 function LeadDetailDrawer({ lead, orgId, onClose, onStageChange, onDeleted }: {
@@ -275,7 +323,7 @@ function LeadDetailDrawer({ lead, orgId, onClose, onStageChange, onDeleted }: {
     enabled: !!orgId && isOwner && showCreateOrder,
     queryFn: () =>
       apiFetch<{ items: Array<{ id: string; lead_id: string; number: string; total: number }> }>(
-        `/v1/orgs/${orgId}/quotations?day=all`,
+        `/v1/orgs/${orgId}/quotations?day=all&doc=quotation`,
       ),
   })
 
@@ -431,7 +479,7 @@ function LeadDetailDrawer({ lead, orgId, onClose, onStageChange, onDeleted }: {
           number: string
           status: string
         }>
-      }>(`/v1/orgs/${orgId}/quotations?day=all`)
+      }>(`/v1/orgs/${orgId}/quotations?day=all&doc=quotation`)
 
       const forLead = items.filter((q) => q.lead_id === lead.id)
       const ready = forLead.find((q) => !!q.pdf_url)
@@ -503,6 +551,9 @@ function LeadDetailDrawer({ lead, orgId, onClose, onStageChange, onDeleted }: {
                 <span className={`badge ${STAGE_COLOR[detail.stage] ?? 'badge-slate'}`}>
                   {STAGE_LABELS[detail.stage] ?? detail.stage}
                 </span>
+                {detail.pipeline_name && (
+                  <span className="badge badge-indigo">{detail.pipeline_name}</span>
+                )}
                 <span className="badge badge-slate">
                   {SOURCE_LABELS[detail.source] ?? detail.source}
                 </span>
@@ -704,6 +755,21 @@ function LeadDetailDrawer({ lead, orgId, onClose, onStageChange, onDeleted }: {
                   <InfoField label="Company" value={detail.company} onEdit={(v) => updateLead.mutate({ company: v })} />
                   <InfoField label="Product Interest" value={detail.product_interest} onEdit={(v) => updateLead.mutate({ product_interest: v })} />
                   <InfoField label="Quantity" value={detail.quantity_estimate} onEdit={(v) => updateLead.mutate({ quantity_estimate: v })} />
+                  <InfoField label="Region" value={detail.region ?? null} onEdit={(v) => updateLead.mutate({ region: v || null })} />
+                  <InfoField label="Sector" value={detail.sector ?? null} onEdit={(v) => updateLead.mutate({ sector: v || null })} />
+                  <InfoField label="Campaign ID" value={detail.campaign_id ?? null} onEdit={(v) => updateLead.mutate({ campaign_id: v || null })} />
+                  <InfoField label="Campaign" value={detail.campaign_name ?? null} onEdit={(v) => updateLead.mutate({ campaign_name: v || null })} />
+                  <div className="info-field">
+                    <label>Pipeline</label>
+                    <PipelineSelect
+                      orgId={orgId}
+                      value={detail.pipeline_id ?? ''}
+                      onChange={(pipelineId) => {
+                        if (!pipelineId || pipelineId === detail.pipeline_id) return
+                        updateLead.mutate({ pipeline_id: pipelineId })
+                      }}
+                    />
+                  </div>
                   {callbackSchedulerVisible ? (
                     <div className="info-field">
                       <label>Follow-up</label>
@@ -1239,6 +1305,9 @@ function KanbanCard({ lead, onDragStart, onDragEnd, onClick }: {
       {meta && <div className="kanban-card-meta">{meta}</div>}
       <div className="row" style={{ gap: '0.35rem', marginBottom: '0.35rem', flexWrap: 'wrap', alignItems: 'center' }}>
         <span className="source-pill">{SOURCE_LABELS[lead.source] ?? lead.source}</span>
+        {lead.pipeline_name && (
+          <span className="badge badge-indigo" style={{ fontSize: '0.65rem' }}>{lead.pipeline_name}</span>
+        )}
         <span className={`score-badge ${sc}`} style={{ fontSize: '0.65rem' }}>{lead.lead_score}</span>
         {lead.last_call_outcome && (
           <span className={`badge ${CALL_STATUS_MAP[lead.last_call_outcome]?.color ?? 'badge-slate'}`} style={{ fontSize: '0.65rem' }}>
@@ -1384,6 +1453,7 @@ function TableView({ leads, onSelectLead }: {
           <tr>
             <SortTh label="Name" k="title" />
             <SortTh label="Company" k="company" />
+            <SortTh label="Pipeline" k="pipeline_name" />
             <SortTh label="Stage" k="stage" />
             <SortTh label="Score" k="lead_score" />
             <SortTh label="Follow-up" k="next_follow_up_at" />
@@ -1400,6 +1470,9 @@ function TableView({ leads, onSelectLead }: {
                 </td>
                 <td>
                   <span className="muted small">{l.company ?? '—'}</span>
+                </td>
+                <td>
+                  <span className="badge badge-indigo">{l.pipeline_name ?? '—'}</span>
                 </td>
                 <td>
                   <span className={`badge ${STAGE_COLOR[l.stage] ?? 'badge-slate'}`}>
@@ -1440,6 +1513,7 @@ export function LeadsPage() {
   const [filters, setFilters] = useState({
     source: '',
     stage: '',
+    pipeline_id: '',
     search: '',
     score_min: '',
     score_max: '',
@@ -1448,11 +1522,21 @@ export function LeadsPage() {
   const params = new URLSearchParams()
   if (filters.source) params.set('source', filters.source)
   if (filters.stage) params.set('stage', filters.stage)
+  if (filters.pipeline_id) params.set('pipeline_id', filters.pipeline_id)
   if (filters.search) params.set('search', filters.search)
   if (filters.score_min) params.set('score_min', filters.score_min)
   if (filters.score_max) params.set('score_max', filters.score_max)
   appendDay(params)
   const qs = params.toString()
+
+  const pipelinesQ = useQuery({
+    queryKey: ['pipelines', orgId, 'leads-filter'],
+    enabled: !!orgId,
+    queryFn: () =>
+      apiFetch<{ items: Array<{ id: string; name: string; is_active: boolean }> }>(
+        `/v1/orgs/${orgId}/pipelines?include_archived=false`,
+      ),
+  })
 
   const q = useQuery({
     queryKey: ['leads', orgId, qs, dayParam],
@@ -1567,6 +1651,16 @@ export function LeadsPage() {
               </select>
               <select
                 className="select"
+                value={filters.pipeline_id}
+                onChange={(e) => setFilters((f) => ({ ...f, pipeline_id: e.target.value }))}
+              >
+                <option value="">All Pipelines</option>
+                {(pipelinesQ.data?.items ?? []).map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+              <select
+                className="select"
                 value={filters.stage}
                 onChange={(e) => setFilters((f) => ({ ...f, stage: e.target.value }))}
               >
@@ -1591,7 +1685,16 @@ export function LeadsPage() {
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm"
-                  onClick={() => setFilters({ source: '', stage: '', search: '', score_min: '', score_max: '' })}
+                  onClick={() =>
+                    setFilters({
+                      source: '',
+                      stage: '',
+                      pipeline_id: '',
+                      search: '',
+                      score_min: '',
+                      score_max: '',
+                    })
+                  }
                 >
                   Clear
                 </button>

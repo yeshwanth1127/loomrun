@@ -85,7 +85,7 @@ async def list_outbound_messages(
 
 
 @router.post("/orgs/{org_id}/integrations/whatsapp/outbound", status_code=status.HTTP_201_CREATED)
-async def queue_outbound(org_id: str, body: OutboundBody, ctx: OrgContext = Depends(require_roles("OWNER", "PRODUCTION"))) -> dict:
+async def queue_outbound(org_id: str, body: OutboundBody, ctx: OrgContext = Depends(require_roles("OWNER", "PRODUCTION", "PRODUCTION_MANAGER"))) -> dict:
     from loomrun_api import baileys_client
     from loomrun_api.entitlements import METRIC_WHATSAPP, get_org_entitlements
     from loomrun_api.usage import increment_usage, require_capacity

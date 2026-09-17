@@ -54,6 +54,8 @@ async def dispatch_tool_call(
     spec = get_tool(name)
     if not spec:
         return {"error": f"Unknown tool: {name}"}
+    if spec.kind == "write" and ctx.role == "VIEWER":
+        return {"error": "Viewer access is read-only"}
     if ctx.mode not in spec.modes:
         return {"error": f"Tool {name} is not available in {ctx.mode} mode"}
     if spec.owner_only and ctx.role != "OWNER":

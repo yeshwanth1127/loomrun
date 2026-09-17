@@ -31,7 +31,7 @@ async def meta_webhook_inbound(request: Request) -> dict[str, str]:
     body_bytes = await request.body()
     signature = request.headers.get("X-Hub-Signature-256")
 
-    if settings.meta_app_secret and not verify_webhook_signature(body_bytes, signature):
+    if not settings.meta_app_secret or not verify_webhook_signature(body_bytes, signature):
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Invalid signature")
 
     payload: dict[str, Any] = await request.json()
@@ -99,33 +99,37 @@ async def _process_leadgen(leadgen_id: str, page_id: str, raw_value: dict) -> No
     if ad_name:
         source_parts.append(f"ad:{ad_name}")
 
-    lead = await prisma.lead.create(
-        data={
-            "organizationId": org_id,
-            "title": mapped["title"],
-            "source": LeadSource.META_ADS,
-            "phone": mapped.get("phone"),
-            "email": mapped.get("email"),
-            "city": mapped.get("city"),
-            "company": mapped.get("company"),
-            "productInterest": mapped.get("product_interest"),
-            "quantityEstimate": mapped.get("quantity_estimate"),
-            "leadScore": score,
-            "sourceDetail": ", ".join(source_parts) if source_parts else None,
-            "tags": [],
-            "lastActivityAt": datetime.now(timezone.utc),
-            "metaLeadgenId": leadgen_id,
-            "metaPageId": page_id,
-            "metaFormId": str(form_id) if form_id else None,
-            "metaAdId": str(ad_id) if ad_id else None,
-            "metaAdsetId": str(adset_id) if adset_id else None,
-            "metaCampaignId": str(campaign_id) if campaign_id else None,
-            "metaCampaignName": campaign_name,
-            "metaAdsetName": adset_name,
-            "metaAdName": ad_name,
-            "metaFormName": lead_data.get("form_name"),
-        }
-    )
+    from loomrun_api.pipeline_routing import merge_pipeline_into_create_data
+
+    create_data = {
+        "organizationId": org_id,
+        "title": mapped["title"],
+        "source": LeadSource.META_ADS,
+        "phone": mapped.get("phone"),
+        "email": mapped.get("email"),
+        "city": mapped.get("city"),
+        "company": mapped.get("company"),
+        "productInterest": mapped.get("product_interest"),
+        "quantityEstimate": mapped.get("quantity_estimate"),
+        "leadScore": score,
+        "sourceDetail": ", ".join(source_parts) if source_parts else None,
+        "tags": [],
+        "lastActivityAt": datetime.now(timezone.utc),
+        "metaLeadgenId": leadgen_id,
+        "metaPageId": page_id,
+        "metaFormId": str(form_id) if form_id else None,
+        "metaAdId": str(ad_id) if ad_id else None,
+        "metaAdsetId": str(adset_id) if adset_id else None,
+        "metaCampaignId": str(campaign_id) if campaign_id else None,
+        "metaCampaignName": campaign_name,
+        "metaAdsetName": adset_name,
+        "metaAdName": ad_name,
+        "metaFormName": lead_data.get("form_name"),
+        "campaignId": str(campaign_id) if campaign_id else None,
+        "campaignName": campaign_name,
+    }
+    create_data = await merge_pipeline_into_create_data(create_data, organization_id=org_id)
+    lead = await prisma.lead.create(data=create_data)
 
     await prisma.leadactivity.create(
         data={

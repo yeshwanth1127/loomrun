@@ -4,7 +4,11 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
-from loomrun_api.call_outcomes import is_connected_outcome
+from loomrun_api.call_outcomes import (
+    is_connected_outcome,
+    is_follow_up_outcome,
+    requires_follow_up_date,
+)
 from loomrun_api.config import settings
 from loomrun_api.date_filter import apply_created_at, day_label
 from loomrun_api.deps import OrgContext, get_org_context
@@ -89,8 +93,8 @@ async def _apply_lead_updates_from_call(
         # New schedule → allow reminders again
         update_data["followUpRemindedAt"] = None
         update_data["followUpWaRemindedAt"] = None
-    elif outcome_name != "CALLBACK_SCHEDULED":
-        # Non–Follow Up outcome clears the scheduled follow-up
+    elif not is_follow_up_outcome(outcome_name):
+        # Non–follow-up outcome clears the scheduled follow-up
         update_data["nextFollowUpAt"] = None
         update_data["followUpRemindedAt"] = None
         update_data["followUpWaRemindedAt"] = None
@@ -173,10 +177,10 @@ async def log_call(
     if not lead:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Lead not found")
     outcome_name = body.outcome.name if hasattr(body.outcome, "name") else str(body.outcome)
-    if outcome_name == "CALLBACK_SCHEDULED" and body.next_call_at is None:
+    if requires_follow_up_date(outcome_name) and body.next_call_at is None:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            detail="Follow-up date/time is required when logging Follow Up",
+            detail="Follow-up date/time is required when logging Follow Up (Date Set)",
         )
     prev = await prisma.telecallercalllog.count(where={"leadId": body.lead_id})
     attempt = prev + 1

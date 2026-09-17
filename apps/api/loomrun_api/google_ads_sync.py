@@ -105,26 +105,30 @@ async def _upsert_submission(
     if campaign_name:
         source_parts.append(f"campaign:{campaign_name}")
 
-    lead = await prisma.lead.create(
-        data={
-            "organizationId": org_id,
-            "title": title,
-            "source": LeadSource.GOOGLE_ADS,
-            "phone": phone,
-            "email": email,
-            "city": mapped.get("city"),
-            "company": mapped.get("company"),
-            "leadScore": score,
-            "sourceDetail": ", ".join(source_parts) if source_parts else None,
-            "tags": [],
-            "lastActivityAt": datetime.now(timezone.utc),
-            "googleAdsSubmissionId": submission_id,
-            "googleAdsCustomerId": customer_id,
-            "googleAdsCampaignId": str(campaign_id) if campaign_id else None,
-            "googleAdsCampaignName": campaign_name,
-            "googleAdsFormId": form_id,
-        }
-    )
+    from loomrun_api.pipeline_routing import merge_pipeline_into_create_data
+
+    create_data = {
+        "organizationId": org_id,
+        "title": title,
+        "source": LeadSource.GOOGLE_ADS,
+        "phone": phone,
+        "email": email,
+        "city": mapped.get("city"),
+        "company": mapped.get("company"),
+        "leadScore": score,
+        "sourceDetail": ", ".join(source_parts) if source_parts else None,
+        "tags": [],
+        "lastActivityAt": datetime.now(timezone.utc),
+        "googleAdsSubmissionId": submission_id,
+        "googleAdsCustomerId": customer_id,
+        "googleAdsCampaignId": str(campaign_id) if campaign_id else None,
+        "googleAdsCampaignName": campaign_name,
+        "googleAdsFormId": form_id,
+        "campaignId": str(campaign_id) if campaign_id else None,
+        "campaignName": campaign_name,
+    }
+    create_data = await merge_pipeline_into_create_data(create_data, organization_id=org_id)
+    lead = await prisma.lead.create(data=create_data)
     await prisma.leadactivity.create(
         data={
             "leadId": lead.id,

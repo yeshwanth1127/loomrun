@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useDateFilter } from '../context/DateFilterContext'
+import { routes } from '../lib/appRoutes'
 import { apiFetch } from '../lib/api'
 import { LeadSearchSelect, type LeadOption } from '../components/LeadSearchSelect'
 import { RowActions } from '../components/RowActions'
@@ -142,28 +143,13 @@ export function QuotationsPage() {
   }, [])
 
   async function openPreview(quotation: Quotation) {
-    if (!orgId) return
-    if (!quotation.lines?.length && !quotation.pdf_url) {
-      toast.error('This quotation has no PDF to preview yet')
-      return
-    }
-    setPreviewQuotation(quotation)
-    setPreviewLoading(true)
-    setPreviewError(null)
-    try {
-      const variant = quotation.invoice_number ? 'invoice' : 'quotation'
-      const blob = await fetchPdfBlob(orgId, quotation.id, variant)
-      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current)
-      const next = URL.createObjectURL(blob)
-      previewUrlRef.current = next
-      setPreviewUrl(next)
-    } catch (err) {
-      setPreviewUrl(null)
-      setPreviewError((err as Error).message || 'Failed to load preview')
-    } finally {
-      setPreviewLoading(false)
-    }
+    // Full-screen document workspace (same records in Sales and Money)
+    const path = location.pathname.startsWith('/app/money')
+      ? routes.moneyQuotationDoc(quotation.id)
+      : routes.quotationDoc(quotation.id)
+    navigate(path)
   }
+
 
   function closePreview() {
     setPreviewQuotation(null)
@@ -221,6 +207,7 @@ export function QuotationsPage() {
     queryFn: () => {
       const params = new URLSearchParams()
       appendDay(params)
+      params.set('doc', 'quotation')
       return apiFetch<{ items: Quotation[] }>(`/v1/orgs/${orgId}/quotations?${params}`)
     },
   })
@@ -407,13 +394,12 @@ export function QuotationsPage() {
     <PageHeader title="Quotations" description="Select an organization." />
   )
 
-  const quotations = q.data?.items ?? []
+  const quotations = (q.data?.items ?? []).filter((x) => !x.invoice_number)
   const leads = leadsQ.data?.items ?? []
   const draftCount = quotations.filter((x) => x.status === 'DRAFT').length
   const sentCount = quotations.filter((x) => x.status === 'SENT').length
   const acceptedCount = quotations.filter((x) => x.status === 'ACCEPTED').length
   const rejectedCount = quotations.filter((x) => x.status === 'REJECTED').length
-  const invoicedCount = quotations.filter((x) => x.invoice_number).length
   const totalValue = quotations.reduce((s, x) => s + (Number(x.total) || 0), 0)
 
   function addLine() {
@@ -490,11 +476,32 @@ export function QuotationsPage() {
       <div className="page-body stack" style={{ gap: '1.25rem' }}>
         <div className="metrics-grid">
           <MetricCard icon={FileText} tone="purple" label="Total quotations" value={quotations.length} hint={isAll ? 'This period' : dayParam} />
-          <MetricCard icon={FileText} tone="blue" label="Draft" value={draftCount} hint={quotations.length ? `${((draftCount / quotations.length) * 100).toFixed(0)}%` : '0%'} />
-          <MetricCard icon={Send} tone="amber" label="Sent" value={sentCount} hint={quotations.length ? `${((sentCount / quotations.length) * 100).toFixed(0)}%` : '0%'} />
           <MetricCard icon={ShieldCheck} tone="green" label="Accepted" value={acceptedCount} />
-          <MetricCard icon={FileText} tone="red" label="Rejected" value={rejectedCount} />
-          <MetricCard icon={TrendingUp} tone="purple" label="Conversion rate" value={quotations.length ? `${((invoicedCount / quotations.length) * 100).toFixed(0)}%` : '0%'} hint="To invoices" />
+          <MetricCard
+            icon={TrendingUp}
+            tone="purple"
+            label="Accepted rate"
+            value={
+              quotations.length
+                ? `${((acceptedCount / quotations.length) * 100).toFixed(0)}%`
+                : '0%'
+            }
+            hint="Of open quotations"
+          />
+        </div>
+        <div className="status-strip" aria-label="Quotation status breakdown">
+          <span className="status-strip-item">
+            <span className="status-strip-dot draft" aria-hidden />
+            Draft <strong>{draftCount}</strong>
+          </span>
+          <span className="status-strip-item">
+            <span className="status-strip-dot sent" aria-hidden />
+            Sent <strong>{sentCount}</strong>
+          </span>
+          <span className="status-strip-item">
+            <span className="status-strip-dot rejected" aria-hidden />
+            Rejected <strong>{rejectedCount}</strong>
+          </span>
         </div>
         {q.isLoading && <p className="muted">Loading quotations…</p>}
         {q.error && <p className="error">{(q.error as Error).message}</p>}
@@ -525,7 +532,7 @@ export function QuotationsPage() {
                     >
                       <td>
                         <div className="row" style={{ gap: '0.4rem' }}>
-                          <FileText size={14} style={{ color: '#6366f1', flexShrink: 0 }} />
+                          <FileText size={14} style={{ color: 'var(--primary)', flexShrink: 0 }} />
                           <div className="stack" style={{ gap: '0.15rem' }}>
                             <span style={{ fontWeight: 600, fontSize: '0.88rem' }}>
                               {quotationDisplayName(x)}
@@ -821,7 +828,7 @@ export function QuotationsPage() {
               <button type="button" onClick={() => setShowForm(true)}>
                 <Plus size={14} /> New quotation
               </button>
-              <Link to="/app/document-templates">
+              <Link to={routes.settings('documents')}>
                 <FileText size={14} /> Quotation templates
               </Link>
             </div>
@@ -898,7 +905,7 @@ export function QuotationsPage() {
               ) : (
                 <p className="muted small">
                   No catalog yet.{' '}
-                  <Link to="/app/brand-assets">Upload CSV in Brand assets</Link>
+                  <Link to={routes.settings('brand')}>Upload CSV in Brand assets</Link>
                 </p>
               )}
             </div>

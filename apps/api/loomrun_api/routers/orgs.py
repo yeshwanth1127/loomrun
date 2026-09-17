@@ -19,6 +19,7 @@ _INVITABLE_ROLES = frozenset(
         MembershipRole.SALES,
         MembershipRole.TELECALLER,
         MembershipRole.PRODUCTION,
+        MembershipRole.PRODUCTION_MANAGER,
         MembershipRole.VIEWER,
     }
 )
@@ -140,6 +141,9 @@ async def create_organization(body: CreateOrgBody, user_id: str = Depends(get_cu
             "memberships": {"create": {"userId": user_id, "role": MembershipRole.OWNER}},
         }
     )
+    from loomrun_api.pipeline_routing import ensure_default_pipeline
+
+    await ensure_default_pipeline(org.id)
     return {"id": org.id, "name": org.name, "slug": org.slug, "plan": org.plan}
 
 
@@ -233,6 +237,81 @@ async def update_org_member(
     }
 
 
+class UpdateMyProfileBody(BaseModel):
+    whatsapp_phone: str | None = Field(default=None, max_length=32)
+
+
+@router.get("/orgs/{org_id}/my-connections")
+async def my_connections(org_id: str, ctx: OrgContext = Depends(get_org_context)) -> dict:
+    """Personal WhatsApp / Gmail status for the current membership + reminder phone.
+
+    Org-level CEO connectors are listed separately for awareness; they are not
+    the telecaller's personal accounts.
+    """
+    from loomrun_api.member_connections import get_member_automation, get_member_whatsapp, get_org_automation, get_org_whatsapp
+
+    mid = ctx.membership.id
+    my_wa = await get_member_whatsapp(mid)
+    my_gmail = await get_member_automation(mid, "GMAIL")
+    org_wa = await get_org_whatsapp(ctx.organization_id)
+    org_gmail = await get_org_automation(ctx.organization_id, "GMAIL")
+
+    my_wa_status = (my_wa.status if my_wa else "disconnected") or "disconnected"
+    org_wa_status = (org_wa.status if org_wa else "disconnected") or "disconnected"
+    return {
+        "membership_id": mid,
+        "whatsapp_phone": getattr(ctx.membership, "whatsappPhone", None),
+        "whatsapp": {
+            "status": my_wa_status,
+            "connected": my_wa_status == "connected",
+            "phone_number": my_wa.phoneNumber if my_wa else None,
+            "scope": "membership",
+        },
+        "gmail": {
+            "status": my_gmail.status if my_gmail else "disconnected",
+            "connected_email": my_gmail.connectedEmail if my_gmail else None,
+            "connected": bool(my_gmail and my_gmail.status == "connected"),
+            "scope": "membership",
+        },
+        "org_whatsapp": {
+            "status": org_wa_status,
+            "connected": org_wa_status == "connected",
+            "scope": "organization",
+        },
+        "org_gmail": {
+            "status": org_gmail.status if org_gmail else "disconnected",
+            "connected_email": org_gmail.connectedEmail if org_gmail else None,
+            "connected": bool(org_gmail and org_gmail.status == "connected"),
+            "scope": "organization",
+        },
+        "note": (
+            "Connect your own WhatsApp and Gmail here. Organization connectors "
+            "managed by the CEO remain separate and are used as a fallback when "
+            "you have not connected a personal account."
+        ),
+    }
+
+
+@router.patch("/orgs/{org_id}/me")
+async def update_my_profile(
+    org_id: str,
+    body: UpdateMyProfileBody,
+    ctx: OrgContext = Depends(get_org_context),
+) -> dict:
+    """Any member may update their own reminder WhatsApp phone."""
+    payload = body.model_dump(exclude_unset=True)
+    if "whatsapp_phone" not in payload:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="No changes")
+    updated = await prisma.membership.update(
+        where={"id": ctx.membership.id},
+        data={"whatsappPhone": _normalize_member_phone(payload.get("whatsapp_phone"))},
+    )
+    return {
+        "membership_id": updated.id,
+        "whatsapp_phone": updated.whatsappPhone,
+    }
+
+
 @router.post("/orgs/{org_id}/members", status_code=status.HTTP_201_CREATED)
 async def create_org_member(
     org_id: str,
@@ -242,7 +321,7 @@ async def create_org_member(
     if body.role not in _INVITABLE_ROLES:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            detail="Role must be SALES, TELECALLER, PRODUCTION, or VIEWER",
+            detail="Role must be SALES, TELECALLER, PRODUCTION, PRODUCTION_MANAGER, or VIEWER",
         )
     oid = ctx.organization_id
     org = await prisma.organization.find_unique(where={"id": oid})

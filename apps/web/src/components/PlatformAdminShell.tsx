@@ -9,6 +9,7 @@ import {
 import { NavLink, Navigate, Outlet, useLocation } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
+import { NoolrunWordmark } from './react-bits/NoolrunWordmark'
 import { SmoothScroll } from './SmoothScroll'
 
 const NAV = [
@@ -23,7 +24,7 @@ export function PlatformAdminShell() {
   if (loading) {
     return (
       <div className="app-loading">
-        <div className="app-loading-mark">L</div>
+        <img src="/noolrun-mark.png?v=3" alt="" className="app-loading-mark" />
         <p className="muted">Loading platform…</p>
       </div>
     )
@@ -39,9 +40,8 @@ export function PlatformAdminShell() {
     <div className="layout">
       <aside className="sidebar">
         <div className="sidebar-brand">
-          <div className="sidebar-brand-icon">L</div>
-          <div>
-            <div className="sidebar-brand-title">Loomrun</div>
+          <div className="sidebar-brand-copy">
+            <NoolrunWordmark size="nav" className="sidebar-noolrun-wordmark" />
             <div className="sidebar-brand-sub">Platform Admin</div>
           </div>
         </div>

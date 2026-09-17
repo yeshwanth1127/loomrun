@@ -220,7 +220,7 @@ async def build_ceo_dashboard(*, organization_id: str, day: str | None = None) -
     connected_lead_sources = sum(1 for c in lead_conns if c.status == "connected")
 
     gmail_conn = await prisma.automationconnection.find_first(
-        where={"organizationId": oid, "serviceName": "GMAIL"}
+        where={"organizationId": oid, "serviceName": "GMAIL", "membershipId": None}
     )
     telephony_conn = await prisma.telephonyconfig.find_first(
         where={"organizationId": oid, "isActive": True}

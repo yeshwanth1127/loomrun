@@ -1,3 +1,5 @@
+import { FOLLOW_UP_CALL_STATUSES } from './callStatus'
+
 /** Local date/time helpers for callback scheduling (avoid UTC midnight bugs). */
 
 export function pad2(n: number) {
@@ -58,9 +60,9 @@ export function followUpBucket(dt: string | null | undefined): FollowUpBucket {
   return 'later_today'
 }
 
-/** A follow-up is active only when the latest call outcome is Follow Up — same rule as Follow ups page. */
+/** A follow-up is active when the latest call outcome is any follow-up status. */
 export function hasActiveFollowUp(lastCallOutcome: string | null | undefined): boolean {
-  return lastCallOutcome === 'CALLBACK_SCHEDULED'
+  return !!lastCallOutcome && FOLLOW_UP_CALL_STATUSES.has(lastCallOutcome)
 }
 
 export function activeFollowUpAt(

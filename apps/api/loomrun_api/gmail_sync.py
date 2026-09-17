@@ -47,7 +47,7 @@ async def sync_org_gmail(org_id: str) -> int:
         return 0
 
     conn = await prisma.automationconnection.find_first(
-        where={"organizationId": org_id, "serviceName": "GMAIL"}
+        where={"organizationId": org_id, "serviceName": "GMAIL", "membershipId": None}
     )
     if not conn:
         return 0

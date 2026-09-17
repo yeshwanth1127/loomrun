@@ -510,11 +510,11 @@ export function CEODashboardPage() {
                   <InsightCard title="Sales funnel">
                     <FunnelChart
                       steps={[
-                        { label: 'Leads', value: d.funnel?.leads ?? d.total_leads.count, color: '#5B2C87' },
+                        { label: 'Leads', value: d.funnel?.leads ?? d.total_leads.count, color: '#0F766E' },
                         { label: 'Follow-ups', value: d.funnel?.follow_ups ?? d.follow_ups.count, color: '#3D7A5A' },
-                        { label: 'Quotations', value: d.funnel?.quotations ?? d.quotations_sent.count, color: '#2563eb' },
+                        { label: 'Quotations', value: d.funnel?.quotations ?? d.quotations_sent.count, color: '#0E7490' },
                         { label: 'Orders', value: d.funnel?.orders ?? totalOrders, color: '#B07A2E' },
-                        { label: 'Completed', value: d.funnel?.completed ?? d.order_health?.completed ?? 0, color: '#ea580c' },
+                        { label: 'Completed', value: d.funnel?.completed ?? d.order_health?.completed ?? 0, color: '#0369A1' },
                       ]}
                     />
                   </InsightCard>
@@ -524,7 +524,7 @@ export function CEODashboardPage() {
                       const segs = entries.map(([stage, rec], i) => ({
                         label: STAGE_LABELS[stage] ?? stage,
                         value: rec.value_cents,
-                        color: ['#5B2C87', '#3D7A5A', '#2563eb', '#B07A2E', '#ea580c', '#64748b'][i % 6],
+                        color: ['#0F766E', '#3D7A5A', '#0E7490', '#B07A2E', '#0369A1', '#64748b'][i % 6],
                       }))
                       const totalVal = segs.reduce((s, x) => s + x.value, 0)
                       return segs.length === 0 ? (
@@ -551,7 +551,7 @@ export function CEODashboardPage() {
                         .map(([src, count], i) => ({
                           label: src.replace(/_/g, ' '),
                           value: count,
-                          color: ['#5B2C87', '#22c55e', '#2563eb', '#f59e0b', '#64748b'][i % 5],
+                          color: ['#0F766E', '#22c55e', '#0E7490', '#f59e0b', '#64748b'][i % 5],
                         }))}
                     />
                   </InsightCard>

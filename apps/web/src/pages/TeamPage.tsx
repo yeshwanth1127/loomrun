@@ -8,6 +8,8 @@ import { useAuth } from '../context/AuthContext'
 import { apiFetch } from '../lib/api'
 import type { SubscriptionInfo } from '../lib/entitlements'
 
+import { roleLabel } from '../lib/membership'
+
 type Member = {
   membership_id: string
   user_id: string
@@ -18,14 +20,15 @@ type Member = {
   created_at: string
 }
 
-const ROLES = ['TELECALLER'] as const
+const ROLES = ['TELECALLER', 'PRODUCTION_MANAGER', 'PRODUCTION', 'SALES', 'VIEWER'] as const
 
 const ROLE_COLOR: Record<string, string> = {
-  OWNER:      'badge-indigo',
-  SALES:      'badge-green',
+  OWNER: 'badge-indigo',
+  SALES: 'badge-green',
   TELECALLER: 'badge-blue',
   PRODUCTION: 'badge-amber',
-  VIEWER:     'badge-slate',
+  PRODUCTION_MANAGER: 'badge-amber',
+  VIEWER: 'badge-slate',
 }
 
 export function TeamPage() {
@@ -148,7 +151,11 @@ export function TeamPage() {
                 <div className="form-field">
                   <label className="input-label">Role</label>
                   <select className="select" value={role} onChange={(e) => setRole(e.target.value)}>
-                    {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
+                    {ROLES.map((r) => (
+                      <option key={r} value={r}>
+                        {roleLabel(r)}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -209,7 +216,9 @@ export function TeamPage() {
                         </div>
                       </td>
                       <td>
-                        <span className={`badge ${ROLE_COLOR[m.role] ?? 'badge-slate'}`}>{m.role}</span>
+                        <span className={`badge ${ROLE_COLOR[m.role] ?? 'badge-slate'}`}>
+                          {roleLabel(m.role)}
+                        </span>
                       </td>
                       <td>
                         <div className="row" style={{ gap: '0.35rem', alignItems: 'center' }}>

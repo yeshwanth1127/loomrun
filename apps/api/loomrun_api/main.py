@@ -9,10 +9,13 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from loomrun_api.config import settings
 from loomrun_api.document_template_service import ensure_system_templates
+from loomrun_api.logging_setup import configure_logging
 from loomrun_api.polling import PollTask, start as start_polling
 from loomrun_api.prisma_client import prisma
 from loomrun_api.qlix.mcp_server import mcp_server
+from loomrun_api.request_logging import RequestLoggingMiddleware
 
+configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 
 
@@ -106,10 +109,12 @@ from loomrun_api.routers import (
     integrations_whatsapp,
     lead_connections,
     leads,
+    pipelines,
     meta_hooks,
     meta_oauth,
     orgs,
     production,
+    production_design,
     quotations,
     subscription,
     telecaller,
@@ -162,6 +167,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Outer-most after CORS so every routed request (including AI streams) is timed.
+app.add_middleware(RequestLoggingMiddleware)
 
 app.include_router(auth.router, prefix="/v1/auth", tags=["auth"])
 app.include_router(admin.router, prefix="/v1/admin", tags=["admin"])
@@ -173,6 +180,7 @@ app.include_router(orgs.router, prefix="/v1", tags=["organizations"])
 app.include_router(subscription.router, prefix="/v1", tags=["subscription"])
 app.include_router(ai_agent_router, prefix="/v1", tags=["ai-agent"])
 app.include_router(leads.router, prefix="/v1", tags=["leads"])
+app.include_router(pipelines.router, prefix="/v1", tags=["pipelines"])
 app.include_router(lead_connections.router, prefix="/v1", tags=["lead-connections"])
 app.include_router(automation_connections.router, prefix="/v1", tags=["automation-connections"])
 app.include_router(automation_llm.router, prefix="/v1", tags=["automation-llm"])
@@ -181,6 +189,7 @@ app.include_router(catalog.router, prefix="/v1", tags=["catalog"])
 app.include_router(document_templates.router, prefix="/v1", tags=["document-templates"])
 app.include_router(quotations.router, prefix="/v1", tags=["quotations"])
 app.include_router(production.router, prefix="/v1", tags=["production"])
+app.include_router(production_design.router, prefix="/v1", tags=["production"])
 app.include_router(tracking.router, prefix="/v1", tags=["tracking"])
 app.include_router(expenses.router, prefix="/v1", tags=["expenses"])
 app.include_router(integrations_whatsapp.router, prefix="/v1", tags=["whatsapp"])

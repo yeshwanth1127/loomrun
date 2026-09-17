@@ -33,6 +33,97 @@ SOURCE_SCORES: dict[str, int] = {
     "OTHER": 10,
 }
 
+_SOURCE_ALIASES: dict[str, str] = {
+    "META": "META_ADS",
+    "META_ADS": "META_ADS",
+    "FACEBOOK": "META_ADS",
+    "FB": "META_ADS",
+    "GOOGLE": "GOOGLE_ADS",
+    "GOOGLE_ADS": "GOOGLE_ADS",
+    "INDIAMART": "INDIAMART",
+    "WHATSAPP": "WHATSAPP",
+    "INSTAGRAM": "INSTAGRAM",
+    "WEB": "WEB",
+    "WEBSITE": "WEBSITE",
+    "REFERRAL": "REFERRAL",
+    "TELECALLER": "TELECALLER",
+    "MANUAL": "MANUAL",
+    "OTHER": "OTHER",
+}
+
+
+def _resolve_lead_source(source: str | None) -> LeadSource | None:
+    if source is None:
+        return None
+    key = str(source).strip().upper().replace(" ", "_").replace("-", "_")
+    if not key:
+        return None
+    mapped = _SOURCE_ALIASES.get(key, key)
+    if mapped not in LeadSource.__members__:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown source '{source}'. Use a LeadSource value such as META_ADS or GOOGLE_ADS.",
+        )
+    return LeadSource[mapped]
+
+
+async def list_attribution_campaigns(
+    *,
+    organization_id: str,
+    source: str | None = None,
+) -> dict[str, Any]:
+    """Distinct normalized campaigns already seen on org leads.
+
+    Campaign ID is the stable key: same name + different IDs are separate rows.
+    Uses Lead.campaignId / Lead.campaignName only (no Marketing API).
+    """
+    resolved = _resolve_lead_source(source)
+    where: dict[str, Any] = {
+        "organizationId": organization_id,
+        "campaignId": {"not": None},
+    }
+    if resolved is not None:
+        where["source"] = resolved
+
+    leads = await prisma.lead.find_many(
+        where=where,
+        order={"updatedAt": "desc"},
+    )
+
+    buckets: dict[tuple[str, str], dict[str, Any]] = {}
+    for lead in leads:
+        cid = (lead.campaignId or "").strip()
+        if not cid:
+            continue
+        src = lead.source.name if hasattr(lead.source, "name") else str(lead.source)
+        key = (src, cid)
+        seen_at = lead.updatedAt or lead.createdAt
+        row = buckets.get(key)
+        if row is None:
+            buckets[key] = {
+                "source": src,
+                "campaign_id": cid,
+                "campaign_name": (lead.campaignName or "").strip() or cid,
+                "lead_count": 1,
+                "last_seen_at": seen_at.isoformat() if seen_at else None,
+            }
+            continue
+        row["lead_count"] += 1
+        if lead.campaignName and (
+            not row["campaign_name"] or row["campaign_name"] == cid
+        ):
+            row["campaign_name"] = lead.campaignName.strip()
+        if seen_at and (
+            not row["last_seen_at"] or seen_at.isoformat() > row["last_seen_at"]
+        ):
+            row["last_seen_at"] = seen_at.isoformat()
+
+    items = sorted(
+        buckets.values(),
+        key=lambda r: (-int(r["lead_count"]), str(r["campaign_name"]).casefold(), r["campaign_id"]),
+    )
+    return {"items": items, "count": len(items)}
+
 
 def compute_lead_score(
     source,
@@ -88,6 +179,12 @@ def serialize_lead(lead, *, with_last_call: bool = False, last_call=None) -> dic
         "source": lead.source.name if hasattr(lead.source, "name") else str(lead.source),
         "stage": lead.stage.name if hasattr(lead.stage, "name") else str(lead.stage),
         "lead_status": lead.leadStatus.name if hasattr(lead.leadStatus, "name") else str(lead.leadStatus),
+        "pipeline_id": getattr(lead, "pipelineId", None),
+        "pipeline_stage_id": getattr(lead, "pipelineStageId", None),
+        "region": getattr(lead, "region", None),
+        "sector": getattr(lead, "sector", None),
+        "campaign_id": getattr(lead, "campaignId", None),
+        "campaign_name": getattr(lead, "campaignName", None),
         "title": lead.title,
         "company": lead.company,
         "phone": lead.phone,
@@ -111,6 +208,15 @@ def serialize_lead(lead, *, with_last_call: bool = False, last_call=None) -> dic
         "created_at": lead.createdAt.isoformat(),
         "updated_at": lead.updatedAt.isoformat(),
     }
+    pipeline = getattr(lead, "pipeline", None)
+    if pipeline is not None:
+        data["pipeline_name"] = pipeline.name
+    stage_row = getattr(lead, "pipelineStage", None)
+    if stage_row is not None:
+        data["pipeline_stage_name"] = stage_row.name
+        data["pipeline_stage_kind"] = (
+            stage_row.kind.name if hasattr(stage_row.kind, "name") else str(stage_row.kind)
+        )
     if with_last_call:
         data.update(call_summary_fields(last_call))
     return data
@@ -403,7 +509,12 @@ async def get_lead(*, organization_id: str, lead_id: str) -> dict[str, Any]:
     resolved = await resolve_lead(organization_id=organization_id, lead_id=lead_id)
     lead = await prisma.lead.find_first(
         where={"id": resolved.id, "organizationId": organization_id},
-        include={"activities": {"order_by": {"createdAt": "desc"}, "take": 20}, "assignee": True},
+        include={
+            "activities": {"order_by": {"createdAt": "desc"}, "take": 20},
+            "assignee": True,
+            "pipeline": True,
+            "pipelineStage": True,
+        },
     )
     if not lead:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Lead not found")
@@ -451,11 +562,20 @@ async def create_lead(
     assignee_id: str | None = None,
     next_follow_up_at: datetime | None = None,
     estimated_value: float | None = None,
+    region: str | None = None,
+    sector: str | None = None,
+    campaign_id: str | None = None,
+    campaign_name: str | None = None,
+    pipeline_id: str | None = None,
+    pipeline_stage_id: str | None = None,
+    meta_campaign_id: str | None = None,
+    meta_campaign_name: str | None = None,
     organization=None,
     activity_body: str = "Lead created",
     activity_metadata: dict | None = None,
 ) -> dict[str, Any]:
     from loomrun_api.entitlements import get_org_entitlements
+    from loomrun_api.pipeline_routing import merge_pipeline_into_create_data
 
     org = organization or await prisma.organization.find_unique(where={"id": organization_id})
     if org:
@@ -478,6 +598,10 @@ async def create_lead(
 
     await _assert_assignee_in_org(organization_id, assignee_id)
 
+    # Prefer normalized campaign fields; fall back to Meta mirrors when only those are set.
+    resolved_campaign_id = (campaign_id or meta_campaign_id or "").strip() or None
+    resolved_campaign_name = (campaign_name or meta_campaign_name or "").strip() or None
+
     score = compute_lead_score(source, phone, email, product_interest, city)
     data: dict = {
         "organizationId": organization_id,
@@ -497,9 +621,23 @@ async def create_lead(
         "assigneeId": assignee_id,
         "nextFollowUpAt": next_follow_up_at,
         "lastActivityAt": datetime.utcnow(),
+        "region": (region or "").strip() or None,
+        "sector": (sector or "").strip() or None,
+        "campaignId": resolved_campaign_id,
+        "campaignName": resolved_campaign_name,
     }
     if estimated_value is not None:
         data["estimatedValue"] = estimated_value
+    if meta_campaign_id is not None:
+        data["metaCampaignId"] = meta_campaign_id
+    if meta_campaign_name is not None:
+        data["metaCampaignName"] = meta_campaign_name
+    if pipeline_id:
+        data["pipelineId"] = pipeline_id
+    if pipeline_stage_id:
+        data["pipelineStageId"] = pipeline_stage_id
+
+    data = await merge_pipeline_into_create_data(data, organization_id=organization_id)
 
     lead = await prisma.lead.create(data=data)
     act_data: dict = {
@@ -546,8 +684,21 @@ async def update_lead(
     assignee_id: str | None = None,
     next_follow_up_at: datetime | None = None,
     estimated_value: float | None = None,
+    region: str | None = None,
+    sector: str | None = None,
+    campaign_id: str | None = None,
+    campaign_name: str | None = None,
+    pipeline_id: str | None = None,
+    pipeline_stage_id: str | None = None,
+    reroute: bool = False,
     activity_source: str | None = None,
 ) -> dict[str, Any]:
+    from loomrun_api.pipeline_routing import (
+        assignment_fields,
+        lead_status_for_kind,
+        legacy_stage_from_pipeline_stage,
+    )
+
     lead = await resolve_lead(organization_id=organization_id, lead_id=lead_id)
     lead_id = lead.id
 
@@ -564,27 +715,15 @@ async def update_lead(
     update_data: dict = {"lastActivityAt": datetime.utcnow()}
     previous_stage = lead.stage.name if hasattr(lead.stage, "name") else str(lead.stage)
     stage_changed = False
+    pipeline_moved = False
     meta_extra = {"source": activity_source} if activity_source else None
+    old_pipeline_id = getattr(lead, "pipelineId", None)
+    old_pipeline_stage_id = getattr(lead, "pipelineStageId", None)
 
     if title is not None:
         update_data["title"] = title
     if source is not None:
         update_data["source"] = source
-    if stage is not None and stage != lead.stage:
-        stage_name = stage.name if hasattr(stage, "name") else str(stage)
-        update_data["stage"] = stage
-        stage_changed = True
-        await prisma.leadactivity.create(
-            data={
-                "leadId": lead_id,
-                "userId": user_id,
-                "type": LeadActivityType.STAGE_CHANGE,
-                "body": f"Stage changed to {stage_name}",
-                "metadata": json_meta({"stage": stage_name, **(meta_extra or {})}),
-            }
-        )
-    if lead_status is not None:
-        update_data["leadStatus"] = lead_status
     if company is not None:
         update_data["company"] = company
     if phone is not None:
@@ -598,7 +737,7 @@ async def update_lead(
     if product_interest is not None:
         update_data["productInterest"] = product_interest
         update_data["leadScore"] = compute_lead_score(
-            lead.source,
+            source if source is not None else lead.source,
             phone if phone is not None else lead.phone,
             email if email is not None else lead.email,
             product_interest,
@@ -627,8 +766,174 @@ async def update_lead(
         update_data["followUpWaRemindedAt"] = None
     if estimated_value is not None:
         update_data["estimatedValue"] = estimated_value
+    if region is not None:
+        update_data["region"] = region.strip() or None
+    if sector is not None:
+        update_data["sector"] = sector.strip() or None
+    if campaign_id is not None:
+        update_data["campaignId"] = str(campaign_id).strip() or None
+    if campaign_name is not None:
+        update_data["campaignName"] = campaign_name.strip() or None
+
+    # Explicit pipeline/stage move (manual) — no silent attribute reroute.
+    if pipeline_id is not None or pipeline_stage_id is not None:
+        target_pipeline_id = pipeline_id or old_pipeline_id
+        if not target_pipeline_id:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="pipeline_id is required")
+        pipeline = await prisma.pipeline.find_first(
+            where={
+                "id": target_pipeline_id,
+                "organizationId": organization_id,
+                "isActive": True,
+            },
+            include={"stages": {"order_by": {"sortOrder": "asc"}}},
+        )
+        if not pipeline:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Pipeline not found or archived")
+        target_stage = None
+        if pipeline_stage_id:
+            target_stage = next((s for s in (pipeline.stages or []) if s.id == pipeline_stage_id), None)
+            if not target_stage:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    detail="pipeline_stage_id is not in the target pipeline",
+                )
+        else:
+            from loomrun_api.pipeline_routing import entry_stage
+
+            target_stage = entry_stage(pipeline)
+        if not target_stage:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Pipeline has no stages")
+        if target_pipeline_id != old_pipeline_id or target_stage.id != old_pipeline_stage_id:
+            update_data["pipelineId"] = pipeline.id
+            update_data["pipelineStageId"] = target_stage.id
+            update_data["stage"] = legacy_stage_from_pipeline_stage(target_stage)
+            status_val = lead_status_for_kind(target_stage.kind)
+            if status_val is not None and lead_status is None:
+                update_data["leadStatus"] = status_val
+            pipeline_moved = True
+            stage_changed = True
+
+    # Legacy stage update: sync into current pipeline's matching systemKey stage when possible.
+    elif stage is not None and stage != lead.stage:
+        stage_name = stage.name if hasattr(stage, "name") else str(stage)
+        update_data["stage"] = stage
+        stage_changed = True
+        pipeline = None
+        if old_pipeline_id:
+            pipeline = await prisma.pipeline.find_unique(
+                where={"id": old_pipeline_id},
+                include={"stages": {"order_by": {"sortOrder": "asc"}}},
+            )
+        if pipeline:
+            from loomrun_api.pipeline_routing import stage_for_system_key
+
+            mapped = stage_for_system_key(pipeline, stage_name)
+            if mapped:
+                update_data["pipelineStageId"] = mapped.id
+                status_val = lead_status_for_kind(mapped.kind)
+                if status_val is not None and lead_status is None:
+                    update_data["leadStatus"] = status_val
+        await prisma.leadactivity.create(
+            data={
+                "leadId": lead_id,
+                "userId": user_id,
+                "type": LeadActivityType.STAGE_CHANGE,
+                "body": f"Stage changed to {stage_name}",
+                "metadata": json_meta({"stage": stage_name, **(meta_extra or {})}),
+            }
+        )
+
+    if lead_status is not None:
+        update_data["leadStatus"] = lead_status
+
+    # Explicit reroute only — never silent when attributes change.
+    if reroute and pipeline_id is None and pipeline_stage_id is None:
+        routed = await assignment_fields(
+            organization_id=organization_id,
+            source=source if source is not None else lead.source,
+            campaign_id=(
+                update_data.get("campaignId")
+                if "campaignId" in update_data
+                else getattr(lead, "campaignId", None)
+            ),
+            campaign_name=(
+                update_data.get("campaignName")
+                if "campaignName" in update_data
+                else getattr(lead, "campaignName", None)
+            ),
+            region=update_data.get("region") if "region" in update_data else getattr(lead, "region", None),
+            product_interest=(
+                update_data.get("productInterest")
+                if "productInterest" in update_data
+                else lead.productInterest
+            ),
+            sector=update_data.get("sector") if "sector" in update_data else getattr(lead, "sector", None),
+        )
+        new_pid = routed.get("pipelineId")
+        new_sid = routed.get("pipelineStageId")
+        if new_pid and new_sid and (new_pid != old_pipeline_id or new_sid != old_pipeline_stage_id):
+            update_data["pipelineId"] = new_pid
+            update_data["pipelineStageId"] = new_sid
+            if "stage" in routed:
+                update_data["stage"] = routed["stage"]
+            if "leadStatus" in routed and lead_status is None:
+                update_data["leadStatus"] = routed["leadStatus"]
+            pipeline_moved = True
+            stage_changed = True
+
+    # Unassigned leads: assign pipeline on update if still missing.
+    if not old_pipeline_id and "pipelineId" not in update_data:
+        routed = await assignment_fields(
+            organization_id=organization_id,
+            source=source if source is not None else lead.source,
+            campaign_id=(
+                update_data.get("campaignId")
+                if "campaignId" in update_data
+                else getattr(lead, "campaignId", None)
+            ),
+            campaign_name=(
+                update_data.get("campaignName")
+                if "campaignName" in update_data
+                else getattr(lead, "campaignName", None)
+            ),
+            region=update_data.get("region") if "region" in update_data else getattr(lead, "region", None),
+            product_interest=(
+                update_data.get("productInterest")
+                if "productInterest" in update_data
+                else lead.productInterest
+            ),
+            sector=update_data.get("sector") if "sector" in update_data else getattr(lead, "sector", None),
+            prefer_system_key=stage if stage is not None else lead.stage,
+        )
+        for key in ("pipelineId", "pipelineStageId", "stage", "leadStatus"):
+            if key in routed and key not in update_data:
+                update_data[key] = routed[key]
+        if routed.get("pipelineId"):
+            pipeline_moved = True
 
     updated = await prisma.lead.update(where={"id": lead_id}, data=update_data)
+
+    if pipeline_moved:
+        await prisma.leadactivity.create(
+            data={
+                "leadId": lead_id,
+                "userId": user_id,
+                "type": LeadActivityType.STAGE_CHANGE,
+                "body": "Pipeline updated" if reroute else "Moved to pipeline stage",
+                "metadata": json_meta(
+                    {
+                        "from_pipeline_id": old_pipeline_id,
+                        "from_pipeline_stage_id": old_pipeline_stage_id,
+                        "to_pipeline_id": getattr(updated, "pipelineId", None),
+                        "to_pipeline_stage_id": getattr(updated, "pipelineStageId", None),
+                        "reroute": bool(reroute),
+                        **(meta_extra or {}),
+                    }
+                ),
+            }
+        )
+
     org_events.record_changed(
         organization_id=organization_id,
         entity_type=org_events.qlix_docs.ENTITY_LEAD,
@@ -742,13 +1047,20 @@ async def import_parsed_leads(
             "tags": item.get("tags") or ["csv-import"],
             "notes": item.get("notes"),
             "lastActivityAt": datetime.utcnow(),
+            "region": (item.get("region") or "").strip() or None,
+            "sector": (item.get("sector") or "").strip() or None,
+            "campaignId": (str(item["campaign_id"]).strip() if item.get("campaign_id") else None),
+            "campaignName": (item.get("campaign_name") or "").strip() or None,
         }
         if item.get("estimated_value") is not None:
             data["estimatedValue"] = item["estimated_value"]
         if item.get("created_at") is not None:
             data["createdAt"] = item["created_at"]
 
+        from loomrun_api.pipeline_routing import merge_pipeline_into_create_data
+
         try:
+            data = await merge_pipeline_into_create_data(data, organization_id=organization_id)
             lead = await prisma.lead.create(data=data)
             await prisma.leadactivity.create(
                 data={

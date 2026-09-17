@@ -1,4 +1,5 @@
 import logging
+import secrets
 from datetime import datetime, timezone
 from typing import Any
 
@@ -24,6 +25,11 @@ async def indiamart_push_webhook(org_id: str, request: Request) -> dict:
     )
     if not connection:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="No connected IndiaMart account")
+
+    expected = connection.webhookSecret
+    provided = request.headers.get("X-Webhook-Secret", "")
+    if not expected or not secrets.compare_digest(provided, expected):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Invalid webhook secret")
 
     payload: Any = await request.json()
     # IndiaMart may push a single object or a list

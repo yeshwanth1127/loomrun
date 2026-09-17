@@ -1,5 +1,18 @@
 export type AiChatMode = false | 'minimal' | 'advanced'
 
+export type AiUsageWindow = {
+  used: number
+  limit: number | null
+  remaining?: number | null
+  resetsAt?: string | null
+  periodStart?: string | null
+}
+
+export type AiUsageWindows = {
+  session5h: AiUsageWindow
+  weekly: AiUsageWindow
+}
+
 export type Entitlements = {
   plan: string
   max_users: number
@@ -13,7 +26,8 @@ export type Entitlements = {
   gmail_calendar: boolean
   event_automations: boolean
   messages_per_day: number | null
-  ai_messages_per_day: number | null
+  ai_credits_per_5h: number | null
+  ai_credits_per_week: number | null
   max_leads: number | null
 }
 
@@ -47,7 +61,7 @@ export type SubscriptionInfo = {
   usage: {
     day: string
     whatsapp_outbound: { used: number; limit: number | null }
-    ai_chat: { used: number; limit: number | null }
+    ai: AiUsageWindows
   }
   seats: {
     used: number
@@ -81,7 +95,7 @@ export type AiStatus = {
   multilingual: boolean
   upgrade_required: boolean
   trial?: TrialInfo
-  usage?: { used: number; limit: number | null }
+  usage?: AiUsageWindows
   models?: {
     default: string
     items: { id: string; label: string; provider?: string }[]
@@ -152,4 +166,24 @@ export function aiModeLabel(mode: string): string {
 export function isTrialExpiredError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err ?? '')
   return msg.includes('TRIAL_EXPIRED')
+}
+
+/** Compact “resets in …” label for AI credit windows. */
+export function formatResetsIn(resetsAt?: string | null, now = Date.now()): string {
+  if (!resetsAt) return ''
+  const ms = new Date(resetsAt).getTime() - now
+  if (Number.isNaN(ms) || ms <= 0) return 'soon'
+  const mins = Math.ceil(ms / 60_000)
+  if (mins < 60) return `${mins}m`
+  const hours = Math.floor(mins / 60)
+  const rem = mins % 60
+  if (hours < 48) return rem ? `${hours}h ${rem}m` : `${hours}h`
+  const days = Math.floor(hours / 24)
+  return `${days}d`
+}
+
+/** Used % of a credit/message pool (0–100). */
+export function usagePercent(used: number, limit: number | null | undefined): number {
+  if (limit == null || limit <= 0) return 0
+  return Math.min(100, Math.round((used / limit) * 100))
 }

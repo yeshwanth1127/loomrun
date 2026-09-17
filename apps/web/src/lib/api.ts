@@ -58,6 +58,21 @@ export async function refreshAccessToken(): Promise<boolean> {
 // never attempt a refresh-and-retry loop against them.
 const NO_REFRESH_PREFIXES = ['/v1/auth/login', '/v1/auth/register', '/v1/auth/refresh']
 
+function errorDetailMessage(detail: unknown, fallback: string): string {
+  if (typeof detail === 'string') return detail
+  if (detail && typeof detail === 'object') {
+    const obj = detail as { message?: unknown; detail?: unknown }
+    if (typeof obj.message === 'string') return obj.message
+    if (typeof obj.detail === 'string') return obj.detail
+    try {
+      return JSON.stringify(detail)
+    } catch {
+      return fallback
+    }
+  }
+  return fallback
+}
+
 export async function apiFetch<T>(
   path: string,
   options: RequestInit & { json?: unknown } = {},
@@ -103,8 +118,9 @@ export async function apiFetch<T>(
         window.location.assign('/login')
       }
     }
-    const msg = (data as { detail?: unknown })?.detail ?? res.statusText
-    throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
+    throw new Error(
+      errorDetailMessage((data as { detail?: unknown })?.detail, res.statusText),
+    )
   }
   return data as T
 }
@@ -154,7 +170,7 @@ export async function apiStream(
     let detail = res.statusText
     try {
       const parsed = JSON.parse(text) as { detail?: unknown }
-      if (typeof parsed.detail === 'string') detail = parsed.detail
+      detail = errorDetailMessage(parsed.detail, res.statusText)
     } catch {
       /* keep statusText */
     }
@@ -199,10 +215,17 @@ export async function apiStream(
   }
 }
 
-// Multipart upload (Brain documents). Same auth handling, no JSON body.
-export async function apiUpload<T>(path: string, file: File): Promise<T> {
+// Multipart upload. Same auth handling, no JSON body.
+export async function apiUpload<T>(
+  path: string,
+  file: File,
+  fields?: Record<string, string>,
+): Promise<T> {
   const form = new FormData()
   form.append('file', file)
+  if (fields) {
+    for (const [k, v] of Object.entries(fields)) form.append(k, v)
+  }
   const buildHeaders = () => {
     const headers = new Headers()
     headers.set('Accept', 'application/json')
@@ -223,8 +246,38 @@ export async function apiUpload<T>(path: string, file: File): Promise<T> {
   const text = await res.text()
   const data = text ? (JSON.parse(text) as unknown) : null
   if (!res.ok) {
-    const msg = (data as { detail?: unknown })?.detail ?? res.statusText
-    throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
+    throw new Error(
+      errorDetailMessage((data as { detail?: unknown })?.detail, res.statusText),
+    )
   }
   return data as T
+}
+
+/** Authenticated binary fetch (images/files) with the same refresh-on-401 behaviour. */
+export async function apiFetchBlob(path: string): Promise<Blob> {
+  const buildHeaders = () => {
+    const headers = new Headers()
+    headers.set('Accept', '*/*')
+    const token = getToken()
+    if (token) headers.set('Authorization', `Bearer ${token}`)
+    return headers
+  }
+
+  let res = await fetch(`${base}${path}`, { method: 'GET', headers: buildHeaders() })
+  if (res.status === 401 && getRefreshToken()) {
+    const refreshed = await refreshAccessToken()
+    if (refreshed) {
+      res = await fetch(`${base}${path}`, { method: 'GET', headers: buildHeaders() })
+    }
+  }
+  if (!res.ok) {
+    let detail: unknown
+    try {
+      detail = (await res.json() as { detail?: unknown }).detail
+    } catch {
+      detail = undefined
+    }
+    throw new Error(errorDetailMessage(detail, res.statusText))
+  }
+  return res.blob()
 }

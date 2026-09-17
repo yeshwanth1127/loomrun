@@ -59,15 +59,30 @@ async def exchange_code_for_tokens(code: str, redirect_uri: str) -> dict:
 
 
 async def get_valid_org_token(org_id: str, service_name: str) -> str:
-    """Return a valid access token for an org's Google connection, refreshing if expired."""
+    """Return a valid access token for an org's (CEO) Google connection."""
+    return await get_valid_connection_token(org_id, service_name, membership_id=None)
+
+
+async def get_valid_connection_token(
+    org_id: str,
+    service_name: str,
+    *,
+    membership_id: str | None = None,
+) -> str:
+    """Valid access token for org (membership_id=None) or personal Google connection."""
+    from loomrun_api.member_connections import get_member_automation, get_org_automation
     from loomrun_api.prisma_client import prisma
     from loomrun_api.prisma_json import json_meta
 
-    conn = await prisma.automationconnection.find_first(
-        where={"organizationId": org_id, "serviceName": service_name}
-    )
+    if membership_id:
+        conn = await get_member_automation(membership_id, service_name)
+        scope_label = f"membership {membership_id}"
+    else:
+        conn = await get_org_automation(org_id, service_name)
+        scope_label = f"org {org_id}"
+
     if not conn or conn.status != "connected":
-        raise ValueError(f"No active {service_name} connection for org {org_id}")
+        raise ValueError(f"No active {service_name} connection for {scope_label}")
 
     creds: dict = conn.credentials if isinstance(conn.credentials, dict) else {}
     access_token: str | None = creds.get("access_token")
@@ -82,11 +97,11 @@ async def get_valid_org_token(org_id: str, service_name: str) -> str:
         except Exception:
             pass
 
-    if token_valid:
-        return access_token  # type: ignore[return-value]
+    if token_valid and access_token:
+        return access_token
 
     if not refresh_token:
-        raise ValueError(f"No refresh token for {service_name} on org {org_id}")
+        raise ValueError(f"No refresh token for {service_name} on {scope_label}")
 
     async with httpx.AsyncClient() as client:
         resp = await client.post(
@@ -112,6 +127,16 @@ async def get_valid_org_token(org_id: str, service_name: str) -> str:
         data={"credentials": json_meta(updated_creds)},
     )
     return new_token
+
+
+async def resolve_gmail_token_for_actor(org_id: str, membership_id: str | None) -> str:
+    """Prefer personal Gmail when connected; else fall back to org Gmail."""
+    if membership_id:
+        try:
+            return await get_valid_connection_token(org_id, "GMAIL", membership_id=membership_id)
+        except ValueError:
+            pass
+    return await get_valid_connection_token(org_id, "GMAIL", membership_id=None)
 
 
 async def get_user_email(access_token: str) -> str | None:

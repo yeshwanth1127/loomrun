@@ -3,28 +3,43 @@ import { Check, CreditCard, Mail, Sparkles, Users } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { PageHeader } from '../components/ui/PageHeader'
 import { useAuth } from '../context/AuthContext'
+import { routes } from '../lib/appRoutes'
 import { apiFetch } from '../lib/api'
-import { planBadgeClass, type SubscriptionInfo } from '../lib/entitlements'
+import {
+  formatResetsIn,
+  planBadgeClass,
+  usagePercent,
+  type SubscriptionInfo,
+} from '../lib/entitlements'
 import { membershipForOrg } from '../lib/membership'
 
 function UsageBar({
   label,
   used,
   limit,
+  resetsAt,
 }: {
   label: string
   used: number
   limit: number | null
+  resetsAt?: string | null
 }) {
   const capped = limit != null && limit > 0
-  const pct = capped ? Math.min(100, Math.round((used / limit) * 100)) : 0
+  const pct = usagePercent(used, limit)
+  const resetLabel = formatResetsIn(resetsAt)
   return (
     <div>
       <div className="row" style={{ justifyContent: 'space-between', marginBottom: 4 }}>
         <span className="small">{label}</span>
         <span className="muted small">
-          {used}{limit == null ? '' : ` / ${limit}`}
-          {limit == null ? ' (unlimited)' : '/day'}
+          {capped ? (
+            <>
+              {pct}% used
+              {resetLabel ? ` · resets in ${resetLabel}` : ''}
+            </>
+          ) : (
+            'Unlimited'
+          )}
         </span>
       </div>
       {capped && (
@@ -87,8 +102,9 @@ export function SubscriptionPage() {
                 <strong>Free trial active — {trial?.days_left ?? 0} day{(trial?.days_left ?? 0) === 1 ? '' : 's'} left</strong>
                 <p className="muted small" style={{ marginTop: '0.35rem' }}>
                   You currently have Scale-level features with trial capacity limits
-                  ({data.entitlements.messages_per_day ?? '—'} messages/day,{' '}
-                  {data.entitlements.ai_messages_per_day ?? '—'} AI chats/day,{' '}
+                  ({data.entitlements.messages_per_day ?? '—'} WhatsApp msgs/day,{' '}
+                  {data.entitlements.ai_credits_per_5h ?? '—'} AI credits/5h,{' '}
+                  {data.entitlements.ai_credits_per_week ?? '—'} AI credits/week,{' '}
                   {data.entitlements.max_users} users,{' '}
                   {data.entitlements.max_leads ?? '∞'} leads).
                 </p>
@@ -128,12 +144,10 @@ export function SubscriptionPage() {
                   used={data.usage.whatsapp_outbound.used}
                   limit={data.usage.whatsapp_outbound.limit}
                 />
-                <UsageBar
-                  label="AI chats today"
-                  used={data.usage.ai_chat.used}
-                  limit={data.usage.ai_chat.limit}
-                />
                 <div className="muted small">
+                  Loomrun AI usage is on{' '}
+                  <Link to={routes.settings('usage')}>Settings → Usage</Link>
+                  {' · '}
                   Leads: {data.leads.used}
                   {data.leads.limit != null ? ` / ${data.leads.limit}` : ' (unlimited)'}
                 </div>

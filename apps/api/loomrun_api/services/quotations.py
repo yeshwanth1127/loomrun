@@ -244,7 +244,11 @@ async def list_quotations_for_lead(*, organization_id: str, lead_id: str, limit:
     lead_id = lead.id
     take = max(1, min(int(limit or 20), 50))
     items = await prisma.quotation.find_many(
-        where={"organizationId": organization_id, "leadId": lead_id},
+        where={
+            "organizationId": organization_id,
+            "leadId": lead_id,
+            "invoiceNumber": None,
+        },
         order={"createdAt": "desc"},
         take=take,
         include={"lines": True, "lead": True},

@@ -170,3 +170,39 @@ async def send_document(
     except Exception as exc:
         logger.error("Baileys send-document error org=%s: %s", org_id, exc)
         return SendResult(False, f"WhatsApp sidecar unreachable: {exc}")
+
+
+async def send_image(
+    org_id: str,
+    phone: str,
+    file_path: str,
+    mimetype: str = "image/png",
+    caption: str = "",
+) -> SendResult:
+    """Send an inline WhatsApp image. ``file_path`` must be readable by the sidecar."""
+    if not settings.baileys_service_secret:
+        return SendResult(False, "WhatsApp sidecar is not configured")
+    if not phone or not file_path:
+        return SendResult(False, "Phone and file path are required")
+    try:
+        async with httpx.AsyncClient(timeout=90) as client:
+            resp = await client.post(
+                f"{_base()}/send-image",
+                json={
+                    "org_id": org_id,
+                    "to_phone": phone,
+                    "file_path": file_path,
+                    "mimetype": mimetype,
+                    "caption": caption or "",
+                },
+                headers=_headers(),
+            )
+        if resp.status_code == 200:
+            logger.info("Baileys image sent org=%s to=%s", org_id, phone)
+            return SendResult(True)
+        error = _error_from_response(resp)
+        logger.warning("Baileys send-image %s: %s", resp.status_code, error)
+        return SendResult(False, error)
+    except Exception as exc:
+        logger.error("Baileys send-image error org=%s: %s", org_id, exc)
+        return SendResult(False, f"WhatsApp sidecar unreachable: {exc}")

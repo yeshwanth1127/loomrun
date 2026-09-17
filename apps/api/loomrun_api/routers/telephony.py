@@ -283,6 +283,8 @@ async def twiml_voice(request: Request) -> Response:
             where={"organizationId": org_id, "providerName": "TWILIO"}
         )
 
+    if not config or not _safe_creds(config).get("auth_token"):
+        return Response("Forbidden", status_code=403)
     # Verify Twilio signature
     if config:
         creds = _safe_creds(config)
@@ -445,6 +447,8 @@ async def twilio_status_webhook(request: Request) -> dict:
     # Signature verification
     creds = _safe_creds(config)
     auth_token = creds.get("auth_token", "")
+    if not auth_token:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Webhook authentication unavailable")
     if auth_token:
         sig = request.headers.get("X-Twilio-Signature", "")
         if not RequestValidator(auth_token).validate(str(request.url), form, sig):
@@ -499,11 +503,20 @@ async def twilio_status_webhook(request: Request) -> dict:
 async def twilio_recording_webhook(request: Request) -> dict:
     """Updates recording URL once Twilio recording is processed."""
     form = dict(await request.form())
+    account_sid = form.get("AccountSid", "")
+    config = await prisma.telephonyconfig.find_first(
+        where={"subaccountSid": account_sid, "providerName": "TWILIO"}
+    ) if account_sid else None
+    auth_token = _safe_creds(config).get("auth_token", "") if config else ""
+    if not auth_token or not RequestValidator(auth_token).validate(
+        str(request.url), form, request.headers.get("X-Twilio-Signature", "")
+    ):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Invalid Twilio signature")
     call_sid = form.get("CallSid", "")
     recording_url = form.get("RecordingUrl", "")
     if recording_url and call_sid:
         await prisma.telecallercalllog.update_many(
-            where={"callSid": call_sid},
+            where={"callSid": call_sid, "organizationId": config.organizationId},
             data={"recordingUrl": f"{recording_url}.mp3"},
         )
     return {"status": "ok"}
@@ -523,6 +536,8 @@ async def vapi_webhook(request: Request) -> dict:
     body_bytes = await request.body()
 
     expected_secret = settings.vapi_webhook_secret
+    if not expected_secret:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Webhook authentication unavailable")
     if expected_secret:
         provided = request.headers.get("x-vapi-secret", "")
         if not hmac.compare_digest(provided, expected_secret):

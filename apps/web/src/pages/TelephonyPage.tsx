@@ -85,7 +85,7 @@ export function TelephonyPage() {
           {/* Twilio */}
           <div className="card">
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
-              <Phone size={20} style={{ color: '#6366f1' }} />
+              <Phone size={20} style={{ color: 'var(--primary)' }} />
               <div style={{ flex: 1 }}>
                 <div style={{ fontWeight: 700 }}>Browser Calls</div>
                 <div className="muted small">Twilio · Human dialer</div>

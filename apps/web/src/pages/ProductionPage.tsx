@@ -3,6 +3,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  ImagePlus,
   MessageCircle,
   Pencil,
   Plus,
@@ -17,6 +18,7 @@ import { useDeferredValue, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { LeadSearchSelect } from '../components/LeadSearchSelect'
+import { ProductionDesignPanel } from '../components/ProductionDesignPanel'
 import { RowActions } from '../components/RowActions'
 import { EmptyState } from '../components/ui/EmptyState'
 import { FilterToolbar } from '../components/ui/FilterToolbar'
@@ -129,14 +131,14 @@ const STAGE_COLOR: Record<string, string> = {
   FABRIC_CHECK:   '#60a5fa',
   PROCUREMENT:    '#f59e0b',
   FABRIC_RECEIVED:'#34d399',
-  CUTTING:        '#6366f1',
-  PRINTING:       '#8b5cf6',
-  STITCHING:      '#ec4899',
+  CUTTING:        '#0F766E',
+  PRINTING:       '#0E7490',
+  STITCHING:      '#0891B2',
   QC:             '#f97316',
-  PACKING:        'var(--primary)',
+  PACKING:        '#14B8A6',
   PAYMENT_HOLD:   '#ef4444',
   READY_DISPATCH: '#10b981',
-  SHIPPED:        '#3b82f6',
+  SHIPPED:        '#0284C7',
   DELIVERED:      '#059669',
 }
 
@@ -243,6 +245,7 @@ export function ProductionPage() {
   const [leadId, setLeadId] = useState('')
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [trackingId, setTrackingId] = useState<string | null>(null)
+  const [designId, setDesignId] = useState<string | null>(null)
   const [editingNameId, setEditingNameId] = useState<string | null>(null)
   const [nameDraft, setNameDraft] = useState('')
   const [budgetDraft, setBudgetDraft] = useState('')
@@ -497,6 +500,7 @@ export function ProductionPage() {
     }
     setExpandedId(row.id)
     setTrackingId(null)
+    setDesignId(null)
     setBudgetDraft(row.budget_cents != null ? String(row.budget_cents / 100) : '')
     setEtaCompletion(toDateInput(row.expected_completion_at))
     setEtaDispatch(toDateInput(row.expected_dispatch_at))
@@ -519,6 +523,17 @@ export function ProductionPage() {
     }
     setTrackingId(row.id)
     setExpandedId(null)
+    setDesignId(null)
+  }
+
+  function openDesign(row: Row, opts?: { force?: boolean }) {
+    if (!opts?.force && designId === row.id) {
+      setDesignId(null)
+      return
+    }
+    setDesignId(row.id)
+    setExpandedId(null)
+    setTrackingId(null)
   }
 
   function requestStageChange(id: string, stage: string) {
@@ -678,13 +693,14 @@ export function ProductionPage() {
               const pnl = r.pnl
               const open = expandedId === r.id
               const trackingOpen = trackingId === r.id
-              const panelOpen = open || trackingOpen
+              const designOpen = designId === r.id
+              const panelOpen = open || trackingOpen || designOpen
 
               return (
                 <div
                   key={r.id}
                   className="card"
-                  style={{ borderLeft: `3px solid ${r.order_status === 'DELAYED' || r.delay_flag || (isOwner && pnl?.over_budget) ? '#ef4444' : (STAGE_COLOR[r.stage] ?? '#6366f1')}` }}
+                  style={{ borderLeft: `3px solid ${r.order_status === 'DELAYED' || r.delay_flag || (isOwner && pnl?.over_budget) ? '#ef4444' : (STAGE_COLOR[r.stage] ?? '#0F766E')}` }}
                 >
                   <div className="row spread" style={{ marginBottom: '0.75rem', gap: '0.75rem', flexWrap: 'wrap' }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
@@ -806,6 +822,14 @@ export function ProductionPage() {
                         <QrCode size={14} />
                         Tracking
                       </button>
+                      <button
+                        type="button"
+                        className={`btn btn-sm ${designOpen ? 'btn-secondary' : 'btn-ghost'}`}
+                        onClick={() => openDesign(r)}
+                      >
+                        <ImagePlus size={14} />
+                        Design
+                      </button>
                       <RowActions label="More">
                         {(close) => (
                           <>
@@ -899,7 +923,7 @@ export function ProductionPage() {
                       style={{
                         height: '100%',
                         borderRadius: 999,
-                        background: (r.order_status === 'DELAYED' || r.delay_flag) ? '#ef4444' : (STAGE_COLOR[r.stage] ?? '#6366f1'),
+                        background: (r.order_status === 'DELAYED' || r.delay_flag) ? '#ef4444' : (STAGE_COLOR[r.stage] ?? '#0F766E'),
                         width: `${progress}%`,
                         transition: 'width .3s ease',
                       }}
@@ -944,6 +968,13 @@ export function ProductionPage() {
                         onClick={() => openTracking(r, { force: true })}
                       >
                         Tracking
+                      </button>
+                      <button
+                        type="button"
+                        className={`panel-tab${designOpen ? ' active' : ''}`}
+                        onClick={() => openDesign(r, { force: true })}
+                      >
+                        Design
                       </button>
                     </div>
                   )}
@@ -1298,6 +1329,16 @@ export function ProductionPage() {
                         <p className="muted small">No tracking link yet. Ask an owner to enable tracking.</p>
                       )}
                     </div>
+                  )}
+
+                  {designOpen && orgId && (
+                    <ProductionDesignPanel
+                      orgId={orgId}
+                      orderId={r.id}
+                      orderNumber={r.order_number}
+                      leadPhone={r.lead_phone}
+                      canEdit={isOwner || membership?.role === 'PRODUCTION'}
+                    />
                   )}
                 </div>
               )

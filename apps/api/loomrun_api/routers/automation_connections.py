@@ -75,7 +75,7 @@ def _connection_item(org, connection) -> dict:
 async def list_automation_connections(org_id: str, ctx: OrgContext = Depends(require_roles("OWNER"))) -> dict:
     org = await prisma.organization.find_unique(where={"id": ctx.organization_id})
     connection = await prisma.automationconnection.find_first(
-        where={"organizationId": ctx.organization_id, "serviceName": N8N_SERVICE}
+        where={"organizationId": ctx.organization_id, "serviceName": N8N_SERVICE, "membershipId": None}
     )
     return {
         "items": [_connection_item(org, connection)],
@@ -102,7 +102,7 @@ async def provision_automation(
         )
 
     existing = await prisma.automationconnection.find_first(
-        where={"organizationId": ctx.organization_id, "serviceName": N8N_SERVICE}
+        where={"organizationId": ctx.organization_id, "serviceName": N8N_SERVICE, "membershipId": None}
     )
     if existing and existing.status == "connected":
         old_creds = existing.credentials if isinstance(existing.credentials, dict) else {}
@@ -175,7 +175,7 @@ async def disconnect_automation(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Unknown automation service")
 
     existing = await prisma.automationconnection.find_first(
-        where={"organizationId": ctx.organization_id, "serviceName": N8N_SERVICE}
+        where={"organizationId": ctx.organization_id, "serviceName": N8N_SERVICE, "membershipId": None}
     )
     if not existing:
         return {"status": "disconnected", "service_name": N8N_SERVICE}
@@ -186,6 +186,10 @@ async def disconnect_automation(
 
     updated = await prisma.automationconnection.update(
         where={"id": existing.id},
-        data={"status": "disconnected", "credentials": None, "connectedEmail": None},
+        data={
+            "status": "disconnected",
+            "credentials": json_meta({}),
+            "connectedEmail": None,
+        },
     )
     return {"service_name": updated.serviceName, "status": updated.status}

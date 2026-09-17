@@ -231,23 +231,25 @@ async def sync_indiamart_leads_job(_ctx: dict, org_id: str) -> dict:
             score += 5
         score = min(score, 100)
 
-        lead = await db.lead.create(
-            data={
-                "organizationId": org_id,
-                "title": r["name"] or "IndiaMart Inquiry",
-                "source": LeadSource.INDIAMART,
-                "phone": r["phone"],
-                "email": r["email"],
-                "city": r["city"],
-                "company": r["company"],
-                "productInterest": r["product"],
-                "notes": r["message"],
-                "leadScore": score,
-                "indiamartQueryId": r["query_id"],
-                "tags": [],
-                "lastActivityAt": now,
-            }
-        )
+        from loomrun_api.pipeline_routing import merge_pipeline_into_create_data
+
+        create_data = {
+            "organizationId": org_id,
+            "title": r["name"] or "IndiaMart Inquiry",
+            "source": LeadSource.INDIAMART,
+            "phone": r["phone"],
+            "email": r["email"],
+            "city": r["city"],
+            "company": r["company"],
+            "productInterest": r["product"],
+            "notes": r["message"],
+            "leadScore": score,
+            "indiamartQueryId": r["query_id"],
+            "tags": [],
+            "lastActivityAt": now,
+        }
+        create_data = await merge_pipeline_into_create_data(create_data, organization_id=org_id)
+        lead = await db.lead.create(data=create_data)
         await db.leadactivity.create(
             data={
                 "leadId": lead.id,

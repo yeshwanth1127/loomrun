@@ -4,6 +4,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request, status
 
 from loomrun_api.config import settings
+from loomrun_api.meta_client import verify_webhook_signature
 from loomrun_api.prisma_client import prisma
 from loomrun_api.whatsapp_template_service import schedule_greeting
 from prisma.enums import LeadSource
@@ -30,6 +31,10 @@ async def whatsapp_verify_public(
 
 @router.post("/hooks/whatsapp/{org_id}")
 async def whatsapp_inbound_public(org_id: str, request: Request) -> dict[str, str]:
+    if not settings.meta_app_secret or not verify_webhook_signature(
+        await request.body(), request.headers.get("X-Hub-Signature-256")
+    ):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Invalid signature")
     org = await prisma.organization.find_unique(where={"id": org_id})
     if not org:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Unknown organization")
@@ -50,14 +55,18 @@ async def whatsapp_inbound_public(org_id: str, request: Request) -> dict[str, st
                     where={"organizationId": org_id, "phone": {"contains": from_wa[-10:]}},
                 )
                 if not lead:
-                    lead = await prisma.lead.create(
-                        data={
-                            "organizationId": org_id,
-                            "title": f"WhatsApp {from_wa}",
-                            "phone": from_wa,
-                            "source": LeadSource.WHATSAPP,
-                        }
+                    from loomrun_api.pipeline_routing import merge_pipeline_into_create_data
+
+                    create_data = {
+                        "organizationId": org_id,
+                        "title": f"WhatsApp {from_wa}",
+                        "phone": from_wa,
+                        "source": LeadSource.WHATSAPP,
+                    }
+                    create_data = await merge_pipeline_into_create_data(
+                        create_data, organization_id=org_id
                     )
+                    lead = await prisma.lead.create(data=create_data)
                     schedule_greeting(org_id, lead.id)
                 thread = await prisma.whatsappthread.find_first(
                     where={"organizationId": org_id, "externalWaId": from_wa},

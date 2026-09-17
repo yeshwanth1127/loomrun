@@ -26,6 +26,8 @@ from loomrun_api.ai_agent.tools import defs as _defs  # noqa: F401  (registers t
 from loomrun_api.ai_agent.tools.registry import ToolContext, ToolSpec, all_tools
 from loomrun_api.ai_agent.tools.runtime import dispatch_tool_call
 from loomrun_api.qlix.context import CONTEXT_HEADER, ContextError, verify_context
+from loomrun_api.prisma_client import prisma
+from loomrun_api.entitlements import is_access_locked
 
 logger = logging.getLogger(__name__)
 
@@ -55,11 +57,19 @@ class LoomrunCrmTool(Tool):
                 is_error=True,
             )
 
+        membership = await prisma.membership.find_first(
+            where={"organizationId": identity["organization_id"], "userId": identity["user_id"]},
+            include={"organization": True},
+        )
+        if (not membership or not membership.organization
+                or membership.organization.suspended or is_access_locked(membership.organization)):
+            return ToolResult(structured_content={"status": "error", "error": "Organization access denied"}, is_error=True)
+        role = membership.role.name if hasattr(membership.role, "name") else str(membership.role)
         ctx = ToolContext(
             organization_id=identity["organization_id"],
             user_id=identity["user_id"],
             mode=identity["mode"],
-            role=identity["role"],
+            role=role,
         )
 
         # propose_writes=False because Qlix's JIT layer now owns confirmation:

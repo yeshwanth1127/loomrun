@@ -9,6 +9,7 @@ import { PageHeader } from '../components/ui/PageHeader'
 import { InsightCard, InsightGrid, MetricCard } from '../components/ui/dashboard'
 import { TableSkeleton } from '../components/ui/Skeleton'
 import { useAuth } from '../context/AuthContext'
+import { routes } from '../lib/appRoutes'
 import { apiFetch } from '../lib/api'
 import {
   followUpBucket,
@@ -315,7 +316,7 @@ export function FollowUpsPage() {
           <InsightCard title="Quick actions">
             <div className="quick-action-list">
               <Link to="/app/telecaller"><Phone size={14} /> Make a call</Link>
-              <Link to="/app/whatsapp"><MessageCircle size={14} /> WhatsApp follow-up</Link>
+              <Link to={routes.settings('whatsapp')}><MessageCircle size={14} /> WhatsApp follow-up</Link>
             </div>
           </InsightCard>
         </InsightGrid>

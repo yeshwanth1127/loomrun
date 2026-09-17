@@ -19,6 +19,8 @@ from loomrun_api.ai_agent.service import (
     stream_chat,
 )
 from loomrun_api.deps import OrgContext, get_org_context
+from loomrun_api.logging_setup import kv, sanitize_log_text
+from loomrun_api.config import settings
 from loomrun_api.qlix import chat as qlix_chat
 from loomrun_api.qlix import grants
 from loomrun_api.qlix.client import QlixError
@@ -118,6 +120,20 @@ async def ai_chat(
     ctx: OrgContext = Depends(get_org_context),
 ) -> dict:
     history = [{"role": h.role, "content": h.content} for h in body.history]
+    logger.info(
+        "ai chat http %s",
+        kv(
+            org=ctx.organization_id,
+            user=ctx.membership.userId,
+            stream=False,
+            model=body.model,
+            message=(
+                sanitize_log_text(body.message, limit=2000)
+                if settings.log_ai_messages
+                else f"len={len(body.message)}"
+            ),
+        ),
+    )
     return await run_chat(
         organization_id=ctx.organization_id,
         user_id=ctx.membership.userId,
@@ -136,6 +152,21 @@ async def ai_chat_stream(
 ) -> StreamingResponse:
     """Same turn as /ai/chat, streamed so the reply appears as it is written."""
     history = [{"role": h.role, "content": h.content} for h in body.history]
+    logger.info(
+        "ai chat http %s",
+        kv(
+            org=ctx.organization_id,
+            user=ctx.membership.userId,
+            stream=True,
+            model=body.model,
+            conversation=body.conversation_id,
+            message=(
+                sanitize_log_text(body.message, limit=2000)
+                if settings.log_ai_messages
+                else f"len={len(body.message)}"
+            ),
+        ),
+    )
 
     async def _events():
         try:
@@ -152,6 +183,10 @@ async def ai_chat_stream(
         except HTTPException as exc:
             # The stream has already begun, so an error has to travel as an
             # event rather than a status code the client will never see.
+            logger.warning(
+                "ai chat stream http error %s",
+                kv(org=ctx.organization_id, detail=exc.detail),
+            )
             yield f"data: {json.dumps({'type': 'error', 'detail': exc.detail})}\n\n"
         except Exception:
             logger.exception("AI chat stream failed for org %s", ctx.organization_id)

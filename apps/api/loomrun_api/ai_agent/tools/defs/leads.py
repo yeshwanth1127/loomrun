@@ -147,10 +147,8 @@ async def get_lead(ctx: ToolContext, lead_id: str, **_: Any) -> dict:
 @register_tool(
     name="create_lead",
     description=(
-        "Create a BRAND-NEW lead for someone not yet in the CRM. Never use this "
-        "to reach an existing lead: to change one that is already there — "
-        "including moving its stage — use update_lead, which accepts a name. "
-        "Creating a second record for an existing customer is a data-loss bug."
+        "Create a new lead. Use for someone not already in the CRM. "
+        "Required: title (name). Optional: phone, email, company, notes, stage."
     ),
     parameters={
         "title": {"type": "string", "description": "Lead / contact name"},

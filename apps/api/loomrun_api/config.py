@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     openrouter_chat_models: str = ""
     openrouter_http_referer: str = ""
     openrouter_app_title: str = "Loomrun"
+    # Logging
+    log_level: str = "INFO"
+    # When true, AI / OpenRouter logs include message text (needed for debugging
+    # chat turns). API keys and Authorization headers are never logged.
+    log_ai_messages: bool = True
     # Shared secret for n8n → Loomrun automation API (LLM proxy, future hooks)
     loomrun_automation_api_key: str = ""
     # ── Qlix (per-org AI: one Qlix workspace + agent + brain per Loomrun org) ──

@@ -13,7 +13,9 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
+from loomrun_api.ai_usage import debit_ai_usage, has_ai_capacity, parse_usage_dict
 from loomrun_api.config import settings
+from loomrun_api.entitlements import get_org_entitlements
 from loomrun_api.llm_client import LlmError, chat_messages
 from loomrun_api.prisma_client import prisma
 from loomrun_api.prisma_json import json_meta
@@ -59,6 +61,32 @@ Rules:
 - If the user corrects a prior fact, put the old key in forget and set the new value in facts.
 - Keys must be lowercase snake_case.
 """
+
+# Skip the extra LLM call for routine CRM actions — they almost never produce
+# durable org memory, but they used to cost 1–2 credits every turn.
+_MEMORY_WORTHY_RE = re.compile(
+    r"\b(remember|prefer|always|never|our company|we are|my name is|"
+    r"brand voice|mission|goal|target customer|pricing|language)\b",
+    re.I,
+)
+_CRUD_SKIP_RE = re.compile(
+    r"\b(make|create|add|update|move|send|delete|log|record)\b.{" 
+    r"0,40}\b(lead|leads|quote|quotation|invoice|expense|call|whatsapp|"
+    r"message|order|payment|follow-?up)\b"
+    r"|^(hi|hello|hey|thanks|thank you|ok|okay)[.!\s]*$",
+    re.I,
+)
+
+
+def should_extract_memory(user_message: str) -> bool:
+    text = (user_message or "").strip()
+    if len(text) < 12:
+        return False
+    if _MEMORY_WORTHY_RE.search(text):
+        return True
+    if _CRUD_SKIP_RE.search(text):
+        return False
+    return True
 
 
 def _as_facts_dict(raw: Any) -> dict[str, str]:
@@ -201,6 +229,25 @@ async def extract_memory_from_turn(
     assistant_reply = (assistant_reply or "").strip()
     if not user_message or len(user_message) < 8:
         return None
+    if not should_extract_memory(user_message):
+        logger.info(
+            "Skipping memory extraction for org %s — routine CRM turn",
+            organization_id,
+        )
+        return None
+
+    org = await prisma.organization.find_unique(where={"id": organization_id})
+    if not org:
+        return None
+    ents = get_org_entitlements(org)
+    if ents.ai_chat is False:
+        return None
+    if not await has_ai_capacity(organization_id, ents=ents):
+        logger.info(
+            "Skipping memory extraction for org %s — AI credit pools empty",
+            organization_id,
+        )
+        return None
 
     current = await get_org_memory(organization_id)
     extract_model = (
@@ -248,7 +295,22 @@ async def extract_memory_from_turn(
         summary = None
 
     if not facts_patch and not forget_keys and summary is None:
+        # Nothing durable learned — do not bill the org for an empty extract.
         return None
+
+    prompt_tokens, completion_tokens = parse_usage_dict(result.get("usage"))
+    try:
+        await debit_ai_usage(
+            organization_id,
+            ents=ents,
+            source="memory",
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            model=result.get("model") or extract_model,
+            org_created_at=org.createdAt,
+        )
+    except Exception:
+        logger.exception("Failed to debit AI usage for memory extraction org %s", organization_id)
 
     return await upsert_org_memory(
         organization_id=organization_id,

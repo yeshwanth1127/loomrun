@@ -14,7 +14,7 @@ from email.message import EmailMessage
 
 import httpx
 
-from loomrun_api.google_client import get_valid_org_token
+from loomrun_api.google_client import get_valid_org_token, resolve_gmail_token_for_actor
 
 logger = logging.getLogger(__name__)
 
@@ -96,14 +96,15 @@ async def send_email(
     attachments: list[Attachment] | None = None,
     reply_to_message_id: str | None = None,
     thread_id: str | None = None,
+    membership_id: str | None = None,
 ) -> SentEmail:
-    """Send an email from the org's connected Gmail account.
-
-    Set `html=True` to send `body` as HTML. Pass `attachments` to include files.
-    Pass `thread_id` (and optionally `reply_to_message_id` for In-Reply-To) to
-    reply within an existing thread.
+    """Send an email from personal Gmail when membership_id is set and connected,
+    otherwise the org Gmail account.
     """
-    token = await get_valid_org_token(org_id, "GMAIL")
+    if membership_id:
+        token = await resolve_gmail_token_for_actor(org_id, membership_id)
+    else:
+        token = await get_valid_org_token(org_id, "GMAIL")
 
     message = EmailMessage()
     message["To"] = to

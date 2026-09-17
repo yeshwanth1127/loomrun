@@ -9,6 +9,7 @@ import { BarList, DonutChart, DonutLegend, InsightCard, InsightGrid, MetricCard 
 import { useAuth } from '../context/AuthContext'
 import { useDateFilter } from '../context/DateFilterContext'
 import { apiFetch } from '../lib/api'
+import { routes } from '../lib/appRoutes'
 import { fmtINR, initials, timeAgo } from '../lib/format'
 
 type Expense = {
@@ -30,7 +31,7 @@ function vendorType(category: string) {
 }
 
 const TYPE_COLOR: Record<string, string> = {
-  Supplier: '#5B2C87',
+  Supplier: '#0F766E',
   'Job Worker': '#2563eb',
   Courier: '#ea580c',
   Other: '#64748b',
@@ -110,7 +111,7 @@ export function VendorsPage() {
         badge={`${vendors.length} total`}
         description="Manage fabric suppliers, job workers, couriers, and more. Vendors appear here from expenses you record."
         actions={
-          <Link to="/app/expenses" className="btn">
+          <Link to={routes.money('expenses')} className="btn">
             <Plus size={15} /> Add expense
           </Link>
         }
@@ -176,13 +177,13 @@ export function VendorsPage() {
               icon={Store}
               title="No vendors yet"
               description="Vendors are created automatically when you record an expense with a vendor name."
-              action={<Link to="/app/expenses" className="btn">Record an expense</Link>}
+              action={<Link to={routes.money('expenses')} className="btn">Record an expense</Link>}
             />
           )
         )}
 
         <InsightGrid>
-          <InsightCard title="Top vendors by payable" action={{ label: 'View expenses', to: '/app/expenses' }}>
+          <InsightCard title="Top vendors by payable" action={{ label: 'View expenses', to: routes.money('expenses') }}>
             <BarList
               items={vendors.slice(0, 5).map((v) => ({
                 label: v.name,

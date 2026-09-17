@@ -57,6 +57,12 @@ async def test_refuses_a_forged_context(monkeypatch):
 @pytest.mark.asyncio
 async def test_owner_only_tool_is_refused_for_a_non_owner(monkeypatch):
     """Qlix does not know Loomrun roles, so this must be enforced here."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(srv, "prisma", SimpleNamespace(membership=SimpleNamespace(
+        find_first=AsyncMock(return_value=SimpleNamespace(role="SALES", organization=SimpleNamespace(suspended=False)))
+    )))
+    monkeypatch.setattr(srv, "is_access_locked", lambda org: False)
     owner_only = next((s for s in all_tools() if s.owner_only), None)
     if owner_only is None:
         pytest.skip("no owner-only tools registered")

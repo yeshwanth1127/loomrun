@@ -91,23 +91,25 @@ async def upsert_lead(org_id: str, r: dict) -> bool:
     if existing:
         return False
 
-    lead = await prisma.lead.create(
-        data={
-            "organizationId": org_id,
-            "title": r["name"] or "IndiaMart Inquiry",
-            "source": LeadSource.INDIAMART,
-            "phone": r["phone"],
-            "email": r["email"],
-            "city": r["city"],
-            "company": r["company"],
-            "productInterest": r["product"],
-            "notes": r["message"],
-            "leadScore": _score(r),
-            "indiamartQueryId": r["query_id"],
-            "tags": [],
-            "lastActivityAt": datetime.now(timezone.utc),
-        }
-    )
+    from loomrun_api.pipeline_routing import merge_pipeline_into_create_data
+
+    create_data = {
+        "organizationId": org_id,
+        "title": r["name"] or "IndiaMart Inquiry",
+        "source": LeadSource.INDIAMART,
+        "phone": r["phone"],
+        "email": r["email"],
+        "city": r["city"],
+        "company": r["company"],
+        "productInterest": r["product"],
+        "notes": r["message"],
+        "leadScore": _score(r),
+        "indiamartQueryId": r["query_id"],
+        "tags": [],
+        "lastActivityAt": datetime.now(timezone.utc),
+    }
+    create_data = await merge_pipeline_into_create_data(create_data, organization_id=org_id)
+    lead = await prisma.lead.create(data=create_data)
     product_suffix = f" · {r['product']}" if r["product"] else ""
     await prisma.leadactivity.create(
         data={

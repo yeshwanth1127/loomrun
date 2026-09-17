@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Download, FileText, IndianRupee, Mail, MessageCircle, Pencil, Plus, Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link , useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useDateFilter } from '../context/DateFilterContext'
 import { EmptyState } from '../components/ui/EmptyState'
@@ -9,6 +9,7 @@ import { Modal } from '../components/ui/Modal'
 import { PageHeader } from '../components/ui/PageHeader'
 import { DonutChart, DonutLegend, InsightCard, InsightGrid, MetricCard } from '../components/ui/dashboard'
 import { apiFetch } from '../lib/api'
+import { routes } from '../lib/appRoutes'
 import { RowActions } from '../components/RowActions'
 import { toast } from 'sonner'
 
@@ -75,6 +76,7 @@ async function downloadPdf(
 }
 
 export function InvoicesPage() {
+  const navigate = useNavigate()
   const { orgId } = useAuth()
   const { dayParam, appendDay, isAll } = useDateFilter()
   const qc = useQueryClient()
@@ -98,6 +100,7 @@ export function InvoicesPage() {
     queryFn: () => {
       const params = new URLSearchParams()
       appendDay(params)
+      params.set('doc', 'invoice')
       return apiFetch<{ items: Invoice[] }>(`/v1/orgs/${orgId}/quotations?${params}`)
     },
   })
@@ -156,27 +159,9 @@ export function InvoicesPage() {
   })
 
   async function openPreview(invoice: Invoice) {
-    if (!orgId) return
-    if (!invoice.lines?.length && !invoice.pdf_url) {
-      toast.error('This invoice has no PDF to preview yet')
-      return
-    }
-    setPreviewInvoice(invoice)
-    setPreviewLoading(true)
-    setPreviewError(null)
-    try {
-      const blob = await fetchPdfBlob(orgId, invoice.id, 'invoice')
-      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current)
-      const next = URL.createObjectURL(blob)
-      previewUrlRef.current = next
-      setPreviewUrl(next)
-    } catch (err) {
-      setPreviewUrl(null)
-      setPreviewError((err as Error).message || 'Failed to load preview')
-    } finally {
-      setPreviewLoading(false)
-    }
+    navigate(routes.moneyInvoiceDoc(invoice.id))
   }
+
 
   function closePreview() {
     setPreviewInvoice(null)
@@ -193,7 +178,7 @@ export function InvoicesPage() {
     <PageHeader title="Invoices" description="Select an organization." />
   )
 
-  const invoices = (q.data?.items ?? []).filter((x) => x.invoice_number)
+  const invoices = q.data?.items ?? []
   const totalAmount = invoices.reduce((s, x) => s + (Number(x.total) || 0), 0)
   const paidCount = invoices.filter((x) => x.status === 'ACCEPTED' || x.status === 'PAID').length
   const pendingCount = invoices.length - paidCount
@@ -210,7 +195,7 @@ export function InvoicesPage() {
         badge={`${invoices.length} total`}
         description="Create, manage and track all your invoices."
         actions={
-          <Link to="/app/quotations" className="btn">
+          <Link to={routes.quotes} className="btn">
             <Plus size={15} /> New invoice
           </Link>
         }
@@ -221,8 +206,16 @@ export function InvoicesPage() {
           <MetricCard icon={FileText} tone="purple" label="Total invoices" value={invoices.length} hint={isAll ? 'This period' : dayParam} />
           <MetricCard icon={IndianRupee} tone="green" label="Total amount" value={`₹${totalAmount.toLocaleString('en-IN')}`} />
           <MetricCard icon={IndianRupee} tone="green" label="Paid" value={paidCount} hint={invoices.length ? `${((paidCount / invoices.length) * 100).toFixed(0)}%` : '0%'} />
-          <MetricCard icon={IndianRupee} tone="amber" label="Pending" value={pendingCount} hint={invoices.length ? `${((pendingCount / invoices.length) * 100).toFixed(0)}%` : '0%'} />
-          <MetricCard icon={IndianRupee} tone="red" label="Overdue" value={0} hint="Due dates not tracked yet" />
+        </div>
+        <div className="status-strip" aria-label="Invoice status breakdown">
+          <span className="status-strip-item">
+            <span className="status-strip-dot paid" aria-hidden />
+            Paid <strong>{paidCount}</strong>
+          </span>
+          <span className="status-strip-item">
+            <span className="status-strip-dot pending" aria-hidden />
+            Pending <strong>{pendingCount}</strong>
+          </span>
         </div>
         {q.isLoading && <p className="muted">Loading invoices…</p>}
         {q.error && <p className="error">{(q.error as Error).message}</p>}
@@ -251,7 +244,7 @@ export function InvoicesPage() {
                     >
                       <td>
                         <div className="row" style={{ gap: '0.4rem' }}>
-                          <FileText size={14} style={{ color: '#6366f1', flexShrink: 0 }} />
+                          <FileText size={14} style={{ color: 'var(--primary)', flexShrink: 0 }} />
                           <div className="stack" style={{ gap: '0.15rem' }}>
                             <span style={{ fontWeight: 600, fontSize: '0.88rem' }}>
                               {invoiceDisplayName(x)}
@@ -445,8 +438,8 @@ export function InvoicesPage() {
           </InsightCard>
           <InsightCard title="Quick actions">
             <div className="quick-action-list">
-              <Link to="/app/quotations"><Plus size={14} /> New invoice</Link>
-              <Link to="/app/document-templates"><FileText size={14} /> Invoice templates</Link>
+              <Link to={routes.quotes}><Plus size={14} /> New invoice</Link>
+              <Link to={routes.settings('documents')}><FileText size={14} /> Invoice templates</Link>
             </div>
           </InsightCard>
         </InsightGrid>

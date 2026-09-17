@@ -39,6 +39,8 @@ class ProductionStageUpdate(BaseModel):
     on_hold_reason: str | None = Field(default=None, max_length=500)
     internal_note: str | None = Field(default=None, max_length=2000)
     customer_note: str | None = Field(default=None, max_length=2000)
+    design_garment_type: str | None = Field(default=None, max_length=40)
+    design_garment_color: str | None = Field(default=None, max_length=16)
 
 
 class PaymentCreate(BaseModel):
@@ -122,7 +124,7 @@ def _serialize_order_for_role(r, ctx: OrgContext) -> dict:
     return data
 
 
-_OPS_ROLES = require_roles("OWNER", "PRODUCTION")
+_OPS_ROLES = require_roles("OWNER", "PRODUCTION", "PRODUCTION_MANAGER")
 _OWNER_ONLY = require_roles("OWNER")
 
 
@@ -297,10 +299,23 @@ async def create_production(org_id: str, body: ProductionCreate, ctx: OrgContext
             "expected_dispatch_at": _iso(body.expected_dispatch_at),
         },
     )
+    from loomrun_api.pipeline_stage_move import mark_lead_won_on_order_placed
+
+    await mark_lead_won_on_order_placed(
+        db=prisma,
+        lead=lead,
+        user_id=ctx.membership.userId,
+        order_number=order_number,
+    )
     org_events.record_changed(
         organization_id=ctx.organization_id,
         entity_type=org_events.qlix_docs.ENTITY_PRODUCTION,
         entity_id=row.id,
+    )
+    org_events.record_changed(
+        organization_id=ctx.organization_id,
+        entity_type=org_events.qlix_docs.ENTITY_LEAD,
+        entity_id=body.lead_id,
     )
     return _serialize_order(row)
 
@@ -362,6 +377,27 @@ async def update_production(
             data["budgetCents"] = body.budget_cents
 
     name_changed = False
+    if "design_garment_type" in body.model_fields_set:
+        from loomrun_api.garment_defaults import normalize_product_type
+        raw = body.design_garment_type
+        if raw is None or str(raw).strip() == "":
+            data["designGarmentType"] = None
+        else:
+            nt = normalize_product_type(raw)
+            if not nt:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid design garment type")
+            data["designGarmentType"] = nt
+    if "design_garment_color" in body.model_fields_set:
+        from loomrun_api.garment_defaults import normalize_hex_color
+        raw = body.design_garment_color
+        if raw is None or str(raw).strip() == "":
+            data["designGarmentColor"] = None
+        else:
+            try:
+                data["designGarmentColor"] = normalize_hex_color(raw)
+            except ValueError as exc:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
     new_name: str | None = row.name
     if "name" in body.model_fields_set:
         cleaned = (body.name or "").strip() or None

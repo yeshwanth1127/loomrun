@@ -57,6 +57,8 @@ async def advance_lead_to_quotation(
     channel: str,
     doc_type: str = "quotation",
 ) -> LeadStage:
+    from loomrun_api.pipeline_stage_move import advance_lead_by_system_key
+
     lead = await prisma.lead.find_unique(where={"id": lead_id})
     if not lead:
         return LeadStage.QUOTATION
@@ -76,32 +78,38 @@ async def advance_lead_to_quotation(
         await prisma.lead.update(where={"id": lead_id}, data={"lastActivityAt": now})
         return lead.stage
 
-    target = LeadStage.QUOTATION
-    if _stage_rank(lead.stage) < _stage_rank(target):
-        await prisma.lead.update(
-            where={"id": lead_id},
-            data={"stage": target, "lastActivityAt": now},
-        )
-        await prisma.leadactivity.create(
-            data={
-                "leadId": lead_id,
-                "userId": user_id,
-                "type": LeadActivityType.STAGE_CHANGE,
-                "body": f"Moved to Quoted — {doc_label.lower()} {quotation_number} sent via {channel_label}",
-                "metadata": json_meta({"stage": "QUOTATION", "document_number": quotation_number, "doc_type": doc_type, "channel": channel}),
-            },
-        )
-    else:
-        await prisma.lead.update(where={"id": lead_id}, data={"lastActivityAt": now})
-        await prisma.leadactivity.create(
-            data={
-                "leadId": lead_id,
-                "userId": user_id,
-                "type": LeadActivityType.SYSTEM,
-                "body": f"{doc_label} {quotation_number} sent via {channel_label}",
-            }
-        )
-    return target
+    previous = lead.stage
+    new_stage = await advance_lead_by_system_key(
+        db=prisma,
+        lead=lead,
+        system_key="QUOTATION",
+        user_id=user_id,
+        body=f"Moved to Quoted — {doc_label.lower()} {quotation_number} sent via {channel_label}",
+        metadata={
+            "stage": "QUOTATION",
+            "document_number": quotation_number,
+            "doc_type": doc_type,
+            "channel": channel,
+        },
+        only_if_earlier=True,
+    )
+    if new_stage == previous or (
+        hasattr(previous, "name")
+        and hasattr(new_stage, "name")
+        and previous.name == new_stage.name
+        and previous.name != "QUOTATION"
+    ):
+        # Already at/past Quoted — still record the send.
+        if _stage_rank(previous) >= _stage_rank(LeadStage.QUOTATION):
+            await prisma.leadactivity.create(
+                data={
+                    "leadId": lead_id,
+                    "userId": user_id,
+                    "type": LeadActivityType.SYSTEM,
+                    "body": f"{doc_label} {quotation_number} sent via {channel_label}",
+                }
+            )
+    return new_stage
 
 
 async def advance_lead_to_negotiation(
@@ -111,6 +119,8 @@ async def advance_lead_to_negotiation(
     quotation_number: str,
 ) -> LeadStage | None:
     """Move a Quoted lead to Negotiation after its quotation PDF is revised."""
+    from loomrun_api.pipeline_stage_move import advance_lead_by_system_key
+
     lead = await prisma.lead.find_unique(where={"id": lead_id})
     if not lead:
         return None
@@ -119,23 +129,18 @@ async def advance_lead_to_negotiation(
     if lead.stage != LeadStage.QUOTATION:
         return lead.stage
 
-    now = datetime.now(timezone.utc)
-    await prisma.lead.update(
-        where={"id": lead_id},
-        data={"stage": LeadStage.NEGOTIATION, "lastActivityAt": now},
-    )
-    await prisma.leadactivity.create(
-        data={
-            "leadId": lead_id,
-            "userId": user_id,
-            "type": LeadActivityType.STAGE_CHANGE,
-            "body": f"Moved to Negotiation — quotation {quotation_number} revised",
-            "metadata": json_meta(
-                {"stage": "NEGOTIATION", "document_number": quotation_number, "reason": "quotation_edited"}
-            ),
+    return await advance_lead_by_system_key(
+        db=prisma,
+        lead=lead,
+        system_key="NEGOTIATION",
+        user_id=user_id,
+        body=f"Moved to Negotiation — quotation {quotation_number} revised",
+        metadata={
+            "stage": "NEGOTIATION",
+            "document_number": quotation_number,
+            "reason": "quotation_edited",
         },
     )
-    return LeadStage.NEGOTIATION
 
 
 async def deliver_quotation(
@@ -174,14 +179,19 @@ async def deliver_quotation(
             total=float(quotation.total),
             org_name=org_name,
         )
-        # Use 424 (not 502): Cloudflare rewrites origin 502 bodies into a generic
-        # "invalid or incomplete response" page, which hides the real reason.
-        sent = await baileys_client.send_text(organization_id, lead.phone, message)
+        # Prefer actor personal WhatsApp when connected; else org shared session.
+        from loomrun_api.member_connections import resolve_whatsapp_session_for_actor
+
+        wa_session = await resolve_whatsapp_session_for_actor(
+            organization_id=organization_id,
+            user_id=user_id,
+        )
+        sent = await baileys_client.send_text(wa_session, lead.phone, message)
         if not sent:
-            detail = sent.error or "WhatsApp is not connected for this organization."
+            detail = sent.error or "WhatsApp is not connected."
             if "not connected" in detail.lower() or "conflict" in detail.lower():
                 detail = (
-                    f"{detail} Reconnect WhatsApp in Connectors "
+                    f"{detail} Reconnect WhatsApp in My Connections or Settings → Connections "
                     "(close other WhatsApp Web sessions if you see a conflict)."
                 )
             raise HTTPException(status.HTTP_424_FAILED_DEPENDENCY, detail=detail)
@@ -189,7 +199,7 @@ async def deliver_quotation(
         if attachment is not None:
             filename, content = attachment
             document_sent = await _send_whatsapp_document(
-                organization_id, lead.phone, filename, content
+                wa_session, lead.phone, filename, content
             )
         payload = {
             "text": message,
@@ -224,6 +234,7 @@ async def deliver_quotation(
             subject=content.subject,
             body=content.body,
             attachment=attachment,
+            user_id=user_id,
         )
         payload = {
             "subject": content.subject,
@@ -296,13 +307,11 @@ async def _send_document_email(
     subject: str,
     body: str,
     attachment: tuple[str, bytes] | None = None,
+    user_id: str | None = None,
 ):
-    """Send the email via the org's connected Gmail, attaching the document PDF.
-
-    Uses the caller-provided `attachment` (correct variant) when present,
-    otherwise falls back to the quotation's stored PDF.
-    """
+    """Send via personal Gmail when the actor has one; else org Gmail."""
     from loomrun_api.gmail_automation import Attachment, send_email
+    from loomrun_api.member_connections import membership_id_for_user
 
     attachments: list = []
     if attachment is not None:
@@ -321,6 +330,7 @@ async def _send_document_email(
         else:
             logger.warning("Quotation PDF missing on disk: %s", pdf_path)
 
+    mid = await membership_id_for_user(organization_id, user_id)
     try:
         return await send_email(
             organization_id,
@@ -328,11 +338,15 @@ async def _send_document_email(
             subject=subject,
             body=body,
             attachments=attachments,
+            membership_id=mid,
         )
     except ValueError as exc:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            detail="Gmail is not connected for this organization. Connect Gmail in Integrations to send emails.",
+            detail=(
+                "Gmail is not connected. Connect your Gmail in My Connections, "
+                "or ask a CEO to connect organization Gmail in Settings."
+            ),
         ) from exc
     except Exception as exc:
         logger.exception("Document email send failed org=%s: %s", organization_id, exc)

@@ -32,7 +32,7 @@ router = APIRouter()
 async def list_templates(
     org_id: str,
     doc_type: str | None = Query(None, pattern="^(QUOTATION|INVOICE)$"),
-    ctx: OrgContext = Depends(require_roles("OWNER")),
+    ctx: OrgContext = Depends(require_roles("OWNER", "SALES", "TELECALLER")),
 ) -> dict:
     await backfill_org_templates(ctx.organization_id)
     where_org: dict = {"organizationId": ctx.organization_id}

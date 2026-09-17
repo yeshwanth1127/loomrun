@@ -1,22 +1,24 @@
 /* ══════════════════════════════════════════════════════════════════
-   LOOMRUN — PUBLIC LANDING PAGE
+   NOOLRUN — PUBLIC LANDING PAGE
    Shares canvas/card tokens with the app shell. Calm surfaces, no neumorphism.
    Scoped under .landing so it never collides with the app shell.
    ══════════════════════════════════════════════════════════════════ */
 
 .landing {
-  --bg: #F4F5F8;
+  --bg: #F3F6F8;
   --card: #FFFFFF;
-  --ink: #26262E;
-  --ink-soft: #6B6C76;
-  --ink-faint: #9799A3;
-  --line: rgba(38, 38, 46, 0.1);
-  --accent: #5B2C87;
-  --accent-soft: #8672A0;
-  --shadow: 0 1px 2px rgba(38, 38, 46, 0.04), 0 1px 3px rgba(38, 38, 46, 0.06);
-  --shadow-md: 0 2px 6px rgba(38, 38, 46, 0.06), 0 4px 12px rgba(38, 38, 46, 0.06);
+  --ink: #1E293B;
+  --ink-soft: #64748B;
+  --ink-faint: #94A3B8;
+  --line: rgba(30, 41, 59, 0.1);
+  --accent: #0F766E;
+  --accent-soft: #5B8A8A;
+  --shadow: 0 1px 2px rgba(30, 41, 59, 0.04), 0 1px 3px rgba(30, 41, 59, 0.06);
+  --shadow-md: 0 2px 6px rgba(30, 41, 59, 0.06), 0 4px 12px rgba(30, 41, 59, 0.06);
+  --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  --font-display: 'Source Serif 4', Georgia, 'Times New Roman', serif;
 
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: var(--font-sans);
   font-size: 16px;
   background: var(--bg);
   color: var(--ink);
@@ -29,14 +31,14 @@
 }
 
 .dark .landing {
-  --bg: #1C1C22;
-  --card: #2A2A32;
-  --ink: #EDEDF2;
-  --ink-soft: #A6A7B2;
-  --ink-faint: #7C7D88;
+  --bg: #141A1C;
+  --card: #1E2729;
+  --ink: #E8EEF0;
+  --ink-soft: #94A3A8;
+  --ink-faint: #6B7C80;
   --line: rgba(255, 255, 255, 0.1);
-  --accent: #C4A6E8;
-  --accent-soft: #9D86BC;
+  --accent: #5EEAD4;
+  --accent-soft: #7DB8B0;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.25), 0 1px 3px rgba(0, 0, 0, 0.2);
   --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
@@ -57,24 +59,24 @@
 }
 
 .landing .logo {
-  font-weight: 700;
-  font-size: 18px;
-  letter-spacing: -0.02em;
   display: flex;
   align-items: center;
-  gap: 10px;
 }
 
-.landing .logo-mark {
-  width: 26px;
-  height: 26px;
-  border-radius: 8px;
-  display: grid;
-  place-items: center;
-  color: var(--accent);
-  background: var(--card);
-  border: 1px solid var(--line);
-  box-shadow: var(--shadow);
+.landing .logo-img {
+  display: block;
+  height: 52px;
+  width: auto;
+  object-fit: contain;
+  background: transparent;
+}
+
+.landing .hero-wordmark {
+  margin-bottom: 36px;
+  animation: landingFadeUp 0.75s cubic-bezier(0.22, 1, 0.36, 1) both;
+  width: min(100%, 42rem);
+  height: auto;
+  background: transparent;
 }
 
 .landing .nav-links {
@@ -103,17 +105,36 @@
   transition: box-shadow .2s ease, transform .2s ease, background .2s ease;
 }
 
-.dark .landing .nav-btn { color: #1C1024; }
+.dark .landing .nav-btn { color: #042F2E; }
 .landing .nav-links a.nav-btn:hover { color: #fff; transform: translateY(-1px); box-shadow: var(--shadow-md); }
-.dark .landing .nav-links a.nav-btn:hover { color: #1C1024; }
+.dark .landing .nav-links a.nav-btn:hover { color: #042F2E; }
 .landing .nav-btn:active { transform: translateY(0); box-shadow: var(--shadow); }
 
 /* ── Hero ────────────────────────────────────────────── */
 .landing .hero {
-  padding: 120px 32px 100px;
-  max-width: 740px;
+  position: relative;
+  padding: 72px 32px 110px;
+  max-width: 920px;
   margin: 0 auto;
   text-align: center;
+  isolation: isolate;
+}
+
+.landing .hero::before {
+  content: '';
+  position: absolute;
+  inset: -40px -20% 20%;
+  z-index: -1;
+  background:
+    radial-gradient(ellipse 70% 55% at 50% 0%, rgba(15, 118, 110, 0.14), transparent 70%),
+    radial-gradient(ellipse 45% 40% at 85% 30%, rgba(14, 116, 144, 0.08), transparent 65%);
+  pointer-events: none;
+}
+
+.dark .landing .hero::before {
+  background:
+    radial-gradient(ellipse 70% 55% at 50% 0%, rgba(94, 234, 212, 0.12), transparent 70%),
+    radial-gradient(ellipse 45% 40% at 85% 30%, rgba(56, 189, 248, 0.06), transparent 65%);
 }
 
 .landing .eyebrow {
@@ -125,6 +146,7 @@
   text-transform: uppercase;
   color: var(--accent-soft);
   margin-bottom: 28px;
+  animation: landingFadeUp 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .landing .eyebrow::before {
@@ -135,12 +157,14 @@
 }
 
 .landing h1 {
-  font-size: 50px;
+  font-family: var(--font-display);
+  font-size: clamp(2.4rem, 5vw, 3.35rem);
   font-weight: 600;
-  letter-spacing: -0.02em;
-  line-height: 1.14;
+  letter-spacing: -0.025em;
+  line-height: 1.12;
   margin-bottom: 24px;
   color: var(--ink);
+  animation: landingFadeUp 0.75s cubic-bezier(0.22, 1, 0.36, 1) 0.06s both;
 }
 
 .landing .hero p {
@@ -148,6 +172,7 @@
   color: var(--ink-soft);
   max-width: 520px;
   margin: 0 auto 40px;
+  animation: landingFadeUp 0.75s cubic-bezier(0.22, 1, 0.36, 1) 0.12s both;
 }
 
 .landing .cta-row {
@@ -156,6 +181,7 @@
   align-items: center;
   justify-content: center;
   flex-wrap: wrap;
+  animation: landingFadeUp 0.75s cubic-bezier(0.22, 1, 0.36, 1) 0.18s both;
 }
 
 .landing .btn {
@@ -166,14 +192,14 @@
   font-size: 15px;
   font-weight: 500;
   box-shadow: var(--shadow);
-  transition: box-shadow .2s ease, transform .2s ease;
+  transition: box-shadow .2s ease, transform .2s ease, background .2s ease;
   display: inline-block;
   border: none;
   cursor: pointer;
   font-family: inherit;
 }
 
-.dark .landing .btn { color: #1C1024; }
+.dark .landing .btn { color: #042F2E; }
 
 .landing .btn:hover { transform: translateY(-1px); box-shadow: var(--shadow-md); }
 .landing .btn:active { transform: translateY(0); box-shadow: var(--shadow); }
@@ -192,6 +218,22 @@
   margin-top: 34px;
   font-size: 13px;
   color: var(--ink-faint);
+  animation: landingFadeUp 0.75s cubic-bezier(0.22, 1, 0.36, 1) 0.24s both;
+}
+
+@keyframes landingFadeUp {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing .eyebrow,
+  .landing h1,
+  .landing .hero p,
+  .landing .cta-row,
+  .landing .hero-note {
+    animation: none;
+  }
 }
 
 /* ── Sections ────────────────────────────────────────── */
@@ -514,7 +556,13 @@
 
 /* ── Final CTA ───────────────────────────────────────── */
 .landing .final-cta { text-align: center; padding: 100px 32px; border-top: 1px solid var(--line); }
-.landing .final-cta h2 { font-size: 30px; font-weight: 600; margin-bottom: 14px; letter-spacing: -0.01em; }
+.landing .final-cta h2 {
+  font-family: var(--font-display);
+  font-size: 30px;
+  font-weight: 600;
+  margin-bottom: 14px;
+  letter-spacing: -0.01em;
+}
 .landing .final-cta > p { font-size: 15px; color: var(--ink-soft); max-width: 420px; margin: 0 auto 32px; }
 
 /* ── Footer ──────────────────────────────────────────── */
@@ -532,7 +580,15 @@
   line-height: 1.6;
 }
 
-.landing .footer-brand { color: var(--ink-soft); font-weight: 600; margin-bottom: 6px; }
+.landing .footer-brand { margin-bottom: 6px; }
+
+.landing .footer-brand-img {
+  display: block;
+  height: 44px;
+  width: auto;
+  object-fit: contain;
+  background: transparent;
+}
 .landing .footer-nav { display: flex; gap: 56px; }
 .landing .footer-col-title { color: var(--ink-soft); font-weight: 600; margin-bottom: 8px; }
 .landing .footer-col a { display: block; padding: 2px 0; }
