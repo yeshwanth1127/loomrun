@@ -230,6 +230,78 @@ type Props = {
   onStartChatting: () => void
 }
 
+/** Shown in chat when Qlix looks connected in the DB but the live key is dead. */
+export function QlixReconnectBanner({ orgId, qlix }: { orgId: string; qlix?: QlixState }) {
+  const queryClient = useQueryClient()
+  const [error, setError] = useState<string | null>(null)
+  const needsReconnect =
+    !!qlix?.connected &&
+    (qlix.status === 'error' || qlix.key_valid === false)
+
+  const reconnect = useMutation({
+    mutationFn: () =>
+      apiFetch<QlixState>(`/v1/orgs/${orgId}/qlix/reconnect`, { method: 'POST' }),
+    onMutate: () => setError(null),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['ai-status', orgId] })
+      void queryClient.invalidateQueries({ queryKey: ['qlix-status', orgId] })
+    },
+    onError: (err: Error) => setError(err.message),
+  })
+
+  if (!needsReconnect) return null
+
+  return (
+    <div
+      className="card"
+      style={{
+        margin: '0 2rem 1rem',
+        borderColor: '#fecaca',
+        background: '#fef2f2',
+      }}
+    >
+      <div className="row" style={{ gap: 8, alignItems: 'flex-start', marginBottom: 8 }}>
+        <AlertCircle size={18} style={{ color: '#b91c1c', flexShrink: 0, marginTop: 2 }} />
+        <div>
+          <strong style={{ display: 'block', marginBottom: 4 }}>
+            Qlix agent needs reconnecting
+          </strong>
+          <p className="muted small" style={{ margin: 0 }}>
+            Chat is running on the backup agent right now. Reconnect to restore your Qlix
+            brain, document search, and full tool routing.
+          </p>
+          {qlix?.last_error && (
+            <p className="small" style={{ margin: '8px 0 0', color: '#b91c1c' }}>
+              {qlix.last_error}
+            </p>
+          )}
+          {error && (
+            <p className="small" style={{ margin: '8px 0 0', color: '#b91c1c' }}>
+              {error}
+            </p>
+          )}
+        </div>
+      </div>
+      <button
+        type="button"
+        className="btn"
+        disabled={reconnect.isPending}
+        onClick={() => reconnect.mutate()}
+      >
+        {reconnect.isPending ? (
+          <>
+            <Loader2 size={16} className="spin" /> Reconnecting…
+          </>
+        ) : (
+          <>
+            <Sparkles size={16} /> Reconnect Qlix agent
+          </>
+        )}
+      </button>
+    </div>
+  )
+}
+
 /**
  * Activation, then the choice of what to do next.
  *
@@ -251,6 +323,20 @@ export function QlixActivation({ orgId, qlix, onStartChatting }: Props) {
     },
     onError: (err: Error) => setError(err.message),
   })
+
+  const reconnect = useMutation({
+    mutationFn: () =>
+      apiFetch<QlixState>(`/v1/orgs/${orgId}/qlix/reconnect`, { method: 'POST' }),
+    onMutate: () => setError(null),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['ai-status', orgId] })
+      void queryClient.invalidateQueries({ queryKey: ['qlix-status', orgId] })
+    },
+    onError: (err: Error) => setError(err.message),
+  })
+
+  const retryQlix = qlix?.status === 'error' ? reconnect : activate
+  const retryPending = reconnect.isPending || activate.isPending
 
   if (!connected) {
     const unavailable = qlix?.configured === false
@@ -275,7 +361,7 @@ export function QlixActivation({ orgId, qlix, onStartChatting }: Props) {
           production data automatically, and can act on them with your approval.
         </p>
 
-        {qlix?.status === 'error' && qlix.last_error && (
+        {(qlix?.status === 'error' || qlix?.key_valid === false) && qlix.last_error && (
           <div
             className="small"
             style={{
@@ -309,12 +395,16 @@ export function QlixActivation({ orgId, qlix, onStartChatting }: Props) {
         <button
           type="button"
           className="btn"
-          disabled={activate.isPending || unavailable}
-          onClick={() => activate.mutate()}
+          disabled={retryPending || unavailable}
+          onClick={() => retryQlix.mutate()}
         >
-          {activate.isPending ? (
+          {retryPending ? (
             <>
               <Loader2 size={16} className="spin" /> Setting things up…
+            </>
+          ) : qlix?.status === 'error' || qlix?.key_valid === false ? (
+            <>
+              <Sparkles size={16} /> Reconnect agent
             </>
           ) : (
             <>
@@ -326,9 +416,17 @@ export function QlixActivation({ orgId, qlix, onStartChatting }: Props) {
         <p className="muted small" style={{ marginTop: 14 }}>
           {unavailable
             ? 'AI agents are not enabled on this server yet. Contact support.'
-            : 'Takes a few seconds. Nothing to configure.'}
+            : qlix?.key_valid === false
+              ? 'Your Qlix connection expired. Reconnect to restore the primary agent.'
+              : 'Takes a few seconds. Nothing to configure.'}
         </p>
       </div>
+    )
+  }
+
+  if (qlix?.key_valid === false || qlix?.status === 'error') {
+    return (
+      <QlixReconnectBanner orgId={orgId} qlix={qlix} />
     )
   }
 

@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     # When true, AI / OpenRouter logs include message text (needed for debugging
     # chat turns). API keys and Authorization headers are never logged.
     log_ai_messages: bool = True
+    # Temporary: comma-separated org IDs that skip AI credit metering (capacity
+    # checks + debits). Used for production eval / testing only — clear when done.
+    ai_usage_bypass_org_ids: str = ""
     # Shared secret for n8n → Loomrun automation API (LLM proxy, future hooks)
     loomrun_automation_api_key: str = ""
     # ── Qlix (per-org AI: one Qlix workspace + agent + brain per Loomrun org) ──
@@ -106,6 +109,14 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def ai_usage_bypass_org_id_set(self) -> set[str]:
+        return {
+            o.strip()
+            for o in self.ai_usage_bypass_org_ids.split(",")
+            if o.strip()
+        }
 
     @property
     def super_admin_email_set(self) -> set[str]:

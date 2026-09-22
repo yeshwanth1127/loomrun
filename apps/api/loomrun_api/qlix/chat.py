@@ -17,9 +17,12 @@ import json
 import logging
 from typing import Any, AsyncIterator
 
+from loomrun_api.ai_agent.crm_mutations import mutation_from_result, mutation_from_tool
+from loomrun_api.ai_agent.crm_read_enforce import CRM_READ_TOOLS, requires_crm_read_tool
 from loomrun_api.ai_agent.tools import pending as pending_store
-from loomrun_api.ai_agent.tools.registry import get_tool, summarize_args
+from loomrun_api.ai_agent.tools.registry import get_tool, select_tool_names_for_message, summarize_args
 from loomrun_api.config import settings
+from loomrun_api.logging_setup import get_request_id
 from loomrun_api.prisma_client import prisma
 from loomrun_api.qlix import client as qlix
 from loomrun_api.qlix import connection as conn
@@ -30,24 +33,6 @@ from loomrun_api.services import leads as lead_svc
 logger = logging.getLogger(__name__)
 
 JIT_MESSAGE = "jit_approval_pending"
-
-
-async def _live_totals(organization_id: str) -> dict[str, Any] | None:
-    """Current CRM totals for the run preamble, or None if they cannot be read.
-
-    Deliberately never raises. This is a hint prepended to the user's message,
-    so failing to build it must not cost the org its agent: an earlier version
-    let an exception here escape `run_turn`, which the caller caught as a Qlix
-    outage and silently downgraded every turn to the local fallback agent.
-    """
-    try:
-        return await lead_svc.count_leads(organization_id=organization_id)
-    except Exception:
-        logger.exception(
-            "Could not read live lead totals for org %s; running the turn without them",
-            organization_id,
-        )
-        return None
 
 
 async def _newest_lead(organization_id: str) -> dict[str, Any] | None:
@@ -71,8 +56,8 @@ async def _newest_lead(organization_id: str) -> dict[str, Any] | None:
 
 def _with_crm_preamble(
     message: str,
-    counts: dict[str, Any] | None,
     newest: dict[str, Any] | None = None,
+    timezone: str | None = None,
 ) -> str:
     """Prefix the turn with authoritative totals and how to read the Brain.
 
@@ -80,6 +65,7 @@ def _with_crm_preamble(
     description, because the description is fixed when the agent is created and
     existing agents never see a later edit to it.
     """
+    clock = lead_svc.user_clock(timezone)
     lines = [
         "[Loomrun context — read this before answering. These instructions "
         "override the agent description.",
@@ -94,7 +80,10 @@ def _with_crm_preamble(
         "For the latest/newest lead use the 'Newest lead' line below, or call "
         "search_leads with sort='newest' and limit=1. Never take it from a Brain "
         "excerpt and never guess a creation date.",
-        "For a count call count_leads and report `total`.",
+        "For any count or 'how many' question you MUST call count_leads in this "
+        "turn and quote its `total`. Never answer a count from memory, Brain, "
+        "or this preamble — there are no numeric hints here.",
+        lead_svc.clock_instructions(clock),
         "'Stage' means two different things — pick by the VALUE named:",
         "  NEW, CONTACTED, QUALIFICATION, QUOTATION, NEGOTIATION, SAMPLE, WON, "
         "LOST are SALES stages on a lead → call update_lead.",
@@ -106,21 +95,19 @@ def _with_crm_preamble(
         "Do not search first and do not use any list_* tool to find it — if the "
         "name is wrong or ambiguous, update_lead says so and names the candidates. "
         "Never ask the user for a lead id; they do not know it.",
+        "Quotation or invoice LINE edits (description, qty, price) → "
+        "update_quotation. Never use update_lead product_interest for quote lines.",
+        "Schedule a follow-up that appears on the Follow-ups screen → "
+        "schedule_follow_up (not bare update_lead next_follow_up_at).",
+        "If a tool errors because an id is missing or a name is unknown, call "
+        "the matching search_* tool and retry. Never ask the user for an "
+        "internal id.",
     ]
-    if counts:
-        lines.append(
-            f"Live totals (complete, as of now): leads_total={counts['total']} "
-            f"by_status={counts['by_status']} by_stage={counts['by_stage']}"
-        )
     if newest:
         lines.append(
             f"Newest lead (authoritative, by creation date): {newest['title']}"
             + (f" — {newest['company']}" if newest.get("company") else "")
             + f", created {newest['created_at']}, stage {newest['stage']}"
-        )
-    else:
-        lines.append(
-            "Live totals are unavailable this turn — call count_leads for any number."
         )
     lines.append("]")
     return "\n".join(lines) + f"\n\n{message}"
@@ -177,6 +164,35 @@ def _extract_tool_call(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         except json.JSONDecodeError:
             args = {"_raw": args}
     return name, args if isinstance(args, dict) else {}
+
+
+def _extract_tool_outcome(payload: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:
+    """Best-effort parse of a completed tool frame into (name, dispatch outcome)."""
+    name, _args = _extract_tool_call(payload)
+    if not name:
+        return "", None
+
+    raw_result: Any = payload.get("result")
+    tool = payload.get("tool")
+    if raw_result is None and isinstance(tool, dict):
+        raw_result = (
+            tool.get("result")
+            or tool.get("output")
+            or tool.get("structured_content")
+            or tool.get("structuredContent")
+        )
+
+    if isinstance(raw_result, str):
+        try:
+            raw_result = json.loads(raw_result)
+        except json.JSONDecodeError:
+            return name, None
+
+    if isinstance(raw_result, dict):
+        if "status" in raw_result:
+            return name, raw_result
+        return name, {"status": "ok", "result": raw_result}
+    return name, None
 
 
 def _summarize(tool_name: str, args: dict[str, Any]) -> str:
@@ -315,7 +331,9 @@ async def run_turn(
     mode: str,
     message: str,
     conversation_id: str,
+    user_message_id: str,
     model: str | None = None,
+    timezone: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Yield UI events for one turn: delta, pending_action, done, error."""
     connection, api_key = await conn.require_api_key(organization_id)
@@ -329,16 +347,23 @@ async def run_turn(
 
     content = _with_crm_preamble(
         message,
-        await _live_totals(organization_id),
         await _newest_lead(organization_id),
+        timezone=timezone,
     )
 
+    selected = select_tool_names_for_message(message, mode=mode, role=role)
+    # None = no pack match → full catalog and Brain on. A matched pack skips
+    # Brain so CRM totals/docs don't compete with the live tools.
+    allowed_mcp_tools = sorted(selected) if selected else None
+    use_brain = selected is None
+
+    request_id = get_request_id()
     enqueued = await qlix.enqueue_run(
         api_key,
         agent_id=agent_id,
         conversation_id=qlix_conversation_id,
         content=content,
-        use_brain=True,
+        use_brain=use_brain,
         model=(model or settings.qlix_default_model or None),
         # This is the entire tenant boundary for tool execution: Qlix forwards
         # it on every MCP call and the tool server trusts nothing else.
@@ -348,7 +373,14 @@ async def run_turn(
             role=role,
             mode=mode,
             conversation_id=conversation_id,
+            timezone=timezone,
         ),
+        # Stable per-user-message id so a retried enqueue (network blip,
+        # client re-send) resolves to the same Qlix run instead of a
+        # duplicate one.
+        external_run_id=f"loomrun:{conversation_id}:{user_message_id}",
+        correlation_id=request_id if request_id != "-" else None,
+        allowed_mcp_tools=allowed_mcp_tools,
     )
     run_id = str(enqueued.get("runId") or "").strip()
     if not run_id:
@@ -359,6 +391,8 @@ async def run_turn(
     text_parts: list[str] = []
     pending_actions: list[dict[str, Any]] = []
     auto_approved: list[dict[str, Any]] = []
+    crm_mutations: list[dict[str, Any]] = []
+    tools_invoked: set[str] = set()
     final_text = ""
     citations: list[Any] = []
 
@@ -389,6 +423,24 @@ async def run_turn(
             else:
                 tool_event = _tool_event(payload)
                 if tool_event:
+                    t_phase = tool_event.get("tool", {}).get("phase")
+                    t_name = tool_event.get("tool", {}).get("name") or ""
+                    if t_phase == "done" and t_name:
+                        tools_invoked.add(str(t_name))
+                    if t_phase == "done":
+                        t_name, outcome = _extract_tool_outcome(payload)
+                        mutation = (
+                            mutation_from_tool(t_name, outcome)
+                            if outcome
+                            else None
+                        )
+                        if not mutation and outcome and outcome.get("status") == "ok":
+                            result = outcome.get("result")
+                            if isinstance(result, dict):
+                                mutation = mutation_from_result(t_name, result)
+                        if mutation:
+                            crm_mutations.append(mutation)
+                            yield {"type": "crm_mutation", "mutation": mutation}
                     yield tool_event
                 else:
                     yield {"type": "log", "data": payload}
@@ -396,6 +448,20 @@ async def run_turn(
         elif event_name == "status":
             tool_event = _tool_event(payload)
             if tool_event:
+                t_phase = tool_event.get("tool", {}).get("phase")
+                t_name_evt = tool_event.get("tool", {}).get("name") or ""
+                if t_phase == "done" and t_name_evt:
+                    tools_invoked.add(str(t_name_evt))
+                if t_phase == "done":
+                    t_name, outcome = _extract_tool_outcome(payload)
+                    mutation = mutation_from_tool(t_name, outcome) if outcome else None
+                    if not mutation and outcome and outcome.get("status") == "ok":
+                        result = outcome.get("result")
+                        if isinstance(result, dict):
+                            mutation = mutation_from_result(t_name, result)
+                    if mutation:
+                        crm_mutations.append(mutation)
+                        yield {"type": "crm_mutation", "mutation": mutation}
                 yield tool_event
             else:
                 yield {"type": "status", "data": payload}
@@ -414,6 +480,11 @@ async def run_turn(
             if status_value == "failed":
                 raise qlix.QlixError(str(payload.get("error") or "The agent run failed"))
 
+            if requires_crm_read_tool(message) and not (tools_invoked & CRM_READ_TOOLS):
+                raise qlix.QlixError(
+                    "CRM read required but Qlix answered without calling a read tool"
+                )
+
             yield {
                 "type": "done",
                 "status": status_value,
@@ -421,6 +492,7 @@ async def run_turn(
                 "citations": citations,
                 "pending_actions": pending_actions,
                 "auto_approved": auto_approved,
+                "crm_mutations": crm_mutations,
                 "run_id": run_id,
             }
             return
@@ -434,6 +506,7 @@ async def run_turn(
         "citations": citations,
         "pending_actions": pending_actions,
         "auto_approved": auto_approved,
+        "crm_mutations": crm_mutations,
         "run_id": run_id,
     }
 
@@ -445,6 +518,7 @@ async def collect_turn(**kwargs: Any) -> dict[str, Any]:
         "citations": [],
         "pending_actions": [],
         "auto_approved": [],
+        "crm_mutations": [],
         "run_id": None,
     }
     async for event in run_turn(**kwargs):
@@ -455,6 +529,7 @@ async def collect_turn(**kwargs: Any) -> dict[str, Any]:
             result["citations"] = event["citations"]
             result["pending_actions"] = event["pending_actions"]
             result["auto_approved"] = event.get("auto_approved") or []
+            result["crm_mutations"] = event.get("crm_mutations") or []
     return result
 
 

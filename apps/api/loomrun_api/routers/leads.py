@@ -468,8 +468,14 @@ async def list_due_follow_ups(org_id: str, ctx: OrgContext = Depends(get_org_con
     )
 
 
+class AckReminderItem(BaseModel):
+    lead_id: str
+    offset_minutes: int
+
+
 class AckFollowUpsBody(BaseModel):
     lead_ids: list[str] = Field(default_factory=list, max_length=100)
+    reminders: list[AckReminderItem] = Field(default_factory=list, max_length=100)
 
 
 @router.post("/orgs/{org_id}/follow-ups/ack")
@@ -483,6 +489,7 @@ async def ack_follow_ups(
     return await ack_follow_up_reminders(
         organization_id=ctx.organization_id,
         lead_ids=body.lead_ids,
+        reminders=[r.model_dump() for r in body.reminders],
         user_id=ctx.membership.userId,
     )
 

@@ -312,7 +312,7 @@ async def build_ceo_dashboard(*, organization_id: str, day: str | None = None) -
 
     pnl_orders = await prisma.productionorder.find_many(
         where={"organizationId": oid},
-        include={"lead": True, "quotation": True, "payments": True, "expenses": True},
+        include={"lead": True, "quotation": True, "payments": True, "expectedPayments": True, "expenses": True},
         order={"updatedAt": "desc"},
     )
     budget_overrun_count = 0

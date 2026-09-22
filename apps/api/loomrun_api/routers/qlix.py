@@ -56,6 +56,8 @@ def _document_item(row) -> dict:
 
 @router.get("/orgs/{org_id}/qlix/status")
 async def qlix_status(ctx: OrgContext = Depends(get_org_context)) -> dict:
+    from loomrun_api.ai_agent.service import _attach_qlix_key_valid
+
     row = await conn.get_connection(ctx.organization_id)
     state = conn.public_state(row)
     state["configured"] = settings.qlix_ready
@@ -64,6 +66,11 @@ async def qlix_status(ctx: OrgContext = Depends(get_org_context)) -> dict:
         # Flip the backfill flag the moment the initial load has drained, so
         # the UI can stop showing "still importing".
         await provisioner.mark_backfill_complete_if_drained(ctx.organization_id)
+        row = await conn.get_connection(ctx.organization_id)
+        state = conn.public_state(row)
+        state["configured"] = settings.qlix_ready
+        state["sync"] = await sync.sync_progress(ctx.organization_id)
+    await _attach_qlix_key_valid(state, row)
     return state
 
 
@@ -87,6 +94,31 @@ async def qlix_activate(ctx: OrgContext = Depends(require_roles("OWNER"))) -> di
             else status.HTTP_400_BAD_REQUEST
         )
         raise HTTPException(code, detail=message) from exc
+
+
+@router.post("/orgs/{org_id}/qlix/reconnect")
+async def qlix_reconnect(ctx: OrgContext = Depends(require_roles("OWNER"))) -> dict:
+    """Rotate a stale org key without tearing down the Qlix tenant."""
+    if not settings.qlix_ready:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI agents are not configured on this server yet.",
+        )
+    try:
+        state = await provisioner.reconnect(organization_id=ctx.organization_id)
+    except provisioner.ProvisionError as exc:
+        message = str(exc)
+        code = (
+            status.HTTP_503_SERVICE_UNAVAILABLE
+            if "could not reach qlix" in message.lower()
+            else status.HTTP_400_BAD_REQUEST
+        )
+        raise HTTPException(code, detail=message) from exc
+    from loomrun_api.ai_agent.service import _attach_qlix_key_valid
+
+    row = await conn.get_connection(ctx.organization_id)
+    await _attach_qlix_key_valid(state, row)
+    return state
 
 
 @router.post("/orgs/{org_id}/qlix/deactivate")
@@ -218,7 +250,8 @@ async def get_qlix_document(
         try:
             _, api_key = await conn.require_api_key(ctx.organization_id)
             remote = await qlix.get_document(api_key, row.qlixDocumentId)
-            remote_status = remote.get("ingestStatus")
+            # GET /ai-brain/documents/:id nests the document under "document".
+            remote_status = (remote.get("document") or {}).get("ingestStatus")
             if remote_status and remote_status != row.status:
                 row = await prisma.qlixdocument.update(
                     where={"id": row.id}, data={"status": remote_status}

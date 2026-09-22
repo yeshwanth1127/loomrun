@@ -9,7 +9,7 @@ from fastapi import HTTPException, status
 
 from loomrun_api.pnl import serialize_expense
 from loomrun_api.prisma_client import prisma
-from loomrun_api.services.leads import resolve_lead
+from loomrun_api.services.leads import apply_created_updated_filters, resolve_lead
 
 
 def _label(value: str | None, *, field: str, required: bool = True) -> str | None:
@@ -22,11 +22,28 @@ def _label(value: str | None, *, field: str, required: bool = True) -> str | Non
 
 
 async def list_expenses(
-    *, organization_id: str, category: str | None = None, limit: int = 50
+    *,
+    organization_id: str,
+    category: str | None = None,
+    limit: int = 50,
+    created_after: str | None = None,
+    created_before: str | None = None,
+    updated_after: str | None = None,
+    updated_before: str | None = None,
+    timezone: str | None = None,
 ) -> dict[str, Any]:
     where: dict[str, Any] = {"organizationId": organization_id}
     if category:
         where["category"] = {"equals": category.strip(), "mode": "insensitive"}
+    apply_created_updated_filters(
+        where,
+        created_after=created_after,
+        created_before=created_before,
+        updated_after=updated_after,
+        updated_before=updated_before,
+        created_field="incurredAt",
+        timezone=timezone,
+    )
     total = await prisma.expense.count(where=where)
     rows = await prisma.expense.find_many(
         where=where,
@@ -36,7 +53,19 @@ async def list_expenses(
     )
     total_cents = sum(r.amountCents or 0 for r in rows)
     return {
-        "items": [serialize_expense(r) for r in rows],
+        "items": [
+            {
+                "id": r.id,
+                "category": r.category.name if hasattr(r.category, "name") else (r.category or ""),
+                "subcategory": getattr(r, "subcategory", None),
+                "amount_cents": r.amountCents,
+                "vendor": r.vendor,
+                "lead_id": r.leadId,
+                "incurred_at": r.incurredAt.isoformat(),
+                "created_at": r.createdAt.isoformat(),
+            }
+            for r in rows
+        ],
         "count": len(rows),
         "total": total,
         "listed_total_cents": total_cents,

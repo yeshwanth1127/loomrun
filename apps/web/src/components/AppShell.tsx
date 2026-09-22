@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import {
   Bot,
   Building2,
+  GitBranch,
   Home,
   IndianRupee,
   LayoutDashboard,
@@ -29,7 +30,14 @@ import { apiFetch } from '../lib/api'
 import { routes } from '../lib/appRoutes'
 import { planBadgeClass } from '../lib/entitlements'
 import { isProductionRole, isTelecallerRole, membershipForOrg, roleLabel } from '../lib/membership'
-import { isHomePath, isMoneyPath, isOrdersPath, isSalesPath, isSettingsPath } from '../lib/navPaths'
+import {
+  isHomePath,
+  isMoneyPath,
+  isOrdersPath,
+  isPipelinesPath,
+  isSalesPath,
+  isSettingsPath,
+} from '../lib/navPaths'
 
 const apiBase = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
@@ -69,6 +77,13 @@ const PRIMARY_NAV: PrimaryNavItem[] = [
     match: isSalesPath,
   },
   {
+    id: 'pipelines',
+    to: routes.salesOrganize,
+    icon: GitBranch,
+    label: 'Pipelines',
+    match: isPipelinesPath,
+  },
+  {
     id: 'orders',
     to: routes.orders(),
     icon: Package,
@@ -106,9 +121,12 @@ function navVisible(
   hasFullAccess: boolean,
   isProduction: boolean,
   isTelecaller: boolean,
+  isSales: boolean,
 ): boolean {
   if (item.telecallerConnections) return !hasFullAccess && (isTelecaller || false)
   if (item.fullAccessOnly) return hasFullAccess
+  // Same audience as Sales → Organize (owners + Sales role).
+  if (item.id === 'pipelines') return hasFullAccess || isSales
   // Production roles: Home + Orders (+ Ask AI), not Sales/Money/Settings
   if (item.id === 'sales' && isProduction && !hasFullAccess) return false
   if (item.id === 'orders') return hasFullAccess || isProduction
@@ -125,9 +143,13 @@ export function AppShell() {
   const hasFullAccess = isOwner || !!me?.is_super_admin
   const isProduction = isProductionRole(membership)
   const isTelecaller = isTelecallerRole(membership)
+  const isSales = membership?.role === 'SALES'
   const visibleNav = useMemo(
-    () => PRIMARY_NAV.filter((item) => navVisible(item, hasFullAccess, isProduction, isTelecaller)),
-    [hasFullAccess, isProduction, isTelecaller],
+    () =>
+      PRIMARY_NAV.filter((item) =>
+        navVisible(item, hasFullAccess, isProduction, isTelecaller, isSales),
+      ),
+    [hasFullAccess, isProduction, isTelecaller, isSales],
   )
   const orgName = membership?.organization?.name ?? ''
   const org = membership?.organization
@@ -153,39 +175,56 @@ export function AppShell() {
     enabled: !!orgId && !!membership && !trialExpired,
     queryFn: () =>
       apiFetch<{
-        items: Array<{ id: string; title: string; in_app_pending: boolean }>
+        items: Array<{ id: string; title: string }>
         count: number
+        reminders: Array<{
+          id: string
+          title: string
+          offset_minutes: number
+          in_app_pending: boolean
+        }>
       }>(`/v1/orgs/${orgId}/follow-ups/due`),
     refetchInterval: 30_000,
   })
   const dueCount = dueFollowUps.data?.count ?? 0
-  const pendingToastIds = (dueFollowUps.data?.items ?? [])
-    .filter((i) => i.in_app_pending)
-    .map((i) => i.id)
+  const pendingReminders = (dueFollowUps.data?.reminders ?? []).filter((r) => r.in_app_pending)
   const toastedRef = useRef<Set<string>>(new Set())
   const qc = useQueryClient()
 
   useEffect(() => {
-    if (!orgId || pendingToastIds.length === 0) return
-    const fresh = pendingToastIds.filter((id) => !toastedRef.current.has(id))
+    if (!orgId || pendingReminders.length === 0) return
+    const fresh = pendingReminders.filter((r) => {
+      const key = `${r.id}:${r.offset_minutes}`
+      return !toastedRef.current.has(key)
+    })
     if (fresh.length === 0) return
-    for (const id of fresh) toastedRef.current.add(id)
-    const titles = (dueFollowUps.data?.items ?? [])
-      .filter((i) => fresh.includes(i.id))
-      .map((i) => i.title)
-    toast.message(
-      fresh.length === 1 ? `Follow-up due: ${titles[0]}` : `${fresh.length} follow-ups due`,
-      {
-        description: titles.slice(0, 3).join(', ') + (titles.length > 3 ? '…' : ''),
+
+    const labelFor = (mins: number) => {
+      if (mins >= 60) return 'in 1 hour'
+      if (mins === 1) return 'in 1 minute'
+      return `in ${mins} minutes`
+    }
+
+    for (const rem of fresh) {
+      toastedRef.current.add(`${rem.id}:${rem.offset_minutes}`)
+      toast.message(`Follow-up ${labelFor(rem.offset_minutes)}: ${rem.title}`, {
+        description: 'Open the Call tab to dial this lead.',
+        duration: 12_000,
         action: {
-          label: 'Open',
-          onClick: () => navigate(routes.sales('follow-ups')),
+          label: 'Open call',
+          onClick: () => navigate(routes.lead(rem.id, 'call')),
         },
-      },
-    )
+      })
+    }
+
     void apiFetch(`/v1/orgs/${orgId}/follow-ups/ack`, {
       method: 'POST',
-      json: { lead_ids: fresh },
+      json: {
+        reminders: fresh.map((r) => ({
+          lead_id: r.id,
+          offset_minutes: r.offset_minutes,
+        })),
+      },
     })
       .then(() => {
         void qc.invalidateQueries({ queryKey: ['follow-ups-due', orgId] })
@@ -193,7 +232,7 @@ export function AppShell() {
       .catch(() => {
         /* ignore */
       })
-  }, [orgId, pendingToastIds.join(','), dueFollowUps.data, navigate, qc])
+  }, [orgId, pendingReminders.map((r) => `${r.id}:${r.offset_minutes}`).join(','), navigate, qc])
 
   useEffect(() => {
     if (!trialExpired) return
@@ -247,7 +286,7 @@ export function AppShell() {
   if (loading) {
     return (
       <div className="app-loading">
-        <img src="/noolrun-mark.png?v=3" alt="" className="app-loading-mark" />
+        <img src="/noolrun-mark.png?v=5" alt="" className="app-loading-mark" />
         <p className="muted">Loading workspace…</p>
       </div>
     )

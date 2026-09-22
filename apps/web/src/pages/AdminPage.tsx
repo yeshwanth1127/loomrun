@@ -1,25 +1,46 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Activity,
-  BarChart2,
+  Bot,
   Building2,
-  CalendarDays,
-  CreditCard,
-  FileText,
-  MessageCircle,
-  Phone,
-  Plug,
-  TrendingUp,
+  Coins,
+  Search,
   UserPlus,
   Users,
-  Zap,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Navigate } from 'react-router-dom'
-import { useAuth } from '../context/AuthContext'
-import { apiFetch } from '../lib/api'
 import { MetricCard } from '../components/ui/dashboard'
 import { PageHeader } from '../components/ui/PageHeader'
+import { useAuth } from '../context/AuthContext'
+import { apiFetch } from '../lib/api'
+import { roleLabel } from '../lib/membership'
+import { timeAgo } from '../lib/format'
+
+type UsageBucket = {
+  turns: number
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  credits: number
+  avg_tokens_per_turn: number
+}
+
+type CreditWindow = {
+  used: number
+  limit: number | null
+  remaining: number | null
+  resets_at: string | null
+}
+
+type AdminMember = {
+  membership_id: string
+  user_id: string
+  email: string
+  name: string | null
+  role: string
+  is_super_admin: boolean
+  joined_at: string | null
+}
 
 type AdminOrg = {
   id: string
@@ -28,9 +49,13 @@ type AdminOrg = {
   plan: string
   extra_seats: number
   suspended: boolean
-  created_at: string
+  created_at: string | null
   member_count: number
-  lead_count: number
+  members: AdminMember[]
+  ai: UsageBucket & {
+    last_7d: UsageBucket
+    windows: { session_5h: CreditWindow; weekly: CreditWindow }
+  }
 }
 
 type AdminUser = {
@@ -38,217 +63,70 @@ type AdminUser = {
   email: string
   name: string | null
   is_super_admin: boolean
-  created_at: string
+  created_at: string | null
+  organizations: Array<{ id: string; name: string; slug: string; role: string }>
 }
 
-type PlatformAnalytics = {
+type Overview = {
   generated_at: string
   totals: {
+    organizations: number
     users: number
     super_admins: number
-    organizations: number
-    suspended_organizations: number
     memberships: number
-    leads: number
-    quotations: number
-    production_orders: number
-    expenses: number
-    payments: number
-    calls: number
-    whatsapp_threads: number
-    outbound_messages: number
-    catalog_items: number
-    lead_connections: number
-    automation_connections: number
-    telephony_configs: number
-    active_subscriptions: number
+    ai: UsageBucket & { last_7d: UsageBucket }
   }
-  growth: {
-    users_last_7d: number
-    users_last_30d: number
-    orgs_last_7d: number
-    orgs_last_30d: number
-    leads_last_7d: number
-    leads_last_24h: number
-  }
-  plans: {
-    counts: Record<string, number>
-    estimated_mrr_inr: number
-  }
-  series: {
-    daily: Array<{ date: string; users: number; organizations: number; leads: number }>
-  }
-  top_organizations: Array<{
-    id: string
-    name: string
-    slug: string
-    plan: string
-    suspended: boolean
-    created_at: string
-    members: number
-    leads: number
-    quotations: number
-    production_orders: number
-    calls: number
-  }>
+  organizations: AdminOrg[]
+  users: AdminUser[]
 }
 
-const MEMBERSHIP_ROLES = ['VIEWER', 'SALES', 'TELECALLER', 'PRODUCTION', 'OWNER'] as const
-const PLAN_OPTIONS = ['free', 'growth', 'scale'] as const
+type AiTurn = {
+  id: string
+  organization_id: string
+  organization_name: string
+  conversation_id: string | null
+  conversation_title: string | null
+  user_email: string | null
+  user_name: string | null
+  source: string
+  model: string | null
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  credits: number
+  created_at: string | null
+}
 
+const MEMBERSHIP_ROLES = ['VIEWER', 'SALES', 'TELECALLER', 'PRODUCTION', 'PRODUCTION_MANAGER', 'OWNER'] as const
+const PLAN_OPTIONS = ['free', 'growth', 'scale'] as const
 const PLAN_COLOR: Record<string, string> = {
   free: 'badge-slate',
   growth: 'badge-blue',
   scale: 'badge-indigo',
 }
 
-function formatInr(n: number): string {
-  return new Intl.NumberFormat('en-IN', {
-    style: 'currency',
-    currency: 'INR',
-    maximumFractionDigits: 0,
-  }).format(n)
+function fmtNum(n: number | null | undefined): string {
+  if (n == null || Number.isNaN(n)) return '—'
+  return n.toLocaleString('en-IN')
 }
 
-function MiniBars({
-  series,
-  field,
-}: {
-  series: PlatformAnalytics['series']['daily']
-  field: 'users' | 'organizations' | 'leads'
-}) {
-  const max = Math.max(1, ...series.map((d) => d[field]))
+function WindowBar({ label, window }: { label: string; window: CreditWindow }) {
+  const limit = window.limit
+  const used = window.used
+  const pct = limit && limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0
   return (
-    <div className="row" style={{ gap: 3, alignItems: 'flex-end', height: 56 }}>
-      {series.map((d) => {
-        const h = Math.max(2, Math.round((d[field] / max) * 52))
-        return (
-          <div
-            key={d.date}
-            title={`${d.date}: ${d[field]}`}
-            style={{
-              width: 10,
-              height: h,
-              borderRadius: 3,
-              background: 'var(--primary)',
-              opacity: 0.55 + (d[field] / max) * 0.45,
-            }}
-          />
-        )
-      })}
-    </div>
-  )
-}
-
-function OrgCard({
-  org,
-  onSuspendChange,
-  onPlanChange,
-  onExtraSeatsChange,
-  onJoin,
-  joinPending,
-  patchPending,
-}: {
-  org: AdminOrg
-  onSuspendChange: (id: string, val: boolean) => void
-  onPlanChange: (id: string, plan: string) => void
-  onExtraSeatsChange: (id: string, extraSeats: number) => void
-  onJoin: (id: string) => void
-  joinPending: boolean
-  patchPending: boolean
-}) {
-  const initials = org.name.slice(0, 2).toUpperCase()
-  const date = new Date(org.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
-  const planKey = (org.plan || 'free').toLowerCase()
-
-  return (
-    <div className="org-card">
-      <div className="org-card-header">
-        <div className="row" style={{ gap: '0.75rem', alignItems: 'flex-start' }}>
-          <div className="org-avatar">{initials}</div>
-          <div>
-            <div className="org-name">{org.name}</div>
-            <div className="org-slug">{org.slug}</div>
-          </div>
-        </div>
-        <span className={`badge ${PLAN_COLOR[planKey] ?? 'badge-slate'}`}>{planKey}</span>
+    <div>
+      <div className="row" style={{ justifyContent: 'space-between', marginBottom: 6 }}>
+        <span className="small" style={{ fontWeight: 600 }}>{label}</span>
+        <span className="muted small">
+          {limit == null ? `${fmtNum(used)} used` : `${fmtNum(used)} / ${fmtNum(limit)}`}
+        </span>
       </div>
-
-      <div className="org-stats">
-        <div className="org-stat">
-          <div className="org-stat-val">{org.member_count}</div>
-          <div className="org-stat-label">Members</div>
-        </div>
-        <div className="org-stat">
-          <div className="org-stat-val">{org.lead_count}</div>
-          <div className="org-stat-label">Leads</div>
-        </div>
-        <div className="org-stat">
-          <div className="org-stat-val">{date.split(' ')[2]}</div>
-          <div className="org-stat-label">Since {date.split(' ')[1]}</div>
-        </div>
-      </div>
-
-      <div className="stack" style={{ gap: '0.65rem', marginTop: '0.75rem' }}>
-        <div className="form-field">
-          <label className="input-label">Plan</label>
-          <select
-            className="select"
-            value={PLAN_OPTIONS.includes(planKey as (typeof PLAN_OPTIONS)[number]) ? planKey : 'free'}
-            disabled={patchPending}
-            onChange={(e) => onPlanChange(org.id, e.target.value)}
-            style={{ width: '100%' }}
-          >
-            {PLAN_OPTIONS.map((p) => (
-              <option key={p} value={p}>{p}</option>
-            ))}
-          </select>
-        </div>
-        <div className="form-field">
-          <label className="input-label">Extra seats</label>
-          <input
-            className="input"
-            type="number"
-            min={0}
-            max={500}
-            value={org.extra_seats ?? 0}
-            disabled={patchPending}
-            onBlur={(e) => {
-              const n = Number(e.target.value)
-              if (!Number.isNaN(n) && n >= 0 && n !== (org.extra_seats ?? 0)) {
-                onExtraSeatsChange(org.id, n)
-              }
-            }}
-            style={{ width: '100%' }}
-          />
-        </div>
-      </div>
-
-      <div className="org-card-footer">
-        <div className="row" style={{ gap: '0.5rem' }}>
-          {org.suspended && <span className="badge badge-red">Suspended</span>}
-          <label className="row small muted" style={{ gap: '0.4rem', cursor: 'pointer' }}>
-            <span>Suspend</span>
-            <label className="toggle">
-              <input
-                type="checkbox"
-                checked={org.suspended}
-                disabled={patchPending}
-                onChange={(e) => onSuspendChange(org.id, e.target.checked)}
-              />
-              <span className="toggle-slider" />
-            </label>
-          </label>
-        </div>
-        <button
-          type="button"
-          className="btn btn-ghost btn-sm"
-          disabled={joinPending}
-          onClick={() => onJoin(org.id)}
-        >
-          <UserPlus size={13} />
-          Join as owner
-        </button>
+      <div className="platform-usage-track">
+        <div
+          className="platform-usage-fill"
+          style={{ width: limit == null ? '0%' : `${pct}%` }}
+        />
       </div>
     </div>
   )
@@ -257,27 +135,38 @@ function OrgCard({
 export function AdminPage() {
   const { me, reloadMe } = useAuth()
   const qc = useQueryClient()
-  const [addOrgId, setAddOrgId] = useState('')
+  const [query, setQuery] = useState('')
+  const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null)
+  const [turnDays, setTurnDays] = useState<number | null>(30)
+  const [turnSkip, setTurnSkip] = useState(0)
   const [addEmail, setAddEmail] = useState('')
   const [addRole, setAddRole] = useState<string>('VIEWER')
 
-  const analyticsQ = useQuery({
-    queryKey: ['admin', 'analytics'],
-    queryFn: () => apiFetch<PlatformAnalytics>('/v1/admin/analytics'),
+  const overviewQ = useQuery({
+    queryKey: ['admin', 'overview'],
+    queryFn: () => apiFetch<Overview>('/v1/admin/overview'),
     enabled: !!me?.is_super_admin,
     refetchInterval: 60_000,
   })
 
-  const orgsQ = useQuery({
-    queryKey: ['admin', 'organizations'],
-    queryFn: () => apiFetch<{ items: AdminOrg[] }>('/v1/admin/organizations'),
-    enabled: !!me?.is_super_admin,
-  })
+  const orgs = overviewQ.data?.organizations ?? []
+  const users = overviewQ.data?.users ?? []
+  const totals = overviewQ.data?.totals
+  const selected = orgs.find((o) => o.id === selectedOrgId) ?? orgs[0] ?? null
 
-  const usersQ = useQuery({
-    queryKey: ['admin', 'users'],
-    queryFn: () => apiFetch<{ items: AdminUser[]; total: number }>('/v1/admin/users?take=200'),
-    enabled: !!me?.is_super_admin,
+  const turnsQ = useQuery({
+    queryKey: ['admin', 'ai-usage', selected?.id, turnDays, turnSkip],
+    queryFn: () => {
+      const qs = new URLSearchParams()
+      if (selected?.id) qs.set('organization_id', selected.id)
+      if (turnDays) qs.set('days', String(turnDays))
+      qs.set('skip', String(turnSkip))
+      qs.set('take', '50')
+      return apiFetch<{ items: AiTurn[]; total: number; skip: number; take: number }>(
+        `/v1/admin/ai-usage?${qs}`,
+      )
+    },
+    enabled: !!me?.is_super_admin && !!selected,
   })
 
   const patchOrg = useMutation({
@@ -309,7 +198,7 @@ export function AdminPage() {
     mutationFn: () =>
       apiFetch('/v1/admin/memberships', {
         method: 'POST',
-        json: { organization_id: addOrgId, user_email: addEmail, role: addRole },
+        json: { organization_id: selected?.id, user_email: addEmail, role: addRole },
       }),
     onSuccess: () => {
       setAddEmail('')
@@ -324,311 +213,429 @@ export function AdminPage() {
     onSuccess: () => void reloadMe(),
   })
 
+  const q = query.trim().toLowerCase()
+  const filteredOrgs = useMemo(() => {
+    if (!q) return orgs
+    return orgs.filter((o) => {
+      const hay = `${o.name} ${o.slug} ${o.members.map((m) => `${m.email} ${m.name ?? ''}`).join(' ')}`
+      return hay.toLowerCase().includes(q)
+    })
+  }, [orgs, q])
+
+  const filteredUsers = useMemo(() => {
+    if (!q) return users
+    return users.filter((u) => {
+      const hay = `${u.email} ${u.name ?? ''} ${u.organizations.map((o) => o.name).join(' ')}`
+      return hay.toLowerCase().includes(q)
+    })
+  }, [users, q])
+
   if (!me) return null
   if (!me.is_super_admin) return <Navigate to="/app" replace />
 
-  const orgs = orgsQ.data?.items ?? []
-  const users = usersQ.data?.items ?? []
-  const a = analyticsQ.data
-  const t = a?.totals
-  const g = a?.growth
-  const planCounts = a?.plans.counts ?? {}
+  const ai = totals?.ai
+  const turns = turnsQ.data?.items ?? []
+  const turnsTotal = turnsQ.data?.total ?? 0
 
   return (
-    <>
+    <div className="platform-dash">
       <PageHeader
-        title="Platform Admin"
-        description="SaaS analytics across all organizations, users, and product activity"
+        title="Platform"
+        description="Every organization, every member, and every AI turn’s token count"
       />
 
-      <div className="page-body stack" style={{ gap: '2rem' }}>
-        {analyticsQ.error && <p className="error">{(analyticsQ.error as Error).message}</p>}
+      <div className="page-body stack" style={{ gap: '1.5rem' }}>
+        {overviewQ.error && <p className="error">{(overviewQ.error as Error).message}</p>}
 
-        {/* Primary KPIs */}
         <div className="metrics-grid">
           <MetricCard
             icon={Building2}
             tone="purple"
             label="Organizations"
-            value={t?.organizations ?? '—'}
-            hint={
-              <>
-                {(t?.suspended_organizations ?? 0) > 0 ? `${t?.suspended_organizations} suspended · ` : ''}
-                +{g?.orgs_last_7d ?? 0} this week
-              </>
-            }
+            value={totals?.organizations ?? '—'}
+            hint={`${totals?.memberships ?? 0} memberships`}
           />
           <MetricCard
             icon={Users}
             tone="blue"
-            label="Platform users"
-            value={t?.users ?? '—'}
-            hint={`${t?.super_admins ?? 0} super admins · +${g?.users_last_7d ?? 0} this week`}
+            label="Users"
+            value={totals?.users ?? '—'}
+            hint={`${totals?.super_admins ?? 0} super admins`}
           />
           <MetricCard
-            icon={Activity}
+            icon={Bot}
             tone="green"
-            label="Total leads"
-            value={t?.leads ?? '—'}
-            hint={`${g?.leads_last_24h ?? 0} last 24h · +${g?.leads_last_7d ?? 0} this week`}
+            label="AI turns"
+            value={ai ? fmtNum(ai.turns) : '—'}
+            hint={`${fmtNum(ai?.last_7d.turns ?? 0)} last 7 days`}
           />
           <MetricCard
-            icon={CreditCard}
-            tone="purple"
-            label="Est. MRR"
-            value={a ? formatInr(a.plans.estimated_mrr_inr) : '—'}
-            hint={`${t?.active_subscriptions ?? 0} active subscriptions`}
+            icon={Coins}
+            tone="amber"
+            label="Tokens"
+            value={ai ? fmtNum(ai.total_tokens) : '—'}
+            hint={`${fmtNum(ai?.prompt_tokens ?? 0)} in · ${fmtNum(ai?.completion_tokens ?? 0)} out`}
+          />
+          <MetricCard
+            icon={Coins}
+            tone="slate"
+            label="Credits billed"
+            value={ai ? fmtNum(ai.credits) : '—'}
+            hint={`${fmtNum(ai?.last_7d.credits ?? 0)} last 7 days`}
           />
         </div>
 
-        {/* Product volume */}
-        <section>
-          <div className="section-title" style={{ marginBottom: '1rem' }}>
-            <BarChart2 size={16} style={{ marginRight: 6 }} />
-            Platform volume
-          </div>
-          <div className="metrics-grid">
-            <div className="metric-card">
-              <div className="metric-label"><Users size={14} /> Memberships</div>
-              <div className="metric-value">{t?.memberships ?? '—'}</div>
-            </div>
-            <div className="metric-card">
-              <div className="metric-label"><FileText size={14} /> Quotations</div>
-              <div className="metric-value">{t?.quotations ?? '—'}</div>
-            </div>
-            <div className="metric-card">
-              <div className="metric-label"><Zap size={14} /> Production orders</div>
-              <div className="metric-value">{t?.production_orders ?? '—'}</div>
-            </div>
-            <div className="metric-card">
-              <div className="metric-label"><Phone size={14} /> Calls</div>
-              <div className="metric-value">{t?.calls ?? '—'}</div>
-            </div>
-            <div className="metric-card">
-              <div className="metric-label"><MessageCircle size={14} /> WhatsApp threads</div>
-              <div className="metric-value">{t?.whatsapp_threads ?? '—'}</div>
-            </div>
-            <div className="metric-card">
-              <div className="metric-label"><Plug size={14} /> Integrations</div>
-              <div className="metric-value">
-                {(t?.lead_connections ?? 0) + (t?.automation_connections ?? 0) + (t?.telephony_configs ?? 0)}
-              </div>
-              <div className="metric-sub">
-                leads {t?.lead_connections ?? 0} · automation {t?.automation_connections ?? 0} · telephony {t?.telephony_configs ?? 0}
-              </div>
-            </div>
-            <div className="metric-card">
-              <div className="metric-label">Payments / expenses</div>
-              <div className="metric-value">{(t?.payments ?? 0) + (t?.expenses ?? 0)}</div>
-              <div className="metric-sub">{t?.payments ?? 0} payments · {t?.expenses ?? 0} expenses</div>
-            </div>
-            <div className="metric-card">
-              <div className="metric-label">Catalog items</div>
-              <div className="metric-value">{t?.catalog_items ?? '—'}</div>
-              <div className="metric-sub">{t?.outbound_messages ?? 0} outbound messages</div>
-            </div>
-          </div>
-        </section>
-
-        {/* Plans + growth charts */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.25rem' }}>
-          <div className="card">
-            <div className="section-title" style={{ marginBottom: '0.85rem' }}>
-              <CreditCard size={15} style={{ marginRight: 6 }} />
-              Plans
-            </div>
-            <div className="stack" style={{ gap: '0.55rem' }}>
-              {(['free', 'growth', 'scale'] as const).map((p) => (
-                <div key={p} className="row" style={{ justifyContent: 'space-between' }}>
-                  <span className={`badge ${PLAN_COLOR[p]}`}>{p}</span>
-                  <strong>{planCounts[p] ?? 0}</strong>
-                </div>
-              ))}
-              {Object.entries(planCounts)
-                .filter(([k]) => !['free', 'growth', 'scale'].includes(k))
-                .map(([k, v]) => (
-                  <div key={k} className="row" style={{ justifyContent: 'space-between' }}>
-                    <span className="badge badge-slate">{k}</span>
-                    <strong>{v}</strong>
-                  </div>
-                ))}
-            </div>
-          </div>
-
-          <div className="card">
-            <div className="section-title" style={{ marginBottom: '0.85rem' }}>
-              <TrendingUp size={15} style={{ marginRight: 6 }} />
-              New users (14d)
-            </div>
-            {a ? <MiniBars series={a.series.daily} field="users" /> : <p className="muted small">Loading…</p>}
-            <p className="muted small" style={{ marginTop: '0.65rem' }}>+{g?.users_last_30d ?? 0} in last 30 days</p>
-          </div>
-
-          <div className="card">
-            <div className="section-title" style={{ marginBottom: '0.85rem' }}>
-              <Building2 size={15} style={{ marginRight: 6 }} />
-              New orgs (14d)
-            </div>
-            {a ? <MiniBars series={a.series.daily} field="organizations" /> : <p className="muted small">Loading…</p>}
-            <p className="muted small" style={{ marginTop: '0.65rem' }}>+{g?.orgs_last_30d ?? 0} in last 30 days</p>
-          </div>
-
-          <div className="card">
-            <div className="section-title" style={{ marginBottom: '0.85rem' }}>
-              <Activity size={15} style={{ marginRight: 6 }} />
-              New leads (14d)
-            </div>
-            {a ? <MiniBars series={a.series.daily} field="leads" /> : <p className="muted small">Loading…</p>}
-            <p className="muted small" style={{ marginTop: '0.65rem' }}>+{g?.leads_last_7d ?? 0} in last 7 days</p>
-          </div>
+        <div className="platform-search">
+          <Search size={15} />
+          <input
+            className="input"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search orgs, emails, names…"
+          />
         </div>
 
-        {/* Top orgs table */}
-        <section>
-          <div className="section-title" style={{ marginBottom: '1rem' }}>Top organizations by activity</div>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Organization</th>
-                  <th>Plan</th>
-                  <th>Members</th>
-                  <th>Leads</th>
-                  <th>Quotations</th>
-                  <th>Orders</th>
-                  <th>Calls</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(a?.top_organizations ?? []).map((o) => (
-                  <tr key={o.id}>
-                    <td>
-                      <div style={{ fontWeight: 600 }}>{o.name}</div>
-                      <div className="muted small">{o.slug}{o.suspended ? ' · suspended' : ''}</div>
-                    </td>
-                    <td><span className={`badge ${PLAN_COLOR[(o.plan || 'free').toLowerCase()] ?? 'badge-slate'}`}>{(o.plan || 'free').toLowerCase()}</span></td>
-                    <td>{o.members}</td>
-                    <td>{o.leads}</td>
-                    <td>{o.quotations}</td>
-                    <td>{o.production_orders}</td>
-                    <td>{o.calls}</td>
+        <div className="platform-split">
+          <section className="card platform-orgs">
+            <div className="section-title" style={{ marginBottom: '0.75rem' }}>Organizations</div>
+            <div className="table-wrap" style={{ border: 'none', boxShadow: 'none' }}>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Org</th>
+                    <th>People</th>
+                    <th>Tokens</th>
+                    <th>7d</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-            {analyticsQ.isLoading && <p className="muted" style={{ padding: '1rem' }}>Loading analytics…</p>}
-            {!analyticsQ.isLoading && (a?.top_organizations.length ?? 0) === 0 && (
-              <div className="empty-state"><p>No organization activity yet</p></div>
-            )}
-          </div>
-        </section>
-
-        {/* Org management */}
-        <section>
-          <div className="section-title" style={{ marginBottom: '1rem' }}>
-            Organizations
-            {orgsQ.isLoading && <span className="muted small" style={{ marginLeft: '0.5rem' }}>Loading…</span>}
-          </div>
-          {orgsQ.error && <p className="error">{(orgsQ.error as Error).message}</p>}
-          <div className="orgs-grid">
-            {orgs.map((o) => (
-              <OrgCard
-                key={o.id}
-                org={o}
-                onSuspendChange={(id, val) => patchOrg.mutate({ id, suspended: val })}
-                onPlanChange={(id, plan) => patchOrg.mutate({ id, plan })}
-                onExtraSeatsChange={(id, extra_seats) => patchOrg.mutate({ id, extra_seats })}
-                onJoin={(id) => joinSupport.mutate(id)}
-                joinPending={joinSupport.isPending}
-                patchPending={patchOrg.isPending}
-              />
-            ))}
-          </div>
-          {orgs.length === 0 && !orgsQ.isLoading && (
-            <div className="empty-state">
-              <Building2 size={32} />
-              <p>No organizations yet</p>
+                </thead>
+                <tbody>
+                  {filteredOrgs.map((o) => {
+                    const active = selected?.id === o.id
+                    return (
+                      <tr
+                        key={o.id}
+                        className={active ? 'platform-row-active' : undefined}
+                        style={{ cursor: 'pointer' }}
+                        onClick={() => {
+                          setSelectedOrgId(o.id)
+                          setTurnSkip(0)
+                        }}
+                      >
+                        <td>
+                          <div style={{ fontWeight: 650 }}>{o.name}</div>
+                          <div className="muted small">
+                            <span className={`badge ${PLAN_COLOR[o.plan] ?? 'badge-slate'}`}>{o.plan}</span>
+                            {o.suspended ? ' · suspended' : ''}
+                          </div>
+                        </td>
+                        <td>{o.member_count}</td>
+                        <td className="platform-num">{fmtNum(o.ai.total_tokens)}</td>
+                        <td className="muted small platform-num">{fmtNum(o.ai.last_7d.total_tokens)}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+              {overviewQ.isLoading && <p className="muted" style={{ padding: '1rem' }}>Loading…</p>}
+              {!overviewQ.isLoading && filteredOrgs.length === 0 && (
+                <div className="empty-state"><p>No organizations match</p></div>
+              )}
             </div>
-          )}
-        </section>
+          </section>
 
-        <section>
-          <div className="section-title">Add Membership</div>
-          <div className="card" style={{ maxWidth: 640 }}>
-            <form
-              className="stack"
-              onSubmit={(e) => {
-                e.preventDefault()
-                if (addOrgId && addEmail) addMembership.mutate()
-              }}
-            >
-              <div className="row" style={{ gap: '0.75rem' }}>
-                <div className="form-field" style={{ flex: 1 }}>
-                  <label className="input-label">Organization</label>
-                  <select className="select" value={addOrgId} onChange={(e) => setAddOrgId(e.target.value)} style={{ width: '100%' }}>
-                    <option value="">Select org…</option>
-                    {orgs.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-                  </select>
+          <section className="card platform-detail">
+            {!selected ? (
+              <div className="empty-state"><p>Select an organization</p></div>
+            ) : (
+              <div className="stack" style={{ gap: '1.15rem' }}>
+                <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
+                  <div style={{ minWidth: 0, flex: '1 1 12rem' }}>
+                    <div className="org-name" style={{ fontSize: '1.05rem' }}>{selected.name}</div>
+                    <div className="org-slug">{selected.slug}</div>
+                  </div>
+                  <div className="platform-detail-actions">
+                    {selected.suspended && <span className="badge badge-red">Suspended</span>}
+                    <select
+                      className="select"
+                      value={PLAN_OPTIONS.includes(selected.plan as (typeof PLAN_OPTIONS)[number]) ? selected.plan : 'free'}
+                      disabled={patchOrg.isPending}
+                      onChange={(e) => patchOrg.mutate({ id: selected.id, plan: e.target.value })}
+                    >
+                      {PLAN_OPTIONS.map((p) => <option key={p} value={p}>{p}</option>)}
+                    </select>
+                    <input
+                      className="input"
+                      type="number"
+                      min={0}
+                      max={500}
+                      title="Extra seats"
+                      defaultValue={selected.extra_seats ?? 0}
+                      key={`${selected.id}-${selected.extra_seats}`}
+                      disabled={patchOrg.isPending}
+                      onBlur={(e) => {
+                        const n = Number(e.target.value)
+                        if (!Number.isNaN(n) && n >= 0 && n !== (selected.extra_seats ?? 0)) {
+                          patchOrg.mutate({ id: selected.id, extra_seats: n })
+                        }
+                      }}
+                      style={{ width: 88 }}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      disabled={joinSupport.isPending}
+                      onClick={() => joinSupport.mutate(selected.id)}
+                    >
+                      <UserPlus size={13} />
+                      Join as owner
+                    </button>
+                  </div>
                 </div>
-                <div className="form-field" style={{ flex: 1 }}>
-                  <label className="input-label">User email</label>
-                  <input
-                    className="input"
-                    type="email"
-                    placeholder="user@email.com"
-                    value={addEmail}
-                    onChange={(e) => setAddEmail(e.target.value)}
-                    style={{ width: '100%' }}
-                    required
-                  />
+
+                <div className="platform-kpi-row">
+                  <div>
+                    <div className="muted small">Turns</div>
+                    <strong>{fmtNum(selected.ai.turns)}</strong>
+                  </div>
+                  <div>
+                    <div className="muted small">Prompt</div>
+                    <strong>{fmtNum(selected.ai.prompt_tokens)}</strong>
+                  </div>
+                  <div>
+                    <div className="muted small">Completion</div>
+                    <strong>{fmtNum(selected.ai.completion_tokens)}</strong>
+                  </div>
+                  <div>
+                    <div className="muted small">Avg / turn</div>
+                    <strong>{fmtNum(selected.ai.avg_tokens_per_turn)}</strong>
+                  </div>
+                  <div>
+                    <div className="muted small">Credits</div>
+                    <strong>{fmtNum(selected.ai.credits)}</strong>
+                  </div>
                 </div>
-                <div className="form-field">
-                  <label className="input-label">Role</label>
+
+                <div className="stack" style={{ gap: '0.65rem' }}>
+                  <WindowBar label="5-hour session credits" window={selected.ai.windows.session_5h} />
+                  <WindowBar label="Weekly credits" window={selected.ai.windows.weekly} />
+                </div>
+
+                <div>
+                  <div className="section-title" style={{ marginBottom: '0.65rem' }}>
+                    Members
+                    <span className="muted small" style={{ marginLeft: 8, fontWeight: 500 }}>
+                      role is MembershipRole in the DB
+                    </span>
+                  </div>
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>User</th>
+                          <th>Role</th>
+                          <th>Joined</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selected.members.map((m) => (
+                          <tr key={m.membership_id}>
+                            <td>
+                              <div style={{ fontWeight: 600 }}>{m.email}</div>
+                              <div className="muted small">
+                                {m.name || '—'}
+                                {m.is_super_admin ? ' · super admin' : ''}
+                              </div>
+                            </td>
+                            <td>
+                              <div>{m.role}</div>
+                              <div className="muted small">{roleLabel(m.role)}</div>
+                            </td>
+                            <td className="muted small">{m.joined_at ? timeAgo(m.joined_at) : '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {selected.members.length === 0 && (
+                      <div className="empty-state"><p>No members</p></div>
+                    )}
+                  </div>
+                </div>
+
+                <form
+                  className="row"
+                  style={{ gap: '0.5rem', flexWrap: 'wrap', alignItems: 'flex-end' }}
+                  onSubmit={(e) => {
+                    e.preventDefault()
+                    if (selected && addEmail) addMembership.mutate()
+                  }}
+                >
+                  <div className="form-field" style={{ flex: 1, minWidth: 180 }}>
+                    <label className="input-label">Add existing user</label>
+                    <input
+                      className="input"
+                      type="email"
+                      placeholder="user@email.com"
+                      value={addEmail}
+                      onChange={(e) => setAddEmail(e.target.value)}
+                      required
+                    />
+                  </div>
                   <select className="select" value={addRole} onChange={(e) => setAddRole(e.target.value)}>
                     {MEMBERSHIP_ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
                   </select>
+                  <button type="submit" className="btn" disabled={addMembership.isPending}>
+                    Add
+                  </button>
+                  <label className="row small muted" style={{ gap: '0.4rem', marginLeft: 'auto' }}>
+                    Suspend
+                    <label className="toggle">
+                      <input
+                        type="checkbox"
+                        checked={selected.suspended}
+                        disabled={patchOrg.isPending}
+                        onChange={(e) => patchOrg.mutate({ id: selected.id, suspended: e.target.checked })}
+                      />
+                      <span className="toggle-slider" />
+                    </label>
+                  </label>
+                </form>
+                {addMembership.error && <p className="error">{(addMembership.error as Error).message}</p>}
+
+                <div>
+                  <div className="row" style={{ justifyContent: 'space-between', marginBottom: '0.65rem' }}>
+                    <div className="section-title" style={{ margin: 0 }}>
+                      AI turns
+                      <span className="muted small" style={{ marginLeft: 8, fontWeight: 500 }}>
+                        one row per message / turn
+                      </span>
+                    </div>
+                    <div className="row" style={{ gap: 6 }}>
+                      {([7, 30, null] as const).map((d) => (
+                        <button
+                          key={String(d)}
+                          type="button"
+                          className={`btn btn-ghost btn-sm${turnDays === d ? ' active' : ''}`}
+                          onClick={() => {
+                            setTurnDays(d)
+                            setTurnSkip(0)
+                          }}
+                        >
+                          {d ? `${d}d` : 'All'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>When</th>
+                          <th>Who</th>
+                          <th>Source</th>
+                          <th>In</th>
+                          <th>Out</th>
+                          <th>Total</th>
+                          <th>Credits</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {turns.map((t) => (
+                          <tr key={t.id}>
+                            <td className="muted small">{t.created_at ? timeAgo(t.created_at) : '—'}</td>
+                            <td>
+                              <div>{t.user_email || t.conversation_title || '—'}</div>
+                              <div className="muted small">{t.model || t.source}</div>
+                            </td>
+                            <td className="muted small">{t.source}</td>
+                            <td className="platform-num">{fmtNum(t.prompt_tokens)}</td>
+                            <td className="platform-num">{fmtNum(t.completion_tokens)}</td>
+                            <td className="platform-num" style={{ fontWeight: 650 }}>{fmtNum(t.total_tokens)}</td>
+                            <td className="platform-num">{fmtNum(t.credits)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {turnsQ.isLoading && <p className="muted" style={{ padding: '1rem' }}>Loading turns…</p>}
+                    {!turnsQ.isLoading && turns.length === 0 && (
+                      <div className="empty-state"><p>No AI turns in this window</p></div>
+                    )}
+                  </div>
+                  {turnsTotal > turns.length && (
+                    <div className="row" style={{ marginTop: '0.65rem', gap: '0.5rem' }}>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        disabled={turnSkip === 0}
+                        onClick={() => setTurnSkip((n) => Math.max(0, n - 50))}
+                      >
+                        Previous
+                      </button>
+                      <span className="muted small">
+                        {turnSkip + 1}–{Math.min(turnSkip + turns.length, turnsTotal)} of {fmtNum(turnsTotal)}
+                      </span>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        disabled={turnSkip + turns.length >= turnsTotal}
+                        onClick={() => setTurnSkip((n) => n + 50)}
+                      >
+                        Next
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
-              {addMembership.error && <p className="error">{(addMembership.error as Error).message}</p>}
-              {addMembership.isSuccess && <p className="success">Membership added.</p>}
-              <div>
-                <button type="submit" className="btn" disabled={addMembership.isPending || !addOrgId}>
-                  <UserPlus size={15} />
-                  Add membership
-                </button>
-              </div>
-            </form>
-          </div>
-        </section>
+            )}
+          </section>
+        </div>
 
         <section>
-          <div className="section-title" style={{ marginBottom: '1rem' }}>
-            All Users
-            {usersQ.isLoading && <span className="muted small" style={{ marginLeft: '0.5rem' }}>Loading…</span>}
+          <div className="section-title" style={{ marginBottom: '0.75rem' }}>
+            All users
+            <span className="muted small" style={{ marginLeft: 8, fontWeight: 500 }}>
+              platform flag is users.is_super_admin — not a membership role
+            </span>
           </div>
-          {usersQ.error && <p className="error">{(usersQ.error as Error).message}</p>}
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
                   <th>User</th>
+                  <th>Organizations</th>
                   <th>Joined</th>
-                  <th>Super Admin</th>
+                  <th>Super admin</th>
                 </tr>
               </thead>
               <tbody>
-                {users.map((u) => (
+                {filteredUsers.map((u) => (
                   <tr key={u.id}>
                     <td>
                       <div style={{ fontWeight: 600 }}>{u.email}</div>
-                      {u.name && <div className="muted small">{u.name}</div>}
+                      <div className="muted small">{u.name || '—'}</div>
                     </td>
-                    <td className="muted small">
-                      <div className="row" style={{ gap: '0.3rem' }}>
-                        <CalendarDays size={13} />
-                        {new Date(u.created_at).toLocaleDateString('en-IN')}
-                      </div>
+                    <td>
+                      {u.organizations.length === 0 ? (
+                        <span className="muted small">No org</span>
+                      ) : (
+                        <div className="platform-chips">
+                          {u.organizations.map((o) => (
+                            <button
+                              key={`${u.id}-${o.id}`}
+                              type="button"
+                              className="platform-chip"
+                              onClick={() => {
+                                setSelectedOrgId(o.id)
+                                setTurnSkip(0)
+                              }}
+                            >
+                              {o.name}
+                              <span>{o.role}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </td>
+                    <td className="muted small">{u.created_at ? timeAgo(u.created_at) : '—'}</td>
                     <td>
                       <label className="toggle">
                         <input
@@ -644,14 +651,12 @@ export function AdminPage() {
                 ))}
               </tbody>
             </table>
-            {users.length === 0 && !usersQ.isLoading && (
-              <div className="empty-state">
-                <p>No users found</p>
-              </div>
+            {filteredUsers.length === 0 && !overviewQ.isLoading && (
+              <div className="empty-state"><p>No users match</p></div>
             )}
           </div>
         </section>
       </div>
-    </>
+    </div>
   )
 }

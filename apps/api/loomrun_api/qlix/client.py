@@ -51,6 +51,13 @@ class QlixError(Exception):
         return self.code == "rate_limited" or self.status_code == 429
 
     @property
+    def unauthorized(self) -> bool:
+        return self.status_code == 401 or self.code in (
+            "unauthorized",
+            "session_required",
+        )
+
+    @property
     def retryable(self) -> bool:
         """Worth trying again later — as opposed to a bad request we sent."""
         if self.rate_limited:
@@ -155,19 +162,27 @@ async def _request(
 
 # ── Provisioning (partner secret) ─────────────────────────────────────────────
 
-async def register_partner(*, slug: str, name: str) -> dict[str, Any]:
+async def register_partner(
+    *, slug: str, name: str, admin_key: str | None = None
+) -> dict[str, Any]:
     """Register Loomrun as a Qlix partner product. One-time bootstrap.
 
-    Deliberately unauthenticated — this is how a product gets its identity in
-    the first place. The returned ``qlix_partner_*`` key is shown once, so the
-    caller must store it; a taken slug returns ``409 slug_taken``.
+    Not part of the runtime activation path — this is run once, by hand, to
+    mint the ``qlix_partner_*`` key that then goes into ``QLIX_PARTNER_KEY``.
+    Qlix gates it behind ``PARTNER_REGISTRATION_KEY`` (an operator secret,
+    separate from any per-partner key); pass it as ``admin_key``. The
+    returned key is shown once, so the caller must store it; a taken slug
+    returns ``409 slug_taken``.
     """
     url = f"{_base_url()}/partners/register"
+    headers = {"Content-Type": "application/json"}
+    if admin_key:
+        headers["X-Admin-Key"] = admin_key
     try:
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
             response = await client.post(
                 url,
-                headers={"Content-Type": "application/json"},
+                headers=headers,
                 json={"slug": slug, "name": name},
             )
     except httpx.HTTPError as exc:
@@ -445,6 +460,39 @@ async def create_conversation(api_key: str, agent_id: str) -> dict[str, Any]:
     )
 
 
+def _enqueue_run_payload(
+    *,
+    content: str,
+    use_brain: bool,
+    model: str | None,
+    tool_context: dict[str, str] | None,
+    external_run_id: str | None,
+    correlation_id: str | None,
+    allowed_mcp_tools: list[str] | None = None,
+) -> dict[str, Any]:
+    """Body Qlix accepts for starting a run.
+
+    ``externalRunId`` is how Qlix de-duplicates a run that Loomrun retries
+    after a network failure — it must be stable for the same user message.
+    ``correlationId`` just rides along in ``metadata`` so the same id can be
+    grepped across the browser request, this run and any MCP calls it makes.
+    ``allowedMcpTools`` is an optional per-run advertise list; omit or empty
+    means Qlix keeps the full bound MCP catalog.
+    """
+    payload: dict[str, Any] = {"content": content[:20000], "useBrain": use_brain}
+    if model:
+        payload["model"] = model
+    if tool_context:
+        payload["toolContext"] = tool_context
+    if external_run_id:
+        payload["externalRunId"] = external_run_id
+    if correlation_id:
+        payload["metadata"] = {"correlationId": correlation_id, "source": "loomrun"}
+    if allowed_mcp_tools:
+        payload["allowedMcpTools"] = list(allowed_mcp_tools)
+    return payload
+
+
 async def enqueue_run(
     api_key: str,
     *,
@@ -454,6 +502,9 @@ async def enqueue_run(
     use_brain: bool = True,
     model: str | None = None,
     tool_context: dict[str, str] | None = None,
+    external_run_id: str | None = None,
+    correlation_id: str | None = None,
+    allowed_mcp_tools: list[str] | None = None,
 ) -> dict[str, Any]:
     """Send a message and start a run.
 
@@ -461,11 +512,15 @@ async def enqueue_run(
     verbatim on every MCP tool call in this run, which is how the tool server
     learns which org and user it is acting for.
     """
-    payload: dict[str, Any] = {"content": content[:20000], "useBrain": use_brain}
-    if model:
-        payload["model"] = model
-    if tool_context:
-        payload["toolContext"] = tool_context
+    payload = _enqueue_run_payload(
+        content=content,
+        use_brain=use_brain,
+        model=model,
+        tool_context=tool_context,
+        external_run_id=external_run_id,
+        correlation_id=correlation_id,
+        allowed_mcp_tools=allowed_mcp_tools,
+    )
     return await _request(
         "POST",
         f"/agents/{agent_id}/conversations/{conversation_id}/messages",

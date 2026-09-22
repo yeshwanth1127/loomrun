@@ -23,12 +23,23 @@ import { useSpeechToText } from '../hooks/useSpeechToText'
 import { routes } from '../lib/appRoutes'
 import { apiFetch, apiStream } from '../lib/api'
 import { aiModeLabel, qlixCrmSyncing, type AiStatus } from '../lib/entitlements'
-import { QlixActivation, QlixDocuments, QlixSyncNote } from '../components/QlixActivation'
+import {
+  QlixActivation,
+  QlixDocuments,
+  QlixReconnectBanner,
+  QlixSyncNote,
+} from '../components/QlixActivation'
+import { applyCrmMutations, type CrmMutation } from '../lib/crmMutations'
 
 const CONV_STORAGE_KEY = 'loomrun.ai.conversation'
 const ACTIVATION_SEEN_KEY = 'loomrun.ai.activationSeen'
 const HISTORY_STORAGE_KEY = 'loomrun.ai.history'
 const VOICE_STORAGE_KEY = 'loomrun.ai.voice'
+// Fallback typewriter when a reply arrives in one piece (local agent).
+// One frame × ~32 ticks keeps the motion without the old ~20s crawl.
+const STREAM_TICK_MS = 16
+const STREAM_TARGET_TICKS = 32
+const STREAM_MIN_CHARS_PER_TICK = 8
 
 type Citation = {
   title?: string
@@ -43,6 +54,7 @@ type ChatMessage = {
   pendingActions?: PendingAction[]
   resolvedActionIds?: string[]
   autoApproved?: AutoApproved[]
+  crmMutations?: CrmMutation[]
   citations?: Citation[]
   id?: string
 }
@@ -101,6 +113,7 @@ type ChatResponse = {
   conversation_id?: string
   pending_actions?: PendingAction[]
   auto_approved?: AutoApproved[]
+  crm_mutations?: CrmMutation[]
   citations?: Citation[]
 }
 
@@ -113,6 +126,7 @@ type StreamEvent = {
     | 'delta'
     | 'pending_action'
     | 'auto_approved'
+    | 'crm_mutation'
     | 'tool'
     | 'log'
     | 'status'
@@ -121,6 +135,7 @@ type StreamEvent = {
     | 'error'
   text?: string
   action?: PendingAction & AutoApproved
+  mutation?: CrmMutation
   run_id?: string
   conversation_id?: string
   detail?: string
@@ -137,6 +152,7 @@ type ActionResult = {
   result?: unknown
   action_id: string
   status: string
+  crm_mutations?: CrmMutation[]
 }
 
 function readStored(key: string): string | null {
@@ -207,6 +223,32 @@ function ApprovalCountdown({ expiresAt }: { expiresAt?: string }) {
  * it. A granted permission should never be silent, so every use is shown after
  * the fact with a one-click way to take the permission back.
  */
+function CrmMutationNotice({ items }: { items: CrmMutation[] }) {
+  if (!items.length) return null
+  return (
+    <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {items.map((m, i) => (
+        <div
+          key={`${m.entity}-${m.id}-${i}`}
+          className="small"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '0.5rem 0.7rem',
+            borderRadius: 8,
+            background: '#eff6ff',
+            border: '1px solid #bfdbfe',
+          }}
+        >
+          <Check size={14} style={{ color: '#1d4ed8', flexShrink: 0 }} />
+          <span style={{ flex: 1, minWidth: 0 }}>{m.summary}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function AutoApprovedNotice({
   items,
   onRevoke,
@@ -390,6 +432,7 @@ export function AiChatPage() {
     shown: string
     pendingActions?: PendingAction[]
     autoApproved?: AutoApproved[]
+    crmMutations?: CrmMutation[]
     citations?: Citation[]
   } | null>(null)
   const streamingActiveRef = useRef(false)
@@ -487,6 +530,7 @@ export function AiChatPage() {
       pendingActions?: PendingAction[],
       citations?: Citation[],
       autoApproved?: AutoApproved[],
+      crmMutations?: CrmMutation[],
     ) => {
       setMessages((prev) => [
         ...prev,
@@ -495,6 +539,7 @@ export function AiChatPage() {
           content: reply,
           pendingActions: pendingActions?.length ? pendingActions : undefined,
           autoApproved: autoApproved?.length ? autoApproved : undefined,
+          crmMutations: crmMutations?.length ? crmMutations : undefined,
           citations: citations?.length ? citations : undefined,
         },
       ])
@@ -516,19 +561,29 @@ export function AiChatPage() {
       pendingActions?: PendingAction[],
       citations?: Citation[],
       autoApproved?: AutoApproved[],
+      crmMutations?: CrmMutation[],
     ) => {
       if (streamTimerRef.current) {
         clearInterval(streamTimerRef.current)
         streamTimerRef.current = null
       }
       if (!reply) {
-        finalizeStreamingReply(reply, pendingActions, citations, autoApproved)
+        finalizeStreamingReply(reply, pendingActions, citations, autoApproved, crmMutations)
         return
       }
-      setStreamingReply({ full: reply, shown: '', pendingActions, citations, autoApproved })
+      setStreamingReply({
+        full: reply,
+        shown: '',
+        pendingActions,
+        citations,
+        autoApproved,
+        crmMutations,
+      })
       if (voiceEnabledRef.current) voice.speak(reply)
-      const TICK_MS = 90
-      const charsPerTick = Math.max(1, Math.round(reply.length / 220))
+      const charsPerTick = Math.max(
+        STREAM_MIN_CHARS_PER_TICK,
+        Math.ceil(reply.length / STREAM_TARGET_TICKS),
+      )
       streamTimerRef.current = setInterval(() => {
         setStreamingReply((cur) => {
           if (!cur) return cur
@@ -539,7 +594,7 @@ export function AiChatPage() {
           }
           return { ...cur, shown: cur.full.slice(0, nextLen) }
         })
-      }, TICK_MS)
+      }, STREAM_TICK_MS)
     },
     [finalizeStreamingReply, voice],
   )
@@ -574,6 +629,7 @@ export function AiChatPage() {
       let sawDelta = false
       const actions: PendingAction[] = []
       const auto: AutoApproved[] = []
+      const mutations: CrmMutation[] = []
 
       await apiStream(
         `/v1/orgs/${orgId}/ai/chat/stream`,
@@ -583,6 +639,7 @@ export function AiChatPage() {
             message: payload.message,
             model: payload.model,
             conversation_id: payload.conversation_id,
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
             history: payload.history.map(({ role, content }) => ({ role, content })),
           },
         },
@@ -634,6 +691,19 @@ export function AiChatPage() {
                 void queryClient.invalidateQueries({ queryKey: ['ai-grants', orgId] })
               }
               break
+            case 'crm_mutation':
+              if (event.mutation) {
+                mutations.push(event.mutation)
+                if (orgId) {
+                  applyCrmMutations(queryClient, orgId, [event.mutation], { toast: false })
+                }
+                setStreamingReply((cur) =>
+                  cur
+                    ? { ...cur, crmMutations: [...mutations] }
+                    : { full: '', shown: '', crmMutations: [...mutations] },
+                )
+              }
+              break
             case 'reset':
               // The agent handed the turn back to the local model; drop the
               // partial so the user does not see two different answers, and
@@ -649,6 +719,10 @@ export function AiChatPage() {
               const reply = event.reply ?? streamed
               const pending = event.pending_actions ?? actions
               const approved = event.auto_approved ?? auto
+              const doneMutations = event.crm_mutations ?? mutations
+              if (orgId && doneMutations.length) {
+                applyCrmMutations(queryClient, orgId, doneMutations)
+              }
               if (sawDelta) {
                 // The text is already on screen. Settle the final version and
                 // let the user dismiss the overlay, same as the other path.
@@ -657,11 +731,12 @@ export function AiChatPage() {
                   shown: reply,
                   pendingActions: pending,
                   autoApproved: approved,
+                  crmMutations: doneMutations,
                   citations: event.citations,
                 })
                 if (voiceEnabledRef.current) voice.speak(reply)
               } else {
-                beginStreamingReply(reply, pending, event.citations, approved)
+                beginStreamingReply(reply, pending, event.citations, approved, doneMutations)
               }
               break
             }
@@ -699,6 +774,7 @@ export function AiChatPage() {
       streamingReply.pendingActions,
       streamingReply.citations,
       streamingReply.autoApproved,
+      streamingReply.crmMutations,
     )
   }, [streamingReply, chat.isPending, finalizeStreamingReply])
 
@@ -844,8 +920,7 @@ export function AiChatPage() {
       })
       // Confirming also opens a 24-hour standing approval for that tool.
       void queryClient.invalidateQueries({ queryKey: ['ai-grants', orgId] })
-      void queryClient.invalidateQueries({ queryKey: ['leads'] })
-      void queryClient.invalidateQueries({ queryKey: ['quotations'] })
+      if (orgId) applyCrmMutations(queryClient, orgId, data.crm_mutations)
       setBusyActionId(null)
     },
     onError: () => setBusyActionId(null),
@@ -973,6 +1048,10 @@ export function AiChatPage() {
               View subscription plans
             </Link>
           </div>
+        )}
+
+        {available && orgId && (
+          <QlixReconnectBanner orgId={orgId} qlix={qlix} />
         )}
 
         {available && showActivation && orgId && (
@@ -1250,6 +1329,9 @@ export function AiChatPage() {
                       >
                         {m.content}
                       </div>
+                      {m.role === 'assistant' && m.crmMutations?.length ? (
+                        <CrmMutationNotice items={m.crmMutations} />
+                      ) : null}
                       {m.role === 'assistant' && m.autoApproved?.length ? (
                         <AutoApprovedNotice
                           items={m.autoApproved}
@@ -1345,6 +1427,9 @@ export function AiChatPage() {
                         <span className="ai-stream-cursor" />
                       )}
                     </div>
+                    {streamingReply.crmMutations?.length ? (
+                      <CrmMutationNotice items={streamingReply.crmMutations} />
+                    ) : null}
                   </div>
                 )}
                 {chat.error && <p className="error">{(chat.error as Error).message}</p>}

@@ -248,6 +248,58 @@ export function OrdersPage() {
           )}
         </div>
 
+        {orders.length > 0 && (
+          <InsightGrid>
+            <InsightCard title="Where orders stand">
+              <DonutChart
+                segments={[
+                  { label: 'Being made', value: runningCount, color: '#3D7A5A' },
+                  { label: 'Finished', value: doneCount, color: '#2563eb' },
+                  { label: 'Late', value: lateCount, color: '#B42318' },
+                ]}
+                center={{ value: orders.length, label: 'Orders' }}
+              />
+              <DonutLegend
+                segments={[
+                  { label: 'Being made', value: runningCount, color: '#3D7A5A' },
+                  { label: 'Finished', value: doneCount, color: '#2563eb' },
+                  { label: 'Late', value: lateCount, color: '#B42318' },
+                ]}
+                total={orders.length}
+              />
+            </InsightCard>
+            <InsightCard title="Work by stage">
+              <BarList
+                items={STAGES.map((s) => ({
+                  label: STAGE_LABELS[s],
+                  value: orders.filter((o) => o.stage === s).length,
+                  color: STAGE_COLOR[s],
+                })).filter((i) => i.value > 0)}
+              />
+            </InsightCard>
+            <InsightCard title="Next dispatches">
+              <UpcomingDispatches orders={orders} />
+            </InsightCard>
+            <InsightCard title="Quick actions">
+              <div className="quick-action-list">
+                {isOwner && (
+                  <button type="button" onClick={() => setShowForm(true)}>
+                    <Plus size={14} /> New order
+                  </button>
+                )}
+                {isOwner && (
+                  <Link to={routes.money('expenses')}>
+                    <Wallet size={14} /> Costs
+                  </Link>
+                )}
+                <button type="button" onClick={() => setActivityOpen((v) => !v)}>
+                  <ChevronRight size={14} /> {activityOpen ? 'Hide' : 'Show'} recent activity
+                </button>
+              </div>
+            </InsightCard>
+          </InsightGrid>
+        )}
+
         {isOwner && showForm && (
           <div className="card" style={{ maxWidth: 480 }}>
             <div style={{ fontWeight: 700, marginBottom: '1rem' }}>Start a new order</div>
@@ -302,58 +354,6 @@ export function OrdersPage() {
               <OrderCard key={o.id} order={o} isOwner={isOwner} />
             ))}
           </div>
-        )}
-
-        {orders.length > 0 && (
-          <InsightGrid>
-            <InsightCard title="Where orders stand">
-              <DonutChart
-                segments={[
-                  { label: 'Being made', value: runningCount, color: '#3D7A5A' },
-                  { label: 'Finished', value: doneCount, color: '#2563eb' },
-                  { label: 'Late', value: lateCount, color: '#B42318' },
-                ]}
-                center={{ value: orders.length, label: 'Orders' }}
-              />
-              <DonutLegend
-                segments={[
-                  { label: 'Being made', value: runningCount, color: '#3D7A5A' },
-                  { label: 'Finished', value: doneCount, color: '#2563eb' },
-                  { label: 'Late', value: lateCount, color: '#B42318' },
-                ]}
-                total={orders.length}
-              />
-            </InsightCard>
-            <InsightCard title="Work by stage">
-              <BarList
-                items={STAGES.map((s) => ({
-                  label: STAGE_LABELS[s],
-                  value: orders.filter((o) => o.stage === s).length,
-                  color: STAGE_COLOR[s],
-                })).filter((i) => i.value > 0)}
-              />
-            </InsightCard>
-            <InsightCard title="Next dispatches">
-              <UpcomingDispatches orders={orders} />
-            </InsightCard>
-            <InsightCard title="Quick actions">
-              <div className="quick-action-list">
-                {isOwner && (
-                  <button type="button" onClick={() => setShowForm(true)}>
-                    <Plus size={14} /> New order
-                  </button>
-                )}
-                {isOwner && (
-                  <Link to={routes.money('expenses')}>
-                    <Wallet size={14} /> Costs
-                  </Link>
-                )}
-                <button type="button" onClick={() => setActivityOpen((v) => !v)}>
-                  <ChevronRight size={14} /> {activityOpen ? 'Hide' : 'Show'} recent activity
-                </button>
-              </div>
-            </InsightCard>
-          </InsightGrid>
         )}
 
         {activityOpen && (

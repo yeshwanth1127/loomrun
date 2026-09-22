@@ -65,6 +65,8 @@ async def chat_messages(
     temperature: float = 0.2,
     tools: list[dict[str, Any]] | None = None,
     tool_choice: str | dict | None = None,
+    session_id: str | None = None,
+    max_tokens: int | None = None,
 ) -> dict[str, Any]:
     """Multi-turn chat completion via OpenRouter.
 
@@ -86,6 +88,15 @@ async def chat_messages(
         payload["tools"] = tools
         if tool_choice is not None:
             payload["tool_choice"] = tool_choice
+    if max_tokens:
+        payload["max_tokens"] = int(max_tokens)
+    # Ask for the cached-token breakdown so billing can discount reused prefixes,
+    # and pin the provider: OpenRouter only reuses a cached prefix when the
+    # request lands on the same provider it was written on.
+    payload["usage"] = {"include": True}
+    payload["provider"] = {"only": ["openai"], "allow_fallbacks": False}
+    if session_id:
+        payload["session_id"] = str(session_id)[:256]
 
     tool_names = [
         (t.get("function") or {}).get("name")

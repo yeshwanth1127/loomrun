@@ -1,7 +1,7 @@
 import './NoolrunWordmark.css'
 
 /** Cache-bust when logo assets are replaced. */
-const LOGO_SRC = '/noolrun-logo.png?v=3'
+const LOGO_SRC = '/noolrun-logo.png?v=5'
 
 type NoolrunWordmarkProps = {
   className?: string

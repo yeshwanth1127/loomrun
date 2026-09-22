@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from loomrun_api.prisma_client import prisma
 
 logger = logging.getLogger(__name__)
+
+# In-app advance reminders: one toast per window before the scheduled call.
+IN_APP_REMINDER_OFFSETS_MINUTES: tuple[int, ...] = (60, 30, 5)
 
 
 def follow_up_bucket(due: datetime | None, *, now: datetime | None = None) -> str:
@@ -47,25 +50,53 @@ def reminder_pending(reminded_at: datetime | None, next_follow_up_at: datetime) 
     return reminded_at < next_follow_up_at
 
 
-async def list_due_follow_ups_for_user(
+def active_reminder_offset(
+    due: datetime,
+    *,
+    now: datetime | None = None,
+    acked_offsets: list[int] | None = None,
+    offsets: tuple[int, ...] = IN_APP_REMINDER_OFFSETS_MINUTES,
+) -> int | None:
+    """Return the advance offset (minutes) that should notify now, if any.
+
+    Uses exclusive descending windows so a short schedule (e.g. 20 min out)
+    only fires the applicable nearer reminders, never a late "1 hour" toast.
+    """
+    now = now or datetime.now(timezone.utc)
+    if due.tzinfo is None:
+        due = due.replace(tzinfo=timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+
+    remaining_minutes = (due - now).total_seconds() / 60.0
+    if remaining_minutes <= 0:
+        return None
+
+    acked = set(acked_offsets or [])
+    for i, offset in enumerate(offsets):
+        next_smaller = offsets[i + 1] if i + 1 < len(offsets) else 0
+        if next_smaller < remaining_minutes <= offset:
+            if offset in acked:
+                return None
+            return offset
+    return None
+
+
+def _ensure_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+async def _owned_callback_leads(
     *,
     organization_id: str,
     user_id: str,
-    limit: int = 50,
-) -> dict[str, Any]:
-    """Follow-ups that are due now for this user (assignee or last Follow Up logger)."""
-    now = datetime.now(timezone.utc)
-    leads = await prisma.lead.find_many(
-        where={
-            "organizationId": organization_id,
-            "nextFollowUpAt": {"lte": now},
-        },
-        order={"nextFollowUpAt": "asc"},
-        take=200,
-    )
+    leads: list[Any],
+) -> list[tuple[Any, Any]]:
+    """Filter to CALLBACK_SCHEDULED leads owned by this user (assignee or last logger)."""
     if not leads:
-        return {"items": [], "count": 0}
-
+        return []
     lead_ids = [l.id for l in leads]
     calls = await prisma.telecallercalllog.find_many(
         where={"organizationId": organization_id, "leadId": {"in": lead_ids}},
@@ -76,7 +107,7 @@ async def list_due_follow_ups_for_user(
         if call.leadId not in latest:
             latest[call.leadId] = call
 
-    items: list[dict[str, Any]] = []
+    owned: list[tuple[Any, Any]] = []
     for lead in leads:
         call = latest.get(lead.id)
         if not call:
@@ -87,45 +118,130 @@ async def list_due_follow_ups_for_user(
         owner_id = lead.assigneeId or call.userId
         if owner_id != user_id:
             continue
-        due = lead.nextFollowUpAt
-        if due is None:
+        if lead.nextFollowUpAt is None:
             continue
-        in_app_pending = reminder_pending(getattr(lead, "followUpRemindedAt", None), due)
-        items.append(
-            {
-                "id": lead.id,
-                "title": lead.title,
-                "phone": lead.phone,
-                "company": lead.company,
-                "next_follow_up_at": due.isoformat(),
-                "notes": lead.notes,
-                "last_call_notes": call.notes,
-                "in_app_pending": in_app_pending,
-                "bucket": follow_up_bucket(due, now=now),
-            }
-        )
-        if len(items) >= limit:
+        owned.append((lead, call))
+    return owned
+
+
+async def list_due_follow_ups_for_user(
+    *,
+    organization_id: str,
+    user_id: str,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Due follow-ups (badge) plus pending advance in-app reminders (toasts)."""
+    now = datetime.now(timezone.utc)
+    horizon = now + timedelta(minutes=max(IN_APP_REMINDER_OFFSETS_MINUTES))
+
+    leads = await prisma.lead.find_many(
+        where={
+            "organizationId": organization_id,
+            "nextFollowUpAt": {"lte": horizon},
+        },
+        order={"nextFollowUpAt": "asc"},
+        take=200,
+    )
+    owned = await _owned_callback_leads(
+        organization_id=organization_id,
+        user_id=user_id,
+        leads=leads,
+    )
+
+    due_items: list[dict[str, Any]] = []
+    reminder_items: list[dict[str, Any]] = []
+
+    for lead, call in owned:
+        due = _ensure_utc(lead.nextFollowUpAt)
+        acked = list(getattr(lead, "followUpRemindedOffsets", None) or [])
+        base = {
+            "id": lead.id,
+            "title": lead.title,
+            "phone": lead.phone,
+            "company": lead.company,
+            "next_follow_up_at": due.isoformat(),
+            "notes": lead.notes,
+            "last_call_notes": call.notes,
+            "bucket": follow_up_bucket(due, now=now),
+        }
+
+        if due <= now:
+            due_items.append(base)
+        else:
+            offset = active_reminder_offset(due, now=now, acked_offsets=acked)
+            if offset is not None:
+                reminder_items.append(
+                    {
+                        **base,
+                        "offset_minutes": offset,
+                        "in_app_pending": True,
+                    }
+                )
+
+        if len(due_items) + len(reminder_items) >= limit * 2:
             break
 
-    return {"items": items, "count": len(items)}
+    return {
+        "items": due_items[:limit],
+        "count": len(due_items[:limit]),
+        "reminders": reminder_items[:limit],
+    }
 
 
-async def ack_follow_up_reminders(*, organization_id: str, lead_ids: list[str], user_id: str) -> dict:
-    """Mark in-app reminders as shown for the given leads (current user only)."""
+async def ack_follow_up_reminders(
+    *,
+    organization_id: str,
+    user_id: str,
+    lead_ids: list[str] | None = None,
+    reminders: list[dict[str, Any]] | None = None,
+) -> dict:
+    """Mark advance reminder offsets (and legacy due acks) as shown."""
     now = datetime.now(timezone.utc)
     updated = 0
-    for lead_id in lead_ids:
+
+    # New shape: [{ lead_id, offset_minutes }]
+    for rem in reminders or []:
+        lead_id = rem.get("lead_id") or rem.get("id")
+        offset = rem.get("offset_minutes")
+        if not lead_id or offset is None:
+            continue
+        try:
+            offset_int = int(offset)
+        except (TypeError, ValueError):
+            continue
+        if offset_int not in IN_APP_REMINDER_OFFSETS_MINUTES:
+            continue
+        lead = await prisma.lead.find_first(
+            where={"id": str(lead_id), "organizationId": organization_id},
+        )
+        if not lead or not lead.nextFollowUpAt:
+            continue
+        existing = list(getattr(lead, "followUpRemindedOffsets", None) or [])
+        if offset_int in existing:
+            continue
+        existing.append(offset_int)
+        await prisma.lead.update(
+            where={"id": lead.id},
+            data={
+                "followUpRemindedOffsets": existing,
+                "followUpRemindedAt": now,
+            },
+        )
+        updated += 1
+
+    # Legacy: mark whole schedule reminded (due-now ack)
+    for lead_id in lead_ids or []:
         lead = await prisma.lead.find_first(
             where={"id": lead_id, "organizationId": organization_id},
         )
         if not lead or not lead.nextFollowUpAt:
             continue
-        # Soft auth: only assignee or anyone in org can ack (org-scoped already)
         await prisma.lead.update(
             where={"id": lead.id},
             data={"followUpRemindedAt": now},
         )
         updated += 1
+
     return {"acked": updated}
 
 

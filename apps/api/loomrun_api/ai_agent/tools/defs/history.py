@@ -11,12 +11,9 @@ from loomrun_api.ai_agent.tools.registry import ToolContext, register_tool
 @register_tool(
     name="search_past_chats",
     description=(
-        "Search the transcript of previous Loomrun AI CHAT CONVERSATIONS — what "
-        "was said in this assistant's earlier sessions. Use ONLY when the user "
-        "asks what was discussed before, or for chat history by date/keyword. "
-        "This does NOT search business records: it cannot find a lead, customer, "
-        "quotation or order, and it returns nothing useful for 'find/move/update "
-        "<person or company>'. To find a lead by name use search_leads."
+        "WHEN: search previous Loomrun AI chat transcripts by keyword or day. "
+        "NOT: finding a lead, customer, quotation or order (use search_leads / "
+        "get_*). RETURNS: matching chat snippets."
     ),
     parameters={
         "query": {"type": "string", "description": "Keyword to search in past messages"},

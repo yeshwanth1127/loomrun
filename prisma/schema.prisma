@@ -81,6 +81,7 @@ enum QuotationStatus {
   DRAFT
   SENT
   ACCEPTED
+  INVOICED
   REJECTED
   EXPIRED
 }
@@ -121,6 +122,13 @@ enum PaymentStatus {
   PAID
 }
 
+enum ExpectedPaymentStatus {
+  OPEN
+  PARTIALLY_FULFILLED
+  FULFILLED
+  CANCELLED
+}
+
 enum ProductionActivityType {
   ORDER_CREATED
   STAGE_CHANGED
@@ -133,6 +141,12 @@ enum ProductionActivityType {
   STATUS_CHANGED
   ETA_UPDATED
   SHIPMENT_UPDATED
+  EXPECTED_PAYMENT_ADDED
+  EXPECTED_PAYMENT_RESCHEDULED
+  EXPECTED_PAYMENT_FULFILLED
+  EXPECTED_PAYMENT_CANCELLED
+  PAYMENT_UPDATED
+  PAYMENT_DELETED
 }
 
 enum OutboundChannel {
@@ -207,6 +221,7 @@ model User {
   assignedLeads      Lead[]               @relation("LeadAssignee")
   telecallerCalls    TelecallerCallLog[]
   quotationsCreated     Quotation[]          @relation("QuotationAuthor")
+  quotationVersionsCreated QuotationVersion[] @relation("QuotationVersionAuthor")
   productionActivities  ProductionActivity[] @relation("ProductionActivityActor")
   expensesCreated       Expense[]            @relation("ExpenseCreator")
   aiPendingActions      AiPendingAction[]
@@ -249,8 +264,10 @@ model Organization {
   memberships       Membership[]
   leads             Lead[]
   quotations        Quotation[]
+  quotationVersions QuotationVersion[]
   productionOrders  ProductionOrder[]
   payments          Payment[]
+  expectedPayments  ExpectedPayment[]
   subscriptions     Subscription[]
   whatsappThreads   WhatsAppThread[]
   whatsappConnections WhatsAppConnection[]
@@ -400,6 +417,8 @@ model Lead {
   nextFollowUpAt   DateTime?   @map("next_follow_up_at")
   /// Set when an in-app due reminder was shown/acked for the current nextFollowUpAt.
   followUpRemindedAt DateTime? @map("follow_up_reminded_at")
+  /// In-app advance reminder offsets (minutes before due) already shown for current nextFollowUpAt.
+  followUpRemindedOffsets Int[] @default([]) @map("follow_up_reminded_offsets")
   /// Set when a WhatsApp callback reminder was sent for the current nextFollowUpAt.
   followUpWaRemindedAt DateTime? @map("follow_up_wa_reminded_at")
   lastActivityAt   DateTime?   @map("last_activity_at")
@@ -475,25 +494,69 @@ model Quotation {
   status         QuotationStatus  @default(DRAFT)
   pdfUrl         String?          @map("pdf_url")
   subtotal       Decimal          @default(0) @db.Decimal(12, 2)
+  /// When true, tax_rate applies and tax amount is computed into total.
+  taxEnabled     Boolean          @default(false) @map("tax_enabled")
+  /// GST / tax percentage 0–100 (e.g. 18.00). Ignored when taxEnabled is false.
+  taxRate        Decimal?         @map("tax_rate") @db.Decimal(5, 2)
   tax            Decimal          @default(0) @db.Decimal(12, 2)
   total          Decimal          @default(0) @db.Decimal(12, 2)
   sentAt         DateTime?        @map("sent_at")
   invoicedAt     DateTime?        @map("invoiced_at")
   pdfJobId       String?          @map("pdf_job_id")
   templateId     String?          @map("template_id")
+  /// When this row is an invoice created from a quotation, points at that quotation.
+  sourceQuotationId      String?  @map("source_quotation_id")
+  /// Version number of the source quotation at invoice creation time.
+  sourceQuotationVersion Int?     @map("source_quotation_version")
   createdAt      DateTime         @default(now()) @map("created_at")
   updatedAt      DateTime         @updatedAt @map("updated_at")
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  lead         Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  author       User?        @relation("QuotationAuthor", fields: [authorId], references: [id])
-  template     DocumentTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
-  lines        QuotationLine[]
+  organization    Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lead            Lead              @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  author          User?             @relation("QuotationAuthor", fields: [authorId], references: [id])
+  template        DocumentTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  lines           QuotationLine[]
   productionOrders ProductionOrder[]
+  versions        QuotationVersion[]
+  sourceQuotation Quotation?        @relation("QuotationInvoiceSource", fields: [sourceQuotationId], references: [id], onDelete: SetNull)
+  derivedInvoices Quotation[]       @relation("QuotationInvoiceSource")
 
   @@unique([organizationId, number])
   @@index([organizationId, status])
+  @@index([leadId])
+  @@index([sourceQuotationId])
   @@map("quotations")
+}
+
+/// Immutable commercial snapshot of a quotation/invoice at a given version number.
+model QuotationVersion {
+  id               String          @id @default(cuid())
+  organizationId   String          @map("organization_id")
+  quotationId      String          @map("quotation_id")
+  versionNumber    Int             @map("version_number")
+  title            String?
+  status           QuotationStatus
+  invoiceNumber    String?         @map("invoice_number")
+  subtotal         Decimal         @db.Decimal(12, 2)
+  taxEnabled       Boolean         @default(false) @map("tax_enabled")
+  taxRate          Decimal?        @map("tax_rate") @db.Decimal(5, 2)
+  tax              Decimal         @db.Decimal(12, 2)
+  total            Decimal         @db.Decimal(12, 2)
+  /// Line items snapshot: [{description, quantity, unit_price, line_total, sort_order}]
+  linesJson        Json            @map("lines_json")
+  /// Lead/customer details as shown on the document at snapshot time
+  leadSnapshot     Json?           @map("lead_snapshot")
+  note             String?
+  createdById      String?         @map("created_by_id")
+  createdAt        DateTime        @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  quotation    Quotation    @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation("QuotationVersionAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([quotationId, versionNumber])
+  @@index([organizationId, quotationId])
+  @@map("quotation_versions")
 }
 
 model DocumentTemplate {
@@ -565,11 +628,12 @@ model ProductionOrder {
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   lead         Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
   quotation    Quotation?   @relation(fields: [quotationId], references: [id])
-  payments     Payment[]
-  expenses     Expense[]
-  activities   ProductionActivity[]
-  designAssets ProductionDesignAsset[]
-  mockups      ProductionMockup[]
+  payments          Payment[]
+  expectedPayments  ExpectedPayment[]
+  expenses          Expense[]
+  activities        ProductionActivity[]
+  designAssets      ProductionDesignAsset[]
+  mockups           ProductionMockup[]
 
   @@unique([organizationId, orderNumber])
   @@index([organizationId, stage])
@@ -683,14 +747,51 @@ model Payment {
   productionOrderId  String        @map("production_order_id")
   amountCents        Int           @map("amount_cents")
   status             PaymentStatus @default(PENDING)
+  /// Channel: CASH | UPI | BANK_TRANSFER | CHEQUE | CARD | OTHER
+  method             String?
+  /// Transaction / UTR / cheque number
+  reference          String?
+  /// Optional short label e.g. Advance, Before Dispatch
+  label              String?
   note               String?
   recordedAt         DateTime      @default(now()) @map("recorded_at")
+  /// When this payment fulfills (fully or partially) an expected commitment
+  expectedPaymentId  String?       @map("expected_payment_id")
 
-  organization    Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  productionOrder   ProductionOrder @relation(fields: [productionOrderId], references: [id], onDelete: Cascade)
+  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  productionOrder  ProductionOrder  @relation(fields: [productionOrderId], references: [id], onDelete: Cascade)
+  expectedPayment  ExpectedPayment? @relation(fields: [expectedPaymentId], references: [id], onDelete: SetNull)
 
   @@index([productionOrderId])
+  @@index([expectedPaymentId])
   @@map("payments")
+}
+
+/// Customer promise / scheduled receivable — does NOT count as collected until fulfilled via Payment.
+model ExpectedPayment {
+  id                String                @id @default(cuid())
+  organizationId    String                @map("organization_id")
+  productionOrderId String                @map("production_order_id")
+  /// Original promised amount
+  amountCents       Int                   @map("amount_cents")
+  /// Still outstanding against this promise (reduced on partial fulfillment)
+  remainingCents    Int                   @map("remaining_cents")
+  expectedAt        DateTime?             @map("expected_at")
+  label             String?
+  note              String?
+  status            ExpectedPaymentStatus @default(OPEN)
+  createdAt         DateTime              @default(now()) @map("created_at")
+  updatedAt         DateTime              @updatedAt @map("updated_at")
+  cancelledAt       DateTime?             @map("cancelled_at")
+
+  organization    Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  productionOrder ProductionOrder @relation(fields: [productionOrderId], references: [id], onDelete: Cascade)
+  payments        Payment[]
+
+  @@index([productionOrderId])
+  @@index([organizationId, status])
+  @@index([expectedAt])
+  @@map("expected_payments")
 }
 
 model Subscription {

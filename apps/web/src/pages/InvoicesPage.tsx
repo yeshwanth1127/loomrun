@@ -1,98 +1,74 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Download, FileText, IndianRupee, Mail, MessageCircle, Pencil, Plus, Trash2 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
-import { Link , useNavigate } from 'react-router-dom'
+import { ArrowLeft, FileText, IndianRupee, Plus } from 'lucide-react'
+import { useState } from 'react'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useDateFilter } from '../context/DateFilterContext'
 import { EmptyState } from '../components/ui/EmptyState'
-import { Modal } from '../components/ui/Modal'
 import { PageHeader } from '../components/ui/PageHeader'
 import { DonutChart, DonutLegend, InsightCard, InsightGrid, MetricCard } from '../components/ui/dashboard'
 import { apiFetch } from '../lib/api'
 import { routes } from '../lib/appRoutes'
-import { RowActions } from '../components/RowActions'
+import { groupDocsByLead, type QuotationDoc } from '../lib/documents'
+import { fmtINR } from '../lib/format'
+import { isOwnerRole, membershipForOrg } from '../lib/membership'
+import { LeadSearchSelect, type LeadOption } from '../components/LeadSearchSelect'
 import { toast } from 'sonner'
-
-const base = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
 type Invoice = {
   id: string
   number: string
   title: string | null
   invoice_number: string
+  version?: number
   status: string
   total: number
+  tax_enabled?: boolean
+  tax_rate?: number | null
   lead_id: string
   lead_title: string | null
   lead_phone: string | null
   lead_email: string | null
+  lead_company?: string | null
   pdf_url: string | null
   sent_at: string | null
   invoiced_at: string | null
+  created_at?: string | null
+  updated_at?: string | null
+  source_quotation_id?: string | null
+  source_quotation_version?: number | null
+  source_quotation_number?: string | null
   lines: { description: string; quantity: number; unit_price: number; line_total: number }[]
 }
 
-function invoiceDisplayName(inv: Pick<Invoice, 'title' | 'invoice_number'>) {
-  return inv.title?.trim() || inv.invoice_number
+type DocTemplate = {
+  id: string
+  name: string
+  is_default?: boolean
 }
 
-async function fetchPdfBlob(
-  orgId: string,
-  quotationId: string,
-  variant: 'quotation' | 'invoice',
-): Promise<Blob> {
-  const params = new URLSearchParams({ variant })
-  const response = await fetch(
-    `${base}/v1/orgs/${orgId}/quotations/${quotationId}/pdf-file?${params}`,
-    {
-      headers: { Authorization: `Bearer ${localStorage.getItem('access_token') ?? ''}` },
-    },
-  )
-  if (!response.ok) {
-    throw new Error('Failed to load PDF')
-  }
-  return response.blob()
+/** Invoice commercial status used by Money → Invoices (no per-invoice ledger yet). */
+function isInvoicePaid(status: string) {
+  return status === 'ACCEPTED' || status === 'PAID'
 }
 
-async function downloadPdf(
-  orgId: string,
-  quotationId: string,
-  filename: string,
-  variant: 'quotation' | 'invoice',
-) {
-  try {
-    const blob = await fetchPdfBlob(orgId, quotationId, variant)
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `${filename}.pdf`
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    URL.revokeObjectURL(url)
-  } catch (err) {
-    toast.error((err as Error).message || 'Failed to download PDF')
-  }
+function isInvoiceUnpaid(status: string) {
+  return status === 'SENT' || status === 'DRAFT'
 }
 
 export function InvoicesPage() {
   const navigate = useNavigate()
-  const { orgId } = useAuth()
+  const { orgId, me } = useAuth()
+  const membership = membershipForOrg(me, orgId)
+  const isOwner = isOwnerRole(membership) || !!me?.is_super_admin
   const { dayParam, appendDay, isAll } = useDateFilter()
   const qc = useQueryClient()
-  const [previewInvoice, setPreviewInvoice] = useState<Invoice | null>(null)
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
-  const [previewLoading, setPreviewLoading] = useState(false)
-  const [previewError, setPreviewError] = useState<string | null>(null)
-  const previewUrlRef = useRef<string | null>(null)
-  const [renamingInvoice, setRenamingInvoice] = useState<Invoice | null>(null)
-  const [renameTitle, setRenameTitle] = useState('')
-
-  useEffect(() => {
-    return () => {
-      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current)
-    }
-  }, [])
+  const [searchParams, setSearchParams] = useSearchParams()
+  const focusLeadId = searchParams.get('leadId')
+  const [search, setSearch] = useState('')
+  const [showNew, setShowNew] = useState(false)
+  const [newLead, setNewLead] = useState<LeadOption | null>(null)
+  const [sourceQuoteId, setSourceQuoteId] = useState('')
 
   const q = useQuery({
     queryKey: ['invoices', orgId, dayParam],
@@ -105,452 +81,406 @@ export function InvoicesPage() {
     },
   })
 
-  const deleteInvoice = useMutation({
-    mutationFn: (id: string) =>
-      apiFetch(`/v1/orgs/${orgId}/quotations/${id}`, { method: 'DELETE' }),
-    onSuccess: () => {
-      toast.success('Deleted')
-      void qc.invalidateQueries({ queryKey: ['invoices', orgId] })
-      void qc.invalidateQueries({ queryKey: ['quotations', orgId] })
-    },
-    onError: (err: Error) => toast.error(err.message || 'Failed to delete'),
+  const templatesQ = useQuery({
+    queryKey: ['document-templates', orgId, 'INVOICE'],
+    enabled: !!orgId && !focusLeadId,
+    queryFn: () =>
+      apiFetch<{ items: DocTemplate[]; default_invoice_template_id?: string | null }>(
+        `/v1/orgs/${orgId}/document-templates?doc_type=INVOICE`,
+      ),
+  })
+  const invoiceTemplates = templatesQ.data?.items ?? []
+
+  const leadQuotesQ = useQuery({
+    queryKey: ['quotations', orgId, 'for-invoice', newLead?.id],
+    enabled: !!orgId && !!newLead?.id && showNew,
+    queryFn: () =>
+      apiFetch<{ items: QuotationDoc[] }>(
+        `/v1/orgs/${orgId}/quotations?doc=quotation&lead_id=${newLead!.id}&day=all`,
+      ),
   })
 
-  const sendEmail = useMutation({
-    mutationFn: (id: string) =>
-      apiFetch<{ message?: string }>(`/v1/orgs/${orgId}/quotations/${id}/send`, {
+  const createInvoice = useMutation({
+    mutationFn: async () => {
+      if (!newLead) throw new Error('Select a lead')
+      if (sourceQuoteId) {
+        return apiFetch<{ quotation_id?: string; id?: string; invoice_number: string }>(
+          `/v1/orgs/${orgId}/quotations/${sourceQuoteId}/generate-invoice`,
+          { method: 'POST' },
+        )
+      }
+      return apiFetch<{ id: string; invoice_number: string }>(`/v1/orgs/${orgId}/quotations`, {
         method: 'POST',
-        json: { channel: 'email', doc_type: 'invoice' },
-      }),
-    onSuccess: (data) => {
-      toast.success(data.message ?? 'Email sent')
-      void qc.invalidateQueries({ queryKey: ['invoices', orgId] })
+        json: {
+          lead_id: newLead.id,
+          as_invoice: true,
+          lines: [{ description: 'Services', quantity: 1, unit_price: 0 }],
+        },
+      })
     },
-    onError: (err: Error) => toast.error(err.message || 'Failed to send email'),
-  })
-
-  const sendWhatsApp = useMutation({
-    mutationFn: (id: string) =>
-      apiFetch<{ message?: string }>(`/v1/orgs/${orgId}/quotations/${id}/send`, {
-        method: 'POST',
-        json: { channel: 'whatsapp', doc_type: 'invoice' },
-      }),
     onSuccess: (data) => {
-      toast.success(data.message ?? 'Sent on WhatsApp')
+      const id = (data as { quotation_id?: string; id?: string }).quotation_id || data.id
+      toast.success(`Invoice ${data.invoice_number} created`)
+      setShowNew(false)
+      setNewLead(null)
+      setSourceQuoteId('')
       void qc.invalidateQueries({ queryKey: ['invoices', orgId] })
+      if (id) navigate(routes.moneyInvoiceDoc(id))
     },
-    onError: (err: Error) => toast.error(err.message || 'Failed to send on WhatsApp'),
+    onError: (err: Error) => toast.error(err.message),
   })
-
-  const renameInvoice = useMutation({
-    mutationFn: ({ id, title }: { id: string; title: string }) =>
-      apiFetch<Invoice>(`/v1/orgs/${orgId}/quotations/${id}/title`, {
-        method: 'PATCH',
-        json: { title },
-      }),
-    onSuccess: (data) => {
-      toast.success(data.title ? `Renamed to “${data.title}”` : 'Name cleared')
-      setRenamingInvoice(null)
-      setRenameTitle('')
-      void qc.invalidateQueries({ queryKey: ['invoices', orgId] })
-      void qc.invalidateQueries({ queryKey: ['quotations', orgId] })
-    },
-    onError: (err: Error) => toast.error(err.message || 'Failed to rename'),
-  })
-
-  async function openPreview(invoice: Invoice) {
-    navigate(routes.moneyInvoiceDoc(invoice.id))
-  }
-
-
-  function closePreview() {
-    setPreviewInvoice(null)
-    setPreviewError(null)
-    setPreviewLoading(false)
-    if (previewUrlRef.current) {
-      URL.revokeObjectURL(previewUrlRef.current)
-      previewUrlRef.current = null
-    }
-    setPreviewUrl(null)
-  }
 
   if (!orgId) return (
     <PageHeader title="Invoices" description="Select an organization." />
   )
 
   const invoices = q.data?.items ?? []
+  const searchLower = search.trim().toLowerCase()
+  const filtered = invoices.filter((x) => {
+    if (focusLeadId && x.lead_id !== focusLeadId) return false
+    if (!searchLower) return true
+    const hay = [x.lead_title, x.lead_company, x.invoice_number, x.title, x.number]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase()
+    return hay.includes(searchLower)
+  })
+  const leadGroups = groupDocsByLead(filtered as unknown as QuotationDoc[])
+  const focusLead = focusLeadId
+    ? leadGroups.find((g) => g.leadId === focusLeadId) ||
+      (filtered[0]
+        ? {
+            leadId: focusLeadId,
+            leadTitle: filtered[0].lead_title || 'Lead',
+            leadCompany: filtered[0].lead_company ?? null,
+            count: filtered.length,
+            latestAt: null as string | null,
+            totalValue: filtered.reduce((s, d) => s + d.total, 0),
+            docs: filtered as unknown as QuotationDoc[],
+          }
+        : null)
+    : null
+
   const totalAmount = invoices.reduce((s, x) => s + (Number(x.total) || 0), 0)
-  const paidCount = invoices.filter((x) => x.status === 'ACCEPTED' || x.status === 'PAID').length
-  const pendingCount = invoices.length - paidCount
-  const byClient = new Map<string, number>()
-  for (const inv of invoices) {
-    const name = inv.lead_title ?? 'Unknown'
-    byClient.set(name, (byClient.get(name) ?? 0) + Number(inv.total || 0))
+  const paidInvoices = invoices.filter((x) => isInvoicePaid(x.status))
+  const unpaidInvoices = invoices.filter((x) => isInvoiceUnpaid(x.status))
+  const paidCount = paidInvoices.length
+  const collectedAmount = paidInvoices.reduce((s, x) => s + (Number(x.total) || 0), 0)
+  const outstandingAmount = unpaidInvoices.reduce((s, x) => s + (Number(x.total) || 0), 0)
+  // Partially paid / overdue are not tracked on invoice documents yet.
+  const partiallyPaidAmount = 0
+  const overdueAmount = 0
+
+  function clearLeadFocus() {
+    const p = new URLSearchParams(searchParams)
+    p.delete('leadId')
+    setSearchParams(p)
   }
 
   return (
     <>
       <PageHeader
-        title="Invoices"
-        badge={`${invoices.length} total`}
-        description="Create, manage and track all your invoices."
+        title={focusLead ? focusLead.leadTitle : 'Invoices'}
+        badge={
+          focusLead
+            ? `${focusLead.count} invoice${focusLead.count === 1 ? '' : 's'}`
+            : `${invoices.length} total`
+        }
+        description={
+          focusLead
+            ? 'Invoices for this customer, with quotation lineage when available.'
+            : 'Organised by customer — open a lead to manage their invoices.'
+        }
         actions={
-          <Link to={routes.quotes} className="btn">
-            <Plus size={15} /> New invoice
-          </Link>
+          <div className="row" style={{ gap: '0.5rem', flexWrap: 'wrap' }}>
+            {focusLead && (
+              <button type="button" className="btn btn-ghost btn-sm" onClick={clearLeadFocus}>
+                <ArrowLeft size={14} />
+                Back
+              </button>
+            )}
+            {isOwner && (
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  setShowNew(true)
+                  if (focusLeadId) {
+                    setNewLead({
+                      id: focusLeadId,
+                      title: focusLead?.leadTitle || 'Lead',
+                      company: focusLead?.leadCompany,
+                    })
+                  }
+                }}
+              >
+                <Plus size={15} /> New invoice
+              </button>
+            )}
+          </div>
         }
       />
 
       <div className="page-body stack" style={{ gap: '1.25rem' }}>
-        <div className="metrics-grid">
-          <MetricCard icon={FileText} tone="purple" label="Total invoices" value={invoices.length} hint={isAll ? 'This period' : dayParam} />
-          <MetricCard icon={IndianRupee} tone="green" label="Total amount" value={`₹${totalAmount.toLocaleString('en-IN')}`} />
-          <MetricCard icon={IndianRupee} tone="green" label="Paid" value={paidCount} hint={invoices.length ? `${((paidCount / invoices.length) * 100).toFixed(0)}%` : '0%'} />
+        {!focusLead && (
+          <>
+            <div className="metrics-grid">
+              <MetricCard
+                icon={FileText}
+                tone="purple"
+                label="Total invoices"
+                value={invoices.length}
+                hint={isAll ? 'This period' : dayParam}
+              />
+              <MetricCard
+                icon={IndianRupee}
+                tone="green"
+                label="Total amount"
+                value={`₹${totalAmount.toLocaleString('en-IN')}`}
+              />
+              <MetricCard
+                icon={IndianRupee}
+                tone="green"
+                label="Paid"
+                value={paidCount}
+                hint={invoices.length ? `${((paidCount / invoices.length) * 100).toFixed(0)}%` : '0%'}
+              />
+            </div>
+            <div className="status-strip" aria-label="Invoice status breakdown">
+              <span className="status-strip-item">
+                <span className="status-strip-dot paid" aria-hidden />
+                Paid <strong>{paidCount}</strong>
+              </span>
+              <span className="status-strip-item">
+                <span className="status-strip-dot pending" aria-hidden />
+                Partially Paid <strong>0</strong>
+              </span>
+              <span className="status-strip-item">
+                <span className="status-strip-dot pending" aria-hidden />
+                Unpaid <strong>{unpaidInvoices.length}</strong>
+              </span>
+              <span className="status-strip-item">
+                <span className="status-strip-dot rejected" aria-hidden />
+                Overdue <strong>0</strong>
+              </span>
+            </div>
+
+            <InsightGrid>
+              <InsightCard title="Payment overview">
+                {invoices.length === 0 ? (
+                  <p className="muted small">No invoices yet.</p>
+                ) : (
+                  <div className="stack" style={{ gap: '0.45rem', fontSize: '0.85rem' }}>
+                    <div className="row spread">
+                      <span className="muted">Total invoiced</span>
+                      <strong>{fmtINR(totalAmount)}</strong>
+                    </div>
+                    <div className="row spread">
+                      <span className="muted">Collected</span>
+                      <strong>{fmtINR(collectedAmount)}</strong>
+                    </div>
+                    <div className="row spread">
+                      <span className="muted">Outstanding</span>
+                      <strong>{fmtINR(outstandingAmount)}</strong>
+                    </div>
+                    <p className="muted small" style={{ margin: '0.35rem 0 0' }}>
+                      Collected = accepted invoices · Outstanding = draft/sent
+                    </p>
+                  </div>
+                )}
+              </InsightCard>
+
+              <InsightCard title="Invoice value">
+                {invoices.length === 0 ? (
+                  <p className="muted small">No invoice value yet.</p>
+                ) : (
+                  <>
+                    <DonutChart
+                      segments={[
+                        { label: 'Paid', value: collectedAmount, color: '#3D7A5A' },
+                        { label: 'Partially Paid', value: partiallyPaidAmount, color: '#0F766E' },
+                        { label: 'Unpaid', value: outstandingAmount, color: '#f59e0b' },
+                        { label: 'Overdue', value: overdueAmount, color: '#B42318' },
+                      ]}
+                      center={{
+                        value: `₹${totalAmount.toLocaleString('en-IN')}`,
+                        label: 'Total invoiced',
+                      }}
+                    />
+                    <DonutLegend
+                      segments={[
+                        { label: 'Paid', value: paidCount, color: '#3D7A5A' },
+                        { label: 'Partially Paid', value: 0, color: '#0F766E' },
+                        { label: 'Unpaid', value: unpaidInvoices.length, color: '#f59e0b' },
+                        { label: 'Overdue', value: 0, color: '#B42318' },
+                      ]}
+                      total={invoices.length}
+                    />
+                  </>
+                )}
+              </InsightCard>
+
+              <InsightCard title="Quick actions">
+                <div className="quick-action-list">
+                  {isOwner && (
+                    <button type="button" onClick={() => setShowNew(true)}>
+                      <Plus size={14} /> New invoice
+                    </button>
+                  )}
+                  <Link to={routes.moneyQuotations()}>
+                    <FileText size={14} /> View quotations
+                  </Link>
+                  {invoiceTemplates.length > 0 && (
+                    <Link to={routes.settings('documents')}>
+                      <FileText size={14} /> Invoice templates
+                    </Link>
+                  )}
+                </div>
+              </InsightCard>
+            </InsightGrid>
+          </>
+        )}
+
+        <div className="form-field" style={{ margin: 0, maxWidth: 420 }}>
+          <input
+            className="input"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search leads or invoices…"
+          />
         </div>
-        <div className="status-strip" aria-label="Invoice status breakdown">
-          <span className="status-strip-item">
-            <span className="status-strip-dot paid" aria-hidden />
-            Paid <strong>{paidCount}</strong>
-          </span>
-          <span className="status-strip-item">
-            <span className="status-strip-dot pending" aria-hidden />
-            Pending <strong>{pendingCount}</strong>
-          </span>
-        </div>
+
         {q.isLoading && <p className="muted">Loading invoices…</p>}
         {q.error && <p className="error">{(q.error as Error).message}</p>}
 
-        {invoices.length > 0 ? (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Invoice</th>
-                  <th>Lead</th>
-                  <th>Total</th>
-                  <th>Generated</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {invoices.map((x) => {
-                  const leadName = x.lead_title ?? x.lead_id.slice(0, 8)
-                  return (
-                    <tr
-                      key={x.id}
-                      className="invoice-row"
-                      onClick={() => void openPreview(x)}
-                      style={{ cursor: 'pointer' }}
-                    >
-                      <td>
-                        <div className="row" style={{ gap: '0.4rem' }}>
-                          <FileText size={14} style={{ color: 'var(--primary)', flexShrink: 0 }} />
-                          <div className="stack" style={{ gap: '0.15rem' }}>
-                            <span style={{ fontWeight: 600, fontSize: '0.88rem' }}>
-                              {invoiceDisplayName(x)}
-                            </span>
-                            <span className="muted small" style={{ fontFamily: 'ui-monospace, monospace' }}>
-                              {x.title ? x.invoice_number : 'Click to preview'}
-                            </span>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="muted">{leadName}</td>
-                      <td style={{ fontWeight: 700 }}>₹{x.total.toLocaleString('en-IN')}</td>
-                      <td className="muted small">
-                        {x.invoiced_at ? new Date(x.invoiced_at).toLocaleDateString('en-IN') : '—'}
-                      </td>
-                      <td onClick={(e) => e.stopPropagation()}>
-                        <RowActions>
-                          {(close) => (
-                            <>
-                              <button
-                                type="button"
-                                className="btn btn-ghost btn-sm"
-                                onClick={() => {
-                                  void openPreview(x)
-                                  close()
-                                }}
-                              >
-                                <FileText size={13} />
-                                Preview
-                              </button>
-                              <button
-                                type="button"
-                                className="btn btn-ghost btn-sm"
-                                onClick={() => {
-                                  setRenamingInvoice(x)
-                                  setRenameTitle(x.title ?? '')
-                                  close()
-                                }}
-                              >
-                                <Pencil size={13} />
-                                Rename
-                              </button>
-                              {x.pdf_url && (
-                                <>
-                                  <button
-                                    type="button"
-                                    className="btn btn-ghost btn-sm"
-                                    onClick={() => {
-                                      downloadPdf(orgId, x.id, x.invoice_number, 'invoice')
-                                      close()
-                                    }}
-                                  >
-                                    <Download size={13} />
-                                    Download Invoice
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="btn btn-ghost btn-sm"
-                                    onClick={() => {
-                                      downloadPdf(orgId, x.id, x.number, 'quotation')
-                                      close()
-                                    }}
-                                  >
-                                    <Download size={13} />
-                                    Download Quotation
-                                  </button>
-                                </>
-                              )}
-                              {x.lead_phone && (
-                                <button
-                                  type="button"
-                                  className="btn btn-ghost btn-sm"
-                                  disabled={
-                                    !x.pdf_url ||
-                                    (sendWhatsApp.isPending && sendWhatsApp.variables === x.id)
-                                  }
-                                  title={
-                                    !x.pdf_url
-                                      ? 'Generate the invoice PDF first'
-                                      : `Send invoice to ${x.lead_phone} on WhatsApp`
-                                  }
-                                  onClick={() => {
-                                    sendWhatsApp.mutate(x.id)
-                                    close()
-                                  }}
-                                >
-                                  <MessageCircle size={13} />
-                                  {sendWhatsApp.isPending && sendWhatsApp.variables === x.id
-                                    ? 'Sending…'
-                                    : 'Send on WhatsApp'}
-                                </button>
-                              )}
-                              <button
-                                type="button"
-                                className="btn btn-ghost btn-sm"
-                                disabled={
-                                  !x.lead_email ||
-                                  !x.pdf_url ||
-                                  (sendEmail.isPending && sendEmail.variables === x.id)
-                                }
-                                title={
-                                  !x.lead_email
-                                    ? 'This lead has no email address'
-                                    : !x.pdf_url
-                                      ? 'Generate the invoice PDF first'
-                                      : `Send invoice to ${x.lead_email}`
-                                }
-                                onClick={() => {
-                                  sendEmail.mutate(x.id)
-                                  close()
-                                }}
-                              >
-                                <Mail size={13} />
-                                {sendEmail.isPending && sendEmail.variables === x.id
-                                  ? 'Sending…'
-                                  : 'Email invoice'}
-                              </button>
-                              <button
-                                type="button"
-                                className="btn btn-ghost btn-sm btn-danger"
-                                disabled={deleteInvoice.isPending}
-                                onClick={() => {
-                                  if (
-                                    window.confirm(
-                                      `Delete invoice ${invoiceDisplayName(x)}? This cannot be undone.`,
-                                    )
-                                  ) {
-                                    deleteInvoice.mutate(x.id)
-                                  }
-                                  close()
-                                }}
-                              >
-                                <Trash2 size={13} />
-                                Delete
-                              </button>
-                            </>
-                          )}
-                        </RowActions>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          !q.isLoading && (
-            <EmptyState
-              icon={FileText}
-              description="No invoices yet. Accept a quotation to generate an invoice."
-            />
-          )
-        )}
-
-        <InsightGrid>
-          <InsightCard title="Invoice summary">
-            {invoices.length === 0 ? (
-              <p className="muted small">No invoices yet.</p>
-            ) : (
-              <>
-                <DonutChart
-                  segments={[
-                    { label: 'Paid', value: paidCount, color: '#3D7A5A' },
-                    { label: 'Pending', value: pendingCount, color: '#f59e0b' },
-                  ]}
-                  center={{ value: invoices.length, label: 'Total' }}
-                />
-                <DonutLegend
-                  segments={[
-                    { label: 'Paid', value: paidCount, color: '#3D7A5A' },
-                    { label: 'Pending', value: pendingCount, color: '#f59e0b' },
-                  ]}
-                  total={invoices.length}
-                />
-              </>
-            )}
-          </InsightCard>
-          <InsightCard title="Top clients">
-            {[...byClient.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).length === 0 ? (
-              <p className="muted small">No client totals yet.</p>
-            ) : (
-              <div className="stack" style={{ gap: '0.4rem', fontSize: '0.82rem' }}>
-                {[...byClient.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([name, amt]) => (
-                  <div key={name} className="row spread">
-                    <span>{name}</span>
-                    <strong>₹{amt.toLocaleString('en-IN')}</strong>
-                  </div>
-                ))}
-              </div>
-            )}
-          </InsightCard>
-          <InsightCard title="Quick actions">
-            <div className="quick-action-list">
-              <Link to={routes.quotes}><Plus size={14} /> New invoice</Link>
-              <Link to={routes.settings('documents')}><FileText size={14} /> Invoice templates</Link>
-            </div>
-          </InsightCard>
-        </InsightGrid>
-      </div>
-
-      <Modal
-        open={!!renamingInvoice}
-        onClose={() => {
-          setRenamingInvoice(null)
-          setRenameTitle('')
-        }}
-        title="Rename invoice"
-        size="sm"
-        footer={
-          <>
-            <button
-              type="button"
-              className="btn btn-ghost"
-              onClick={() => {
-                setRenamingInvoice(null)
-                setRenameTitle('')
-              }}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="btn"
-              disabled={renameInvoice.isPending || !renamingInvoice}
-              onClick={() => {
-                if (!renamingInvoice) return
-                renameInvoice.mutate({ id: renamingInvoice.id, title: renameTitle })
-              }}
-            >
-              {renameInvoice.isPending ? 'Saving…' : 'Save name'}
-            </button>
-          </>
-        }
-      >
-        {renamingInvoice && (
-          <div className="stack" style={{ gap: '0.75rem' }}>
-            <p className="muted small">
-              Invoice number <strong>{renamingInvoice.invoice_number}</strong> stays the same. This name is
-              only for your list.
-            </p>
-            <div className="form-field">
-              <label className="input-label" htmlFor="invoice-rename-title">
-                Display name
-              </label>
-              <input
-                id="invoice-rename-title"
-                className="input"
-                value={renameTitle}
-                onChange={(e) => setRenameTitle(e.target.value)}
-                placeholder={renamingInvoice.invoice_number}
-                maxLength={200}
-                autoFocus
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && renamingInvoice) {
-                    e.preventDefault()
-                    renameInvoice.mutate({ id: renamingInvoice.id, title: renameTitle })
-                  }
-                }}
-              />
-            </div>
-          </div>
-        )}
-      </Modal>
-
-      <Modal
-        open={!!previewInvoice}
-        onClose={closePreview}
-        title={
-          previewInvoice
-            ? `${invoiceDisplayName(previewInvoice)}${
-                previewInvoice.title ? ` · ${previewInvoice.invoice_number}` : ''
-              }`
-            : 'Preview'
-        }
-        size="xl"
-        footer={
-          previewInvoice ? (
-            <>
-              <button type="button" className="btn btn-ghost" onClick={closePreview}>
-                Close
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => {
-                  if (!previewInvoice || !orgId) return
-                  void downloadPdf(orgId, previewInvoice.id, previewInvoice.invoice_number, 'invoice')
-                }}
-              >
-                <Download size={14} />
-                Download
-              </button>
-            </>
-          ) : undefined
-        }
-      >
-        {previewLoading && <p className="muted" style={{ padding: '1.5rem' }}>Loading preview…</p>}
-        {previewError && <p className="error" style={{ padding: '1.5rem' }}>{previewError}</p>}
-        {!previewLoading && !previewError && previewUrl && (
-          <iframe
-            title="Invoice preview"
-            src={previewUrl}
-            className="quotation-preview-frame"
+        {!focusLead && !q.isLoading && leadGroups.length === 0 && (
+          <EmptyState
+            icon={FileText}
+            description="No invoices yet. Accept a quotation to generate an invoice."
           />
         )}
-      </Modal>
+
+        {!focusLead && leadGroups.length > 0 && (
+          <div className="stack" style={{ gap: '0.65rem' }}>
+            {leadGroups.map((g) => (
+              <button
+                key={g.leadId}
+                type="button"
+                className="card"
+                style={{ textAlign: 'left', cursor: 'pointer', width: '100%' }}
+                onClick={() => {
+                  const p = new URLSearchParams(searchParams)
+                  p.set('leadId', g.leadId)
+                  setSearchParams(p)
+                }}
+              >
+                <div className="row spread" style={{ gap: '0.75rem', flexWrap: 'wrap' }}>
+                  <strong style={{ fontSize: '1rem' }}>{g.leadTitle}</strong>
+                  <div className="stack" style={{ gap: '0.1rem', alignItems: 'flex-end' }}>
+                    <span className="muted small">
+                      {g.count} invoice{g.count === 1 ? '' : 's'}
+                    </span>
+                    <strong>{fmtINR(g.totalValue)}</strong>
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {focusLead && (
+          <div className="stack" style={{ gap: '0.75rem' }}>
+            <strong style={{ fontSize: '0.88rem' }}>Invoices</strong>
+            {filtered.length === 0 ? (
+              <EmptyState
+                icon={FileText}
+                description="No invoices for this lead yet."
+              />
+            ) : (
+              filtered.map((inv) => (
+                <div key={inv.id} className="card">
+                  <div className="row spread" style={{ gap: '0.75rem', flexWrap: 'wrap' }}>
+                    <div className="stack" style={{ gap: '0.2rem', flex: 1 }}>
+                      <div className="row" style={{ gap: '0.4rem', flexWrap: 'wrap' }}>
+                        <strong>{inv.invoice_number}</strong>
+                        <span className="badge badge-slate">V{inv.version ?? 1}</span>
+                      </div>
+                      <strong>{fmtINR(inv.total)}</strong>
+                      {inv.source_quotation_number && (
+                        <span className="muted small">
+                          Based on{' '}
+                          {inv.source_quotation_id ? (
+                            <Link to={routes.moneyQuotationDoc(inv.source_quotation_id)}>
+                              {inv.source_quotation_number}
+                              {inv.source_quotation_version != null
+                                ? ` · V${inv.source_quotation_version}`
+                                : ''}
+                            </Link>
+                          ) : (
+                            inv.source_quotation_number
+                          )}
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={() => navigate(routes.moneyInvoiceDoc(inv.id))}
+                    >
+                      Open
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+
+        {showNew && isOwner && (
+          <div className="drawer-overlay" onClick={() => setShowNew(false)}>
+            <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+              <strong>New invoice</strong>
+              <div className="stack" style={{ gap: '0.65rem', marginTop: '0.75rem' }}>
+                <LeadSearchSelect
+                  orgId={orgId}
+                  value={newLead?.id ?? ''}
+                  onChange={(_id, lead) => {
+                    setNewLead(lead)
+                    setSourceQuoteId('')
+                  }}
+                />
+                {newLead && (leadQuotesQ.data?.items?.length ?? 0) > 0 && (
+                  <select
+                    className="select"
+                    value={sourceQuoteId}
+                    onChange={(e) => setSourceQuoteId(e.target.value)}
+                  >
+                    <option value="">Direct invoice (no quotation)</option>
+                    {leadQuotesQ.data!.items.map((qq) => (
+                      <option key={qq.id} value={qq.id}>
+                        {qq.number} · V{qq.version} · {fmtINR(qq.total)}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <div className="row" style={{ gap: '0.5rem' }}>
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={!newLead || createInvoice.isPending}
+                    onClick={() => createInvoice.mutate()}
+                  >
+                    {createInvoice.isPending ? 'Creating…' : 'Create'}
+                  </button>
+                  <button type="button" className="btn btn-ghost" onClick={() => setShowNew(false)}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
     </>
   )
 }

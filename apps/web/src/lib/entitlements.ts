@@ -116,6 +116,8 @@ export type AiStatus = {
 export type QlixState = {
   connected: boolean
   status: 'disconnected' | 'provisioning' | 'connected' | 'error' | string
+  /** Live probe: false when the stored Qlix key is rejected (401). */
+  key_valid?: boolean
   // False when the server has no Qlix partner key — the org cannot activate
   // and shouldn't be shown a button that will fail.
   configured?: boolean

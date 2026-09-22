@@ -10,10 +10,17 @@ from typing import Any, AsyncIterator
 from fastapi import HTTPException, status
 
 from loomrun_api.ai_agent.conversations import append_message, ensure_conversation
+from loomrun_api.ai_agent.crm_mutations import mutation_from_tool
+from loomrun_api.ai_agent.crm_read_enforce import (
+    direct_count_reply,
+    force_crm_read_tool,
+    requires_crm_read_tool,
+)
 from loomrun_api.ai_agent.knowledge import build_knowledge_pack
 from loomrun_api.ai_agent.memory import get_org_memory, schedule_memory_extraction
 from loomrun_api.ai_agent.models import models_payload, resolve_chat_model
 from loomrun_api.ai_agent.prompts import build_system_prompt, build_write_intent_prompt
+from loomrun_api.services.leads import clock_instructions, user_clock
 from loomrun_api.ai_agent.tools import pending as pending_store
 from loomrun_api.ai_agent.tools.registry import (
     ToolContext,
@@ -48,8 +55,10 @@ logger = logging.getLogger(__name__)
 _HISTORY_LIMIT = {"minimal": 6, "advanced": 8}
 _MAX_MESSAGE_LEN = 4000
 _MAX_TOOL_ITERATIONS = 6
-_MAX_TOOL_RESULT_CHARS = 1500
 _WRAP_UP_RESULT_CHARS = 800
+# Cap on a tool result appended to `messages`. An uncapped search_leads(limit=50)
+# is ~21,770 chars and is re-sent on every later iteration of the tool loop.
+_MAX_TOOL_RESULT_CHARS = 2500
 
 
 async def get_ai_status(organization_id: str) -> dict[str, Any]:
@@ -92,6 +101,26 @@ async def get_ai_status(organization_id: str) -> dict[str, Any]:
     }
 
 
+async def _maybe_mark_qlix_auth_failure(organization_id: str, exc: Exception) -> None:
+    if isinstance(exc, QlixError) and exc.unauthorized:
+        await qlix_conn.mark_error(organization_id, str(exc))
+
+
+async def _attach_qlix_key_valid(state: dict[str, Any], row) -> None:
+    from loomrun_api.qlix import provisioner as qlix_provisioner
+
+    if not row:
+        return
+    if row.status == qlix_conn.STATUS_ERROR:
+        state["key_valid"] = False
+        return
+    if row.status != qlix_conn.STATUS_CONNECTED:
+        return
+    probe = await qlix_provisioner.probe_key(row)
+    if probe is not None:
+        state["key_valid"] = probe
+
+
 async def _qlix_status(organization_id: str) -> dict[str, Any]:
     """Whether this org runs on its own Qlix agent, and how its sync is doing."""
     from loomrun_api.qlix import sync as qlix_sync
@@ -115,14 +144,48 @@ async def _qlix_status(organization_id: str) -> dict[str, Any]:
             state["sync"] = await qlix_sync.sync_progress(organization_id)
         except Exception:
             logger.exception("Could not read Qlix sync progress for %s", organization_id)
+    await _attach_qlix_key_valid(state, row)
     return state
 
 
-def _clip_tool_result(payload: dict[str, Any]) -> str:
+def _tool_result_text(
+    payload: dict[str, Any], *, limit: int = _MAX_TOOL_RESULT_CHARS
+) -> str:
+    """Serialise a tool result, trimming the row list rather than the summary.
+
+    Counts and totals stay intact: several tool descriptions tell the model that
+    `total` is authoritative and may exceed the rows returned, so a blind string
+    truncation would make it under-report. Drop whole rows off the end instead
+    and say how many were kept.
+    """
     text = json.dumps(payload, default=str)
-    if len(text) <= _MAX_TOOL_RESULT_CHARS:
+    if len(text) <= limit:
         return text
-    return text[: _MAX_TOOL_RESULT_CHARS - 20] + "…(truncated)"
+
+    result = payload.get("result") if isinstance(payload, dict) else None
+    for key in ("items", "leads", "rows", "results"):
+        rows = (result or {}).get(key) if isinstance(result, dict) else None
+        if not isinstance(rows, list) or not rows:
+            continue
+        kept = list(rows)
+        while kept:
+            kept.pop()
+            trimmed = {
+                **payload,
+                "result": {
+                    **result,
+                    key: kept,
+                    "_truncated": (
+                        f"showing {len(kept)} of {len(rows)} rows to save context; "
+                        "any count/total field above remains authoritative"
+                    ),
+                },
+            }
+            text = json.dumps(trimmed, default=str)
+            if len(text) <= limit:
+                return text
+
+    return json.dumps(payload, default=str)[:limit] + "…[truncated]"
 
 
 async def _begin_turn(
@@ -190,20 +253,22 @@ async def _begin_turn(
         org_created_at=org.createdAt,
     )
 
-    # Prefer persisted conversation history when available
+    # Prefer persisted conversation history when available. Take the NEWEST
+    # rows — ordering ascending with a cap returns the oldest messages in a long
+    # thread, which is the opposite of the context the turn needs.
     persisted = await prisma.aimessage.find_many(
         where={"conversationId": conv_id},
-        order={"createdAt": "asc"},
+        order={"createdAt": "desc"},
         take=40,
     )
     if persisted:
         history = [
             {"role": m.role, "content": m.content}
-            for m in persisted
+            for m in reversed(persisted)
             if m.role in ("user", "assistant")
         ]
 
-    await append_message(
+    user_message = await append_message(
         conversation_id=conv_id,
         role="user",
         content=text,
@@ -227,6 +292,7 @@ async def _begin_turn(
         "text": text,
         "chosen_model": chosen_model,
         "conv_id": conv_id,
+        "user_message_id": user_message["id"],
         "org": org,
         "plan": plan,
         "ents": ents,
@@ -290,6 +356,7 @@ async def stream_chat(
     history: list[dict[str, str]] | None = None,
     model: str | None = None,
     conversation_id: str | None = None,
+    timezone: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Stream a turn's events. Qlix-backed orgs stream token by token.
 
@@ -308,6 +375,37 @@ async def stream_chat(
     mode = turn["mode"]
 
     yield {"type": "start", "conversation_id": conv_id}
+
+    direct = await direct_count_reply(
+        organization_id=organization_id,
+        message=turn["text"],
+        timezone=timezone,
+    )
+    if direct:
+        logger.info(
+            "ai turn path %s",
+            kv(org=organization_id, conversation=conv_id, path="direct_count"),
+        )
+        yield {"type": "delta", "text": direct}
+        result = await _finish_turn(
+            organization_id=organization_id,
+            conv_id=conv_id,
+            text=turn["text"],
+            final_reply=direct,
+            pending_actions=[],
+            citations=[],
+            auto_approved=[],
+            crm_mutations=[],
+            model_used="crm",
+            no_llm=True,
+            chosen_model=turn["chosen_model"],
+            mode=mode,
+            plan=turn["plan"],
+            ents=turn["ents"],
+            usage_source="chat",
+        )
+        yield {"type": "done", **result}
+        return
 
     connection = (
         await qlix_conn.get_connection(organization_id)
@@ -328,6 +426,7 @@ async def stream_chat(
         text_parts: list[str] = []
         pending_actions: list[dict[str, Any]] = []
         auto_approved: list[dict[str, Any]] = []
+        crm_mutations: list[dict[str, Any]] = []
         citations: list[Any] = []
         run_id: str | None = None
         settled = False
@@ -339,7 +438,9 @@ async def stream_chat(
                 mode=mode,
                 message=turn["text"],
                 conversation_id=conv_id,
+                user_message_id=turn["user_message_id"],
                 model=model,
+                timezone=timezone,
             ):
                 kind = event.get("type")
                 if kind == "run":
@@ -354,6 +455,9 @@ async def stream_chat(
                 elif kind == "auto_approved":
                     auto_approved.append(event["action"])
                     yield {"type": "auto_approved", "action": event["action"]}
+                elif kind == "crm_mutation":
+                    crm_mutations.append(event["mutation"])
+                    yield {"type": "crm_mutation", "mutation": event["mutation"]}
                 elif kind == "tool":
                     # Progress only — the UI shows what the agent is doing while
                     # it works. Nothing downstream depends on these.
@@ -362,6 +466,7 @@ async def stream_chat(
                     citations = event["citations"]
                     pending_actions = event["pending_actions"] or pending_actions
                     auto_approved = event.get("auto_approved") or auto_approved
+                    crm_mutations = event.get("crm_mutations") or crm_mutations
                     final = event["text"] or "".join(text_parts)
                     result = await _finish_turn(
                         organization_id=organization_id,
@@ -371,6 +476,7 @@ async def stream_chat(
                         pending_actions=pending_actions,
                         citations=citations,
                         auto_approved=auto_approved,
+                        crm_mutations=crm_mutations,
                         model_used="qlix",
                         chosen_model=turn["chosen_model"],
                         mode=mode,
@@ -398,6 +504,7 @@ async def stream_chat(
                 )
             raise
         except (QlixError, qlix_conn.NotConnectedError) as exc:
+            await _maybe_mark_qlix_auth_failure(organization_id, exc)
             logger.warning(
                 "Qlix stream failed for org %s, falling back to local agent: %s",
                 organization_id,
@@ -417,6 +524,7 @@ async def stream_chat(
                 pending_actions=pending_actions,
                 citations=citations,
                 auto_approved=auto_approved,
+                crm_mutations=crm_mutations,
                 model_used="qlix",
                 chosen_model=turn["chosen_model"],
                 mode=mode,
@@ -435,10 +543,17 @@ async def stream_chat(
     )
     local_result: dict[str, Any] = {}
     async for kind, payload in _local_turn_events(
-        turn=turn, organization_id=organization_id, user_id=user_id, role=role, model=model
+        turn=turn,
+        organization_id=organization_id,
+        user_id=user_id,
+        role=role,
+        model=model,
+        timezone=timezone,
     ):
         if kind == "tool":
             yield {"type": "tool", "tool": payload}
+        elif kind == "crm_mutation":
+            yield {"type": "crm_mutation", "mutation": payload}
         elif kind == "result":
             local_result = payload
     yield {"type": "done", **local_result}
@@ -453,6 +568,7 @@ async def run_chat(
     history: list[dict[str, str]] | None = None,
     model: str | None = None,
     conversation_id: str | None = None,
+    timezone: str | None = None,
 ) -> dict[str, Any]:
     turn = await _begin_turn(
         organization_id=organization_id,
@@ -469,6 +585,30 @@ async def run_chat(
     ents = turn["ents"]
     mode = turn["mode"]
 
+    direct = await direct_count_reply(
+        organization_id=organization_id,
+        message=text,
+        timezone=timezone,
+    )
+    if direct:
+        return await _finish_turn(
+            organization_id=organization_id,
+            conv_id=conv_id,
+            text=text,
+            final_reply=direct,
+            pending_actions=[],
+            citations=[],
+            auto_approved=[],
+            crm_mutations=[],
+            model_used="crm",
+            no_llm=True,
+            chosen_model=chosen_model,
+            mode=mode,
+            plan=plan,
+            ents=ents,
+            usage_source="chat",
+        )
+
     # Qlix-backed orgs run the whole turn on their own agent: it holds the
     # knowledge base, calls Loomrun's CRM tools over MCP, and gates writes
     # behind its approval flow. Everything around the turn — plan limits,
@@ -480,7 +620,9 @@ async def run_chat(
         mode=mode,
         message=text,
         conversation_id=conv_id,
+        user_message_id=turn["user_message_id"],
         model=model,
+        timezone=timezone,
     )
     if qlix_result is not None:
         return await _finish_turn(
@@ -491,6 +633,7 @@ async def run_chat(
             pending_actions=qlix_result["pending_actions"],
             citations=qlix_result["citations"],
             auto_approved=qlix_result.get("auto_approved") or [],
+            crm_mutations=qlix_result.get("crm_mutations") or [],
             model_used="qlix",
             chosen_model=chosen_model,
             mode=mode,
@@ -505,6 +648,7 @@ async def run_chat(
         user_id=user_id,
         role=role,
         model=model,
+        timezone=timezone,
     )
 
 
@@ -515,6 +659,7 @@ async def _local_turn_events(
     user_id: str,
     role: str,
     model: str | None,
+    timezone: str | None = None,
 ) -> AsyncIterator[tuple[str, Any]]:
     """Loomrun's original in-process agent: OpenRouter plus the tool registry.
 
@@ -551,6 +696,9 @@ async def _local_turn_events(
         )
         hist_limit = _HISTORY_LIMIT.get(mode, 6)
 
+    clock = user_clock(timezone)
+    system = f"{system}\n\n{clock_instructions(clock)}"
+
     messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
     # Named `past` rather than `turn`/`role`: both of those are live names in
     # this function (the turn dict and the caller's org role), and rebinding
@@ -564,13 +712,24 @@ async def _local_turn_events(
     messages.append({"role": "user", "content": text})
 
     tools = openai_tools_for_message(mode, role=role, message=text)
-    tool_ctx = ToolContext(organization_id=organization_id, user_id=user_id, mode=mode, role=role)
+    tool_ctx = ToolContext(
+        organization_id=organization_id,
+        user_id=user_id,
+        mode=mode,
+        role=role,
+        timezone=timezone or "",
+    )
     pending_actions: list[dict[str, Any]] = []
+    crm_mutations: list[dict[str, Any]] = []
     temperature = 0.3 if mode == "minimal" else 0.4
     model_used: str | None = chosen_model
     final_reply = ""
     citations = []
-    token_totals: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0}
+    token_totals: dict[str, int] = {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "cached_tokens": 0,
+    }
     write_summaries: list[str] = []
 
     logger.info(
@@ -592,6 +751,12 @@ async def _local_turn_events(
         ),
     )
 
+    # Force the CRM read at most once per turn. `requires_crm_read_tool` tests
+    # the unchanged original message, so without this the same read re-fires on
+    # every pass — observed running count_leads four times in one turn until the
+    # iteration budget was spent, then discarding an answer it already had.
+    forced_read_done = False
+
     try:
         for _ in range(_MAX_TOOL_ITERATIONS):
             result = await chat_messages(
@@ -599,6 +764,7 @@ async def _local_turn_events(
                 model=chosen_model,
                 temperature=temperature,
                 tools=tools or None,
+                session_id=organization_id,
             )
             model_used = result.get("model") or model_used
             accumulate_usage(token_totals, result.get("usage"))
@@ -606,6 +772,32 @@ async def _local_turn_events(
             content = (result.get("content") or "").strip()
 
             if not tool_calls:
+                if not forced_read_done and requires_crm_read_tool(text):
+                    forced = await force_crm_read_tool(tool_ctx, text)
+                    if forced:
+                        forced_read_done = True
+                        name, outcome = forced
+                        yield (
+                            "tool",
+                            {
+                                "name": name,
+                                "phase": "error"
+                                if outcome.get("status") == "error"
+                                else "done",
+                                "args": {},
+                            },
+                        )
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    f"[System: {name} was executed — quote this "
+                                    f"result; do not invent CRM facts.]\n"
+                                    f"{_tool_result_text(outcome)}"
+                                ),
+                            }
+                        )
+                        continue
                 final_reply = content
                 break
 
@@ -654,14 +846,18 @@ async def _local_turn_events(
                     if spec and spec.kind == "write":
                         executed_write = True
                         write_summaries.append(
-                            f"{name}: {_clip_tool_result(outcome)[:_WRAP_UP_RESULT_CHARS]}"
+                            f"{name}: {_tool_result_text(outcome)[:_WRAP_UP_RESULT_CHARS]}"
                         )
+                        mutation = mutation_from_tool(name, outcome)
+                        if mutation:
+                            crm_mutations.append(mutation)
+                            yield ("crm_mutation", mutation)
 
                 messages.append(
                     {
                         "role": "tool",
                         "tool_call_id": tc_id,
-                        "content": _clip_tool_result(outcome),
+                        "content": _tool_result_text(outcome),
                     }
                 )
 
@@ -675,7 +871,10 @@ async def _local_turn_events(
                             "content": (
                                 f'You are Loomrun AI for "{org.name}". '
                                 "Reply in one short sentence confirming what you did. "
-                                "Do not invent extra actions."
+                                "Only describe changes the tool results actually show — "
+                                "never claim a quotation or invoice line changed unless "
+                                "update_quotation (or create_quotation) returned ok with "
+                                "the new lines. If you only updated the lead, say that."
                             ),
                         },
                         {
@@ -728,6 +927,7 @@ async def _local_turn_events(
             pending_actions=pending_actions,
             citations=citations,
             auto_approved=None,
+            crm_mutations=crm_mutations,
             model_used=model_used,
             chosen_model=chosen_model,
             mode=mode,
@@ -735,6 +935,7 @@ async def _local_turn_events(
             ents=ents,
             prompt_tokens=token_totals["prompt_tokens"],
             completion_tokens=token_totals["completion_tokens"],
+            cached_tokens=token_totals.get("cached_tokens", 0),
             usage_source="chat",
         ),
     )
@@ -757,7 +958,9 @@ async def _try_qlix_turn(
     mode: str,
     message: str,
     conversation_id: str,
+    user_message_id: str,
     model: str | None,
+    timezone: str | None = None,
 ) -> dict[str, Any] | None:
     """Run the turn on Qlix, or return None to fall back to the local agent.
 
@@ -782,9 +985,12 @@ async def _try_qlix_turn(
             mode=mode,
             message=message,
             conversation_id=conversation_id,
+            user_message_id=user_message_id,
             model=model,
+            timezone=timezone,
         )
     except (QlixError, qlix_conn.NotConnectedError) as exc:
+        await _maybe_mark_qlix_auth_failure(organization_id, exc)
         logger.warning(
             "Qlix turn failed for org %s, falling back to local agent: %s",
             organization_id,
@@ -805,6 +1011,7 @@ async def _finish_turn(
     pending_actions: list[dict[str, Any]],
     citations: list[Any],
     auto_approved: list[dict[str, Any]] | None,
+    crm_mutations: list[dict[str, Any]] | None = None,
     model_used: str | None,
     chosen_model: str,
     mode: str,
@@ -812,7 +1019,9 @@ async def _finish_turn(
     ents: Any,
     prompt_tokens: int = 0,
     completion_tokens: int = 0,
+    cached_tokens: int = 0,
     usage_source: str = "chat",
+    no_llm: bool = False,
 ) -> dict[str, Any]:
     """Persist the reply and meter the turn — shared by both agent paths."""
     if not final_reply:
@@ -829,6 +1038,8 @@ async def _finish_turn(
         # Persisted, not just streamed: an action taken under a standing
         # approval must still be visible when the conversation is reopened.
         metadata["auto_approved"] = auto_approved
+    if crm_mutations:
+        metadata["crm_mutations"] = crm_mutations
 
     await append_message(
         conversation_id=conv_id,
@@ -845,8 +1056,10 @@ async def _finish_turn(
         source=source,  # type: ignore[arg-type]
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
+        cached_tokens=cached_tokens,
         model=model_used or chosen_model,
         conversation_id=conv_id,
+        no_llm=no_llm,
     )
 
     schedule_memory_extraction(
@@ -865,6 +1078,7 @@ async def _finish_turn(
             path=source,
             pending_actions=len(pending_actions),
             auto_approved=len(auto_approved or []),
+            crm_mutations=len(crm_mutations or []),
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             reply=(
@@ -879,6 +1093,7 @@ async def _finish_turn(
         "reply": final_reply,
         "pending_actions": pending_actions,
         "auto_approved": auto_approved or [],
+        "crm_mutations": crm_mutations or [],
         "citations": citations,
         "conversation_id": conv_id,
         "mode": mode,
@@ -957,12 +1172,14 @@ async def confirm_action(
         elif result.get("created", {}).get("number"):
             reply = f"Quotation {result['created']['number']} created and sent."
 
+    mutation = mutation_from_tool(tool_name, outcome)
     return {
         "reply": reply,
         "tool": tool_name,
         "result": result,
         "action_id": action_id,
         "status": "confirmed",
+        "crm_mutations": [mutation] if mutation else [],
     }
 
 

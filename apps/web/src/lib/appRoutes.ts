@@ -46,6 +46,21 @@ export const routes = {
   moneyInvoiceDoc(quotationId: string): string {
     return `/app/money/invoices/${quotationId}`
   },
+  moneyQuotations(leadId?: string): string {
+    return leadId
+      ? `/app/money/quotations?leadId=${encodeURIComponent(leadId)}`
+      : '/app/money/quotations'
+  },
+  moneyInvoices(leadId?: string): string {
+    return leadId
+      ? `/app/money/invoices?leadId=${encodeURIComponent(leadId)}`
+      : '/app/money/invoices'
+  },
+  salesQuotes(leadId?: string): string {
+    return leadId
+      ? `/app/sales/quotes?leadId=${encodeURIComponent(leadId)}`
+      : '/app/sales/quotes'
+  },
 
   // --- Orders ---
   orders(filter: OrdersFilter = 'active'): string {

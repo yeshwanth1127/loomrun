@@ -135,7 +135,7 @@ export function LandingPage() {
     <div className="landing">
       <nav className="landing-nav">
         <div className="logo" aria-label="Noolrun">
-          <img src="/noolrun-logo.png?v=3" alt="Noolrun" className="logo-img" />
+          <img src="/noolrun-mark.png?v=6" alt="Noolrun" className="logo-img logo-img--mark" />
         </div>
         <div className="nav-links">
           <a href="#workflow">Workflow</a>
@@ -661,7 +661,7 @@ export function LandingPage() {
         <div className="footer-inner">
           <div>
             <div className="footer-brand">
-              <img src="/noolrun-logo.png?v=3" alt="Noolrun" className="footer-brand-img" />
+              <img src="/noolrun-logo.png?v=5" alt="Noolrun" className="footer-brand-img" />
             </div>
             <div>by Exora Solutions Pvt Limited</div>
             <div>AECS Layout, Brookfield, Bangalore</div>

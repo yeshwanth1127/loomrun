@@ -180,3 +180,57 @@ def test_unprefixed_model_is_assumed_openrouter():
     body = qlix._cloud_agent_payload(name="A", model="openai/gpt-4o-mini")
     assert body["model"] == "openrouter/openai/gpt-4o-mini"
     assert body["llmProvider"] == "openrouter"
+
+
+def test_enqueue_run_payload_carries_external_run_id_and_correlation_id():
+    body = qlix._enqueue_run_payload(
+        content="hi",
+        use_brain=True,
+        model=None,
+        tool_context=None,
+        external_run_id="loomrun:conv-1:msg-1",
+        correlation_id="req-abc",
+    )
+    assert body["externalRunId"] == "loomrun:conv-1:msg-1"
+    assert body["metadata"] == {"correlationId": "req-abc", "source": "loomrun"}
+
+
+def test_enqueue_run_payload_omits_absent_ids():
+    body = qlix._enqueue_run_payload(
+        content="hi",
+        use_brain=True,
+        model=None,
+        tool_context=None,
+        external_run_id=None,
+        correlation_id=None,
+    )
+    assert "externalRunId" not in body
+    assert "metadata" not in body
+    assert "allowedMcpTools" not in body
+
+
+def test_enqueue_run_payload_includes_allowed_mcp_tools():
+    body = qlix._enqueue_run_payload(
+        content="hi",
+        use_brain=False,
+        model=None,
+        tool_context=None,
+        external_run_id=None,
+        correlation_id=None,
+        allowed_mcp_tools=["search_leads", "count_leads"],
+    )
+    assert body["allowedMcpTools"] == ["search_leads", "count_leads"]
+    assert body["useBrain"] is False
+
+
+def test_enqueue_run_payload_omits_empty_allowed_mcp_tools():
+    body = qlix._enqueue_run_payload(
+        content="hi",
+        use_brain=True,
+        model=None,
+        tool_context=None,
+        external_run_id=None,
+        correlation_id=None,
+        allowed_mcp_tools=[],
+    )
+    assert "allowedMcpTools" not in body

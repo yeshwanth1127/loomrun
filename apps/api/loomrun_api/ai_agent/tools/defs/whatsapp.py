@@ -6,6 +6,7 @@ from typing import Any
 
 from loomrun_api.ai_agent.tools.registry import ToolContext, register_tool
 from loomrun_api.services import whatsapp as wa_svc
+from loomrun_api.services.leads import DATE_BOUND_PARAMETERS
 
 
 def _send_summary(args: dict[str, Any]) -> str:
@@ -18,13 +19,9 @@ def _send_summary(args: dict[str, Any]) -> str:
 @register_tool(
     name="send_whatsapp_message",
     description=(
-        "Send a WhatsApp text message. Address it either with `lead_id` — a lead "
-        "id OR the lead/company name, which uses the number on their record — or "
-        "with `phone` for an explicit number. Pass both to send to a specific "
-        "number while still filing the message against that lead. This sends "
-        "immediately over the org's WhatsApp connection. Use list_whatsapp_messages "
-        "to see what has already gone out, and get_whatsapp_status to check the "
-        "connection first if a send has been failing."
+        "WHEN: send a WhatsApp text now. NEEDS: message, plus lead_id (id or "
+        "name) and/or phone. Never ask the user for an internal id. NOT: listing "
+        "what was already sent (list_whatsapp_messages)."
     ),
     parameters={
         "message": {"type": "string", "description": "Message text to send"},
@@ -60,32 +57,47 @@ async def send_whatsapp_message(
 @register_tool(
     name="list_whatsapp_messages",
     description=(
-        "List WhatsApp messages this organization has sent, newest first. "
-        "Optionally narrow to one lead with `lead_id` (id or name). Use for "
-        "'what did we send X', 'did the reminder go out', or delivery checks — "
-        "each row carries its delivery status."
+        "WHEN: what this org sent on WhatsApp, optionally for one lead or a date "
+        "window. NOT: searching leads. NEEDS: nothing required; optional lead_id "
+        "(id or name). RETURNS: short cards (id, lead, status, created_at) "
+        "without message bodies. Never ask the user for an internal id."
     ),
     parameters={
         "lead_id": {"type": "string", "description": "Optional lead id or name to filter by"},
         "limit": {"type": "integer", "description": "Max rows (1-100)", "default": 30},
+        **DATE_BOUND_PARAMETERS,
     },
     kind="read",
     modes=("minimal", "advanced"),
 )
 async def list_whatsapp_messages(
-    ctx: ToolContext, lead_id: str | None = None, limit: int = 30, **_: Any
+    ctx: ToolContext,
+    lead_id: str | None = None,
+    limit: int = 30,
+    created_after: str | None = None,
+    created_before: str | None = None,
+    updated_after: str | None = None,
+    updated_before: str | None = None,
+    timezone: str | None = None,
+    **_: Any,
 ) -> dict:
     return await wa_svc.list_whatsapp_messages(
-        organization_id=ctx.organization_id, lead_id=lead_id, limit=limit
+        organization_id=ctx.organization_id,
+        lead_id=lead_id,
+        limit=limit,
+        created_after=created_after,
+        created_before=created_before,
+        updated_after=updated_after,
+        updated_before=updated_before,
+        timezone=timezone or ctx.timezone,
     )
 
 
 @register_tool(
     name="get_whatsapp_status",
     description=(
-        "Check whether this organization's WhatsApp is connected and which "
-        "transport sends will use. Call this when a send failed or the user asks "
-        "why messages are not going out."
+        "WHEN: check whether WhatsApp is connected, or why sends are failing. "
+        "NOT: listing messages. RETURNS: connection/transport status."
     ),
     parameters={},
     kind="read",

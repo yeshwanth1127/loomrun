@@ -25,6 +25,8 @@ type Quotation = {
   template_id: string | null
   sent_at: string | null
   invoiced_at: string | null
+  linked_invoice_id?: string | null
+  linked_invoice_number?: string | null
   lines: {
     id?: string
     description: string
@@ -61,6 +63,7 @@ const STATUS_COLOR: Record<string, string> = {
   DRAFT: 'badge-slate',
   SENT: 'badge-blue',
   ACCEPTED: 'badge-green',
+  INVOICED: 'badge-indigo',
   REJECTED: 'badge-red',
   EXPIRED: 'badge-amber',
 }
@@ -69,6 +72,7 @@ const STATUS_LABEL: Record<string, string> = {
   DRAFT: 'Draft',
   SENT: 'Sent',
   ACCEPTED: 'Accepted',
+  INVOICED: 'Invoiced',
   REJECTED: 'Rejected',
   EXPIRED: 'Expired',
 }
@@ -233,13 +237,16 @@ export function LeadQuotesPanel({
 
   const genInvoice = useMutation({
     mutationFn: (id: string) =>
-      apiFetch<{ invoice_number: string }>(`/v1/orgs/${orgId}/quotations/${id}/generate-invoice`, {
-        method: 'POST',
-      }),
+      apiFetch<{ invoice_number: string; id?: string; quotation_id?: string }>(
+        `/v1/orgs/${orgId}/quotations/${id}/generate-invoice`,
+        { method: 'POST' },
+      ),
     onSuccess: (data) => {
+      const invoiceId = data.quotation_id || data.id
       toast.success(`Invoice ${data.invoice_number} created`)
       invalidate()
       void qc.invalidateQueries({ queryKey: ['invoices', orgId] })
+      if (invoiceId) navigate(routes.moneyInvoiceDoc(invoiceId))
     },
     onError: (err: Error) => toast.error(err.message),
   })
@@ -459,7 +466,22 @@ export function LeadQuotesPanel({
                                 </button>
                               </>
                             )}
-                            {isOwner && !q.invoice_number && q.pdf_url && (
+                            {isOwner && !q.invoice_number && (q.linked_invoice_id || q.status === 'INVOICED') ? (
+                              <button
+                                type="button"
+                                className="row-actions-menu-item"
+                                disabled={!q.linked_invoice_id}
+                                onClick={() => {
+                                  if (q.linked_invoice_id) {
+                                    navigate(routes.moneyInvoiceDoc(q.linked_invoice_id))
+                                  }
+                                  close()
+                                }}
+                              >
+                                <FileText size={14} />
+                                Open invoice
+                              </button>
+                            ) : isOwner && !q.invoice_number && q.pdf_url ? (
                               <button
                                 type="button"
                                 className="row-actions-menu-item"
@@ -472,7 +494,7 @@ export function LeadQuotesPanel({
                                 <FileText size={14} />
                                 Turn into invoice
                               </button>
-                            )}
+                            ) : null}
                             <button
                               type="button"
                               className="row-actions-menu-item"

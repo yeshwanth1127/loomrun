@@ -12,7 +12,6 @@ from loomrun_api.date_filter import apply_created_at
 from loomrun_api.deps import OrgContext, require_roles
 from loomrun_api import org_events
 from loomrun_api.prisma_client import prisma
-from loomrun_api.quotation_delivery import advance_lead_to_negotiation
 from loomrun_api.services import quotations as quote_svc
 from prisma.enums import QuotationStatus
 
@@ -31,6 +30,22 @@ class QuotationCreate(BaseModel):
     lines: list[QuotationLineIn] = Field(min_length=1)
     status: QuotationStatus = QuotationStatus.DRAFT
     template_id: str | None = None
+    title: str | None = Field(default=None, max_length=200)
+    tax_enabled: bool = False
+    tax_rate: float | None = Field(default=None, ge=0, le=100)
+    as_invoice: bool = False
+    source_quotation_id: str | None = None
+    source_quotation_version: int | None = None
+
+
+class QuotationUpdate(BaseModel):
+    lead_id: str
+    lines: list[QuotationLineIn] = Field(min_length=1)
+    template_id: str | None = None
+    title: str | None = Field(default=None, max_length=200)
+    tax_enabled: bool | None = None
+    tax_rate: float | None = Field(default=None, ge=0, le=100)
+    version_note: str | None = Field(default=None, max_length=500)
 
 
 class GeneratePdfBody(BaseModel):
@@ -65,6 +80,7 @@ async def list_quotations(
         pattern="^(quotation|invoice|all)$",
         description="quotation = not yet invoiced; invoice = converted; all = both",
     ),
+    lead_id: str | None = Query(None, description="Filter to one lead"),
     ctx: OrgContext = Depends(require_roles("OWNER", "SALES", "TELECALLER")),
 ) -> dict:
     where: dict = {"organizationId": ctx.organization_id}
@@ -73,10 +89,12 @@ async def list_quotations(
         where["invoiceNumber"] = None
     elif doc == "invoice":
         where["invoiceNumber"] = {"not": None}
+    if lead_id:
+        where["leadId"] = lead_id
     items = await prisma.quotation.find_many(
         where=where,
-        order={"createdAt": "desc"},
-        include={"lines": True, "lead": True},
+        order={"updatedAt": "desc"},
+        include={"lines": True, "lead": True, "sourceQuotation": True, "derivedInvoices": True},
     )
     return {"items": [quote_svc.serialize_quotation(q) for q in items]}
 
@@ -89,15 +107,86 @@ async def get_quotation(
 ) -> dict:
     q = await prisma.quotation.find_first(
         where={"id": quotation_id, "organizationId": ctx.organization_id},
-        include={"lines": True, "lead": True},
+        include={"lines": True, "lead": True, "sourceQuotation": True, "derivedInvoices": True},
     )
     if not q:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Quotation not found")
-    return quote_svc.serialize_quotation(q)
+    data = quote_svc.serialize_quotation(q)
+    from loomrun_api.quotation_versions import list_versions
+
+    data["versions"] = await list_versions(
+        organization_id=ctx.organization_id, quotation_id=quotation_id
+    )
+    return data
+
+
+@router.get("/orgs/{org_id}/quotations/{quotation_id}/versions")
+async def get_quotation_versions(
+    org_id: str,
+    quotation_id: str,
+    ctx: OrgContext = Depends(require_roles("OWNER", "SALES", "TELECALLER")),
+) -> dict:
+    q = await prisma.quotation.find_first(
+        where={"id": quotation_id, "organizationId": ctx.organization_id},
+    )
+    if not q:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Quotation not found")
+    from loomrun_api.quotation_versions import list_versions
+
+    return {
+        "items": await list_versions(
+            organization_id=ctx.organization_id, quotation_id=quotation_id
+        ),
+        "current_version": q.version,
+    }
+
+
+@router.get("/orgs/{org_id}/quotations/{quotation_id}/versions/{version_number}")
+async def get_quotation_version(
+    org_id: str,
+    quotation_id: str,
+    version_number: int,
+    ctx: OrgContext = Depends(require_roles("OWNER", "SALES", "TELECALLER")),
+) -> dict:
+    q = await prisma.quotation.find_first(
+        where={"id": quotation_id, "organizationId": ctx.organization_id},
+    )
+    if not q:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Quotation not found")
+    from loomrun_api.quotation_versions import serialize_version
+
+    row = await prisma.quotationversion.find_first(
+        where={
+            "quotationId": quotation_id,
+            "organizationId": ctx.organization_id,
+            "versionNumber": version_number,
+        }
+    )
+    if not row:
+        if q.version == version_number:
+            # Live current version without snapshot yet
+            q_full = await prisma.quotation.find_first(
+                where={"id": quotation_id},
+                include={"lines": True, "lead": True, "sourceQuotation": True},
+            )
+            data = quote_svc.serialize_quotation(q_full)
+            data["version_number"] = q.version
+            data["is_current"] = True
+            data["is_snapshot"] = False
+            return data
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Version not found")
+    data = serialize_version(row, is_current=(row.versionNumber == q.version))
+    data["is_snapshot"] = True
+    data["number"] = q.number
+    data["lead_id"] = q.leadId
+    return data
 
 
 @router.post("/orgs/{org_id}/quotations", status_code=status.HTTP_201_CREATED)
 async def create_quotation(org_id: str, body: QuotationCreate, ctx: OrgContext = Depends(require_roles("OWNER", "SALES", "TELECALLER"))) -> dict:
+    role = ctx.membership.role.name if hasattr(ctx.membership.role, "name") else str(ctx.membership.role)
+    if body.as_invoice and role != "OWNER":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Only owners can create invoices")
     return await quote_svc.create_quotation(
         organization_id=ctx.organization_id,
         user_id=ctx.membership.userId,
@@ -105,6 +194,12 @@ async def create_quotation(org_id: str, body: QuotationCreate, ctx: OrgContext =
         lines=[ln.model_dump() for ln in body.lines],
         status=body.status,
         template_id=body.template_id,
+        title=body.title,
+        tax_enabled=body.tax_enabled,
+        tax_rate=body.tax_rate,
+        as_invoice=body.as_invoice,
+        source_quotation_id=body.source_quotation_id,
+        source_quotation_version=body.source_quotation_version,
     )
 
 
@@ -138,95 +233,53 @@ async def generate_pdf(
     if not q:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Quotation not found")
     template_id = body.template_id if body else None
-    await prisma.quotation.update(where={"id": quotation_id}, data={"pdfJobId": "queued"})
-    asyncio.create_task(quote_svc.generate_pdf_task(quotation_id, template_id))
-    return {"status": "queued", "quotation_id": quotation_id}
+    # Generate synchronously so the workspace preview is ready when the client
+    # refreshes — fire-and-forget left users staring at an empty gray pane.
+    pdf_url = await quote_svc.run_pdf_generation(quotation_id, template_id)
+    if not pdf_url:
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="PDF generation failed")
+    updated = await prisma.quotation.find_first(
+        where={"id": quotation_id, "organizationId": ctx.organization_id},
+        include={"lines": True, "lead": True, "sourceQuotation": True},
+    )
+    return {
+        "status": "ready",
+        "quotation_id": quotation_id,
+        "pdf_url": pdf_url,
+        **(quote_svc.serialize_quotation(updated) if updated else {}),
+    }
 
 
 @router.patch("/orgs/{org_id}/quotations/{quotation_id}")
 async def update_quotation(
     org_id: str,
     quotation_id: str,
-    body: QuotationCreate,
+    body: QuotationUpdate,
     ctx: OrgContext = Depends(require_roles("OWNER", "SALES", "TELECALLER")),
 ) -> dict:
+    role = ctx.membership.role.name if hasattr(ctx.membership.role, "name") else str(ctx.membership.role)
     q = await prisma.quotation.find_first(
         where={"id": quotation_id, "organizationId": ctx.organization_id},
     )
     if not q:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Quotation not found")
-    if q.invoiceNumber:
+    if q.invoiceNumber and role != "OWNER":
         raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            detail="Invoiced quotations cannot be edited. Create a new quotation instead.",
+            status.HTTP_403_FORBIDDEN,
+            detail="Only owners can edit invoices",
         )
-
-    lead = await prisma.lead.find_first(
-        where={"id": body.lead_id, "organizationId": ctx.organization_id},
-    )
-    if not lead:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Lead not found")
-
-    subtotal = sum(line.quantity * line.unit_price for line in body.lines)
-    tax = 0.0
-    total = subtotal + tax
-    was_generated = bool(q.pdfUrl) or q.status == QuotationStatus.SENT
-
-    await prisma.quotationline.delete_many(where={"quotationId": quotation_id})
-
-    org_events.record_changed(
+    return await quote_svc.update_quotation_document(
         organization_id=ctx.organization_id,
-        entity_type=org_events.qlix_docs.ENTITY_QUOTATION,
-        entity_id=quotation_id,
+        user_id=ctx.membership.userId,
+        quotation_id=quotation_id,
+        lead_id=body.lead_id,
+        lines=[ln.model_dump() for ln in body.lines],
+        template_id=body.template_id,
+        title=body.title,
+        tax_enabled=body.tax_enabled,
+        tax_rate=body.tax_rate,
+        version_note=body.version_note,
     )
-    updated = await prisma.quotation.update(
-        where={"id": quotation_id},
-        data={
-            "leadId": body.lead_id,
-            "subtotal": subtotal,
-            "tax": tax,
-            "total": total,
-            "status": QuotationStatus.DRAFT,
-            "pdfUrl": None,
-            "pdfJobId": None,
-            "sentAt": None,
-            "templateId": body.template_id if body.template_id is not None else q.templateId,
-            "lines": {
-                "create": [
-                    {
-                        "description": ln.description,
-                        "quantity": ln.quantity,
-                        "unitPrice": ln.unit_price,
-                        "lineTotal": ln.quantity * ln.unit_price,
-                        "sortOrder": i,
-                    }
-                    for i, ln in enumerate(body.lines)
-                ]
-            },
-        },
-        include={"lines": True, "lead": True},
-    )
-
-    lead_stage = None
-    if was_generated:
-        # Revising a generated/sent quote means negotiation — move Quoted → Negotiation.
-        new_stage = await advance_lead_to_negotiation(
-            lead_id=body.lead_id,
-            user_id=ctx.membership.userId,
-            quotation_number=updated.number,
-        )
-        if new_stage is not None:
-            lead_stage = new_stage.name if hasattr(new_stage, "name") else str(new_stage)
-
-    result = quote_svc.serialize_quotation(updated)
-    if lead_stage:
-        result["lead_stage"] = lead_stage
-        result["message"] = (
-            "Quotation updated — lead moved to Negotiation"
-            if lead_stage == "NEGOTIATION"
-            else "Quotation updated — regenerate PDF when ready"
-        )
-    return result
 
 
 @router.patch("/orgs/{org_id}/quotations/{quotation_id}/title")
@@ -268,11 +321,15 @@ async def generate_invoice(
         quotation_id=quotation_id,
         queue_pdf=True,
         wait_pdf=False,
+        user_id=ctx.membership.userId,
     )
     return {
         "status": "queued",
         "invoice_number": result.get("invoice_number"),
-        "quotation_id": quotation_id,
+        "quotation_id": result.get("id"),
+        "source_quotation_id": quotation_id,
+        "source_quotation_version": result.get("source_quotation_version"),
+        **{k: v for k, v in result.items() if k in ("id", "number", "total", "tax", "tax_rate", "tax_enabled")},
     }
 
 

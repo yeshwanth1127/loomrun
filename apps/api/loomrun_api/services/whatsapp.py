@@ -14,7 +14,7 @@ from fastapi import HTTPException, status
 
 from loomrun_api.prisma_client import prisma
 from loomrun_api.prisma_json import json_meta
-from loomrun_api.services.leads import resolve_lead
+from loomrun_api.services.leads import apply_created_updated_filters, resolve_lead
 from prisma.enums import OutboundChannel, OutboundMessageStatus
 
 
@@ -116,7 +116,15 @@ async def send_whatsapp_message(
 
 
 async def list_whatsapp_messages(
-    *, organization_id: str, lead_id: str | None = None, limit: int = 30
+    *,
+    organization_id: str,
+    lead_id: str | None = None,
+    limit: int = 30,
+    created_after: str | None = None,
+    created_before: str | None = None,
+    updated_after: str | None = None,
+    updated_before: str | None = None,
+    timezone: str | None = None,
 ) -> dict[str, Any]:
     """Recent outbound WhatsApp messages, newest first."""
     where: dict[str, Any] = {
@@ -126,6 +134,14 @@ async def list_whatsapp_messages(
     if lead_id:
         lead = await resolve_lead(organization_id=organization_id, lead_id=lead_id)
         where["leadId"] = lead.id
+    apply_created_updated_filters(
+        where,
+        created_after=created_after,
+        created_before=created_before,
+        updated_after=updated_after,
+        updated_before=updated_before,
+        timezone=timezone,
+    )
 
     take = max(1, min(int(limit or 30), 100))
     total = await prisma.outboundmessage.count(where=where)
@@ -139,7 +155,6 @@ async def list_whatsapp_messages(
                 "lead_id": r.leadId,
                 "lead_title": r.lead.title if r.lead else None,
                 "status": r.status.name if hasattr(r.status, "name") else str(r.status),
-                "message": (r.payload or {}).get("text") if isinstance(r.payload, dict) else None,
                 "created_at": r.createdAt.isoformat(),
             }
             for r in rows

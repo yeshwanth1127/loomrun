@@ -53,6 +53,9 @@ def build_render_context(
     layout: TemplateLayout | dict | None = None,
     invoiced_at: datetime | None = None,
     created_at: datetime | None = None,
+    tax_enabled: bool = False,
+    tax_rate: float | None = None,
+    version: int | None = None,
 ) -> dict[str, Any]:
     paths = brand_paths_from_org(org)
     issuer = (org.brandLegalName or org.name) if org is not None else ""
@@ -69,6 +72,12 @@ def build_render_context(
         document_date = _format_doc_date(invoiced_at)
     else:
         document_date = _format_doc_date(created_at)
+
+    tax_label_extra = ""
+    if tax_enabled and tax_rate is not None:
+        # Prefer "GST (18%)" style when a rate is set
+        rate_str = f"{float(tax_rate):g}"
+        tax_label_extra = f" ({rate_str}%)"
 
     return {
         "org": {
@@ -101,6 +110,10 @@ def build_render_context(
             "subtotal": subtotal,
             "tax": tax,
             "total": total,
+            "tax_enabled": tax_enabled,
+            "tax_rate": tax_rate,
+            "tax_label_extra": tax_label_extra,
+            "version": version,
             "total_formatted": f"{currency}{total:,.2f}",
             "subtotal_formatted": f"{currency}{subtotal:,.2f}",
             "tax_formatted": f"{currency}{tax:,.2f}",

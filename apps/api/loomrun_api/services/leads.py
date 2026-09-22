@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import HTTPException, status
 
@@ -263,6 +264,256 @@ LEAD_SORTS: dict[str, dict[str, str]] = {
 }
 DEFAULT_LEAD_SORT = "newest"
 
+# Short list payload. get_lead stays full; search/list use this so a 20-row
+# result does not dump notes, campaigns and meta ads into the model context.
+LEAD_CARD_FIELDS: tuple[str, ...] = (
+    "id",
+    "title",
+    "company",
+    "phone",
+    "city",
+    "stage",
+    "lead_status",
+    "product_interest",
+    "created_at",
+    "updated_at",
+)
+
+# India-first default when the client did not send a timezone.
+DEFAULT_USER_TIMEZONE = "Asia/Kolkata"
+
+DATE_BOUND_PARAMETERS: dict[str, dict[str, Any]] = {
+    "created_after": {
+        "type": "string",
+        "description": (
+            "Inclusive lower bound on created_at. ISO date (YYYY-MM-DD) or datetime. "
+            "A YYYY-MM-DD is that local calendar day in `timezone` (or the user's). "
+            "Pass only when the user asked about records that were created/added. "
+            "Do not pass this just because they said today/this week/this month "
+            "while naming a live stage or status."
+        ),
+    },
+    "created_before": {
+        "type": "string",
+        "description": (
+            "Exclusive upper bound on created_at. ISO date or datetime. "
+            "A YYYY-MM-DD includes that whole local day in `timezone`."
+        ),
+    },
+    "updated_after": {
+        "type": "string",
+        "description": (
+            "Inclusive lower bound on updated_at. ISO date or datetime. "
+            "Pass only when the user asked about records that were changed/"
+            "updated/touched. There is no stage-entered timestamp."
+        ),
+    },
+    "updated_before": {
+        "type": "string",
+        "description": (
+            "Exclusive upper bound on updated_at. ISO date or datetime. "
+            "A YYYY-MM-DD includes that whole local day in `timezone`."
+        ),
+    },
+    "timezone": {
+        "type": "string",
+        "description": (
+            "IANA timezone for interpreting YYYY-MM-DD bounds, e.g. Asia/Kolkata. "
+            "Omit to use the current user's timezone for this run. Pass only if "
+            "the user named a different zone."
+        ),
+    },
+}
+
+# Prisma where keys that mean "who is in this state on the board right now".
+# Date bounds next to these become `in_window` facets, not the primary filter.
+_LIVE_STATE_WHERE_KEYS = frozenset({"stage", "assigneeId", "leadStatus", "status"})
+
+
+def normalize_timezone(name: str | None) -> str | None:
+    """Return a valid IANA name, or None if blank. Raises on unknown names."""
+    text = (name or "").strip()
+    if not text:
+        return None
+    try:
+        return ZoneInfo(text).key
+    except ZoneInfoNotFoundError as exc:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown timezone '{name}'. Use an IANA name such as Asia/Kolkata.",
+        ) from exc
+
+
+def coerce_timezone(name: str | None) -> str:
+    """Best-effort timezone: blank/invalid falls back to Asia/Kolkata."""
+    try:
+        return normalize_timezone(name) or DEFAULT_USER_TIMEZONE
+    except HTTPException:
+        return DEFAULT_USER_TIMEZONE
+
+
+def user_clock(
+    tz_name: str | None = None, *, now: datetime | None = None
+) -> dict[str, str]:
+    """Authoritative local calendar for relative phrases (today / this week / this month)."""
+    tz = ZoneInfo(coerce_timezone(tz_name))
+    current = now.astimezone(tz) if now is not None else datetime.now(tz)
+    today = current.date()
+    return {
+        "timezone": tz.key,
+        "local_label": current.strftime("%A %d %b %Y %H:%M"),
+        "local_iso": current.isoformat(timespec="minutes"),
+        "today": today.isoformat(),
+        "week_start": (today - timedelta(days=today.weekday())).isoformat(),
+        "month_start": today.replace(day=1).isoformat(),
+    }
+
+
+def clock_instructions(clock: dict[str, str]) -> str:
+    """Same calendar rule for the Qlix preamble and the local system prompt."""
+    return (
+        f"User local now: {clock['local_label']} ({clock['timezone']}). "
+        f"today={clock['today']} this_week_from={clock['week_start']} "
+        f"this_month_from={clock['month_start']}. "
+        "Stage, status, assignee and factory step are LIVE board fields — "
+        "who is in that state now. Do not add created_after/updated_after just "
+        "because the user said today/this week/this month. Date bounds only when "
+        "they asked about records that were created/added, or updated/changed/"
+        "touched. If you pass both a live field and a date bound, `total`/`items` "
+        "are the live board and `in_window.created` / `in_window.updated` are "
+        "calendar counts — report both; never treat a window count as how many "
+        "ARE in that stage."
+    )
+
+
+def parse_iso_bound(
+    value: str | None,
+    *,
+    field: str,
+    exclusive_end: bool = False,
+    tz_name: str | None = None,
+) -> datetime | None:
+    """Parse an ISO date or datetime into UTC for a Prisma range filter.
+
+    Date-only values are the local calendar day in ``tz_name`` (default
+    Asia/Kolkata), not UTC midnight.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    tz = ZoneInfo(coerce_timezone(tz_name))
+    date_only = len(text) == 10 and text[4] == "-" and text[7] == "-"
+    try:
+        if date_only:
+            dt = datetime.fromisoformat(text).replace(tzinfo=tz)
+            if exclusive_end:
+                dt = dt + timedelta(days=1)
+            return dt.astimezone(timezone.utc)
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=f"{field} must be an ISO-8601 date (YYYY-MM-DD) or datetime",
+        ) from exc
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=tz)
+    return dt.astimezone(timezone.utc)
+
+
+def has_live_state_filter(where: dict[str, Any]) -> bool:
+    """True when the query already names a current board field (stage, status, …)."""
+    return bool(_LIVE_STATE_WHERE_KEYS & set(where))
+
+
+def calendar_window(
+    *,
+    created_after: str | None = None,
+    created_before: str | None = None,
+    updated_after: str | None = None,
+    updated_before: str | None = None,
+) -> tuple[str | None, str | None]:
+    """One calendar span from whichever bound the caller filled in."""
+    after = created_after or updated_after
+    before = created_before or updated_before
+    return after, before
+
+
+def window_facet_wheres(
+    snapshot_where: dict[str, Any],
+    *,
+    after: str | None,
+    before: str | None,
+    timezone: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Copies of `snapshot_where` with the same calendar span on created vs updated."""
+    created = dict(snapshot_where)
+    apply_created_updated_filters(
+        created,
+        created_after=after,
+        created_before=before,
+        timezone=timezone,
+    )
+    updated = dict(snapshot_where)
+    apply_created_updated_filters(
+        updated,
+        updated_after=after,
+        updated_before=before,
+        timezone=timezone,
+    )
+    return created, updated
+
+
+def apply_created_updated_filters(
+    where: dict[str, Any],
+    *,
+    created_after: str | None = None,
+    created_before: str | None = None,
+    updated_after: str | None = None,
+    updated_before: str | None = None,
+    timezone: str | None = None,
+    created_field: str = "createdAt",
+    updated_field: str = "updatedAt",
+) -> dict[str, Any]:
+    """Mutate `where` with created/updated range filters. Empty values are no-ops."""
+    created: dict[str, Any] = {}
+    after = parse_iso_bound(
+        created_after, field="created_after", tz_name=timezone
+    )
+    before = parse_iso_bound(
+        created_before, field="created_before", exclusive_end=True, tz_name=timezone
+    )
+    if after is not None:
+        created["gte"] = after
+    if before is not None:
+        created["lt"] = before
+    if created:
+        where[created_field] = created
+
+    updated: dict[str, Any] = {}
+    u_after = parse_iso_bound(
+        updated_after, field="updated_after", tz_name=timezone
+    )
+    u_before = parse_iso_bound(
+        updated_before, field="updated_before", exclusive_end=True, tz_name=timezone
+    )
+    if u_after is not None:
+        updated["gte"] = u_after
+    if u_before is not None:
+        updated["lt"] = u_before
+    if updated:
+        where[updated_field] = updated
+    return where
+
+
+def compact_lead(row: dict[str, Any], extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Strip a serialized lead down to the list-card fields."""
+    card = {key: row.get(key) for key in LEAD_CARD_FIELDS}
+    if extra:
+        card.update(extra)
+    return card
+
 
 async def resolve_lead(*, organization_id: str, lead_id: str):
     """Find a lead by id, or by name when the caller passed one.
@@ -334,6 +585,65 @@ async def resolve_lead(*, organization_id: str, lead_id: str):
     )
 
 
+async def attach_window_facets(
+    result: dict[str, Any],
+    snapshot_where: dict[str, Any],
+    *,
+    count_fn,
+    created_after: str | None = None,
+    created_before: str | None = None,
+    updated_after: str | None = None,
+    updated_before: str | None = None,
+    timezone: str | None = None,
+) -> dict[str, Any]:
+    """If a live board filter + date bound were both passed, keep `result` as the
+    live snapshot and attach created/updated counts for the same calendar span.
+    """
+    after, before = calendar_window(
+        created_after=created_after,
+        created_before=created_before,
+        updated_after=updated_after,
+        updated_before=updated_before,
+    )
+    if not after and not before:
+        return result
+    if not has_live_state_filter(snapshot_where):
+        result["matching"] = "created_updated_window"
+        return result
+    created_where, updated_where = window_facet_wheres(
+        snapshot_where, after=after, before=before, timezone=timezone
+    )
+    result["matching"] = "current_state"
+    result["in_window"] = {
+        "after": after,
+        "before": before,
+        "created": await count_fn(created_where),
+        "updated": await count_fn(updated_where),
+    }
+    return result
+
+
+def apply_dates_unless_live(
+    where: dict[str, Any],
+    *,
+    created_after: str | None = None,
+    created_before: str | None = None,
+    updated_after: str | None = None,
+    updated_before: str | None = None,
+    timezone: str | None = None,
+) -> None:
+    if has_live_state_filter(where):
+        return
+    apply_created_updated_filters(
+        where,
+        created_after=created_after,
+        created_before=created_before,
+        updated_after=updated_after,
+        updated_before=updated_before,
+        timezone=timezone,
+    )
+
+
 async def search_leads(
     *,
     organization_id: str,
@@ -342,6 +652,11 @@ async def search_leads(
     assignee_id: str | None = None,
     limit: int = 20,
     sort: str | None = None,
+    created_after: str | None = None,
+    created_before: str | None = None,
+    updated_after: str | None = None,
+    updated_before: str | None = None,
+    timezone: str | None = None,
 ) -> dict[str, Any]:
     where: dict = {"organizationId": organization_id}
     if stage is not None:
@@ -367,6 +682,14 @@ async def search_leads(
             {"company": {"contains": search, "mode": "insensitive"}},
             {"email": {"contains": search, "mode": "insensitive"}},
         ]
+    apply_dates_unless_live(
+        where,
+        created_after=created_after,
+        created_before=created_before,
+        updated_after=updated_after,
+        updated_before=updated_before,
+        timezone=timezone,
+    )
     take = max(1, min(int(limit or 20), 50))
     sort_key = (sort or DEFAULT_LEAD_SORT).strip().lower()
     order = LEAD_SORTS.get(sort_key) or LEAD_SORTS[DEFAULT_LEAD_SORT]
@@ -379,23 +702,30 @@ async def search_leads(
     )
     items = []
     for lead in leads:
-        row = serialize_lead(lead)
+        extra: dict[str, Any] = {}
         if lead.assignee:
-            row["assignee"] = {
-                "id": lead.assignee.id,
-                "name": lead.assignee.name,
-                "email": lead.assignee.email,
-            }
-        items.append(row)
+            extra["assignee_id"] = lead.assignee.id
+            extra["assignee_name"] = lead.assignee.name
+        items.append(compact_lead(serialize_lead(lead), extra or None))
     # `sort` is echoed back so the model can state on what basis a row is the
     # "latest" one, instead of inferring an order the payload never stated.
-    return {
+    result: dict[str, Any] = {
         "items": items,
         "count": len(items),
         "total": total,
         "sort": sort_key if sort_key in LEAD_SORTS else DEFAULT_LEAD_SORT,
         "ordered_by": order,
     }
+    return await attach_window_facets(
+        result,
+        where,
+        count_fn=lambda w: prisma.lead.count(where=w),
+        created_after=created_after,
+        created_before=created_before,
+        updated_after=updated_after,
+        updated_before=updated_before,
+        timezone=timezone,
+    )
 
 
 def _enum_name(value: Any) -> str:
@@ -418,13 +748,64 @@ async def _group_count(*, field: str, where: dict[str, Any]) -> dict[str, int]:
     return counts
 
 
-async def count_leads(*, organization_id: str) -> dict[str, Any]:
-    """Organisation-wide lead totals. Use this for 'how many leads' — not search_leads."""
+async def count_leads(
+    *,
+    organization_id: str,
+    stage: LeadStage | str | None = None,
+    created_after: str | None = None,
+    created_before: str | None = None,
+    updated_after: str | None = None,
+    updated_before: str | None = None,
+    timezone: str | None = None,
+) -> dict[str, Any]:
+    """Lead totals, optionally narrowed by stage.
+
+    Totals only — never a roster. Stage/status are live board fields: a stage
+    filter returns who is in that stage now. Date bounds without a stage filter
+    the created/updated window. Both together keep `total` as the live board
+    and attach `in_window` created/updated counts for the same calendar span.
+    """
     where: dict[str, Any] = {"organizationId": organization_id}
+    if stage is not None:
+        if isinstance(stage, LeadStage):
+            where["stage"] = stage
+        else:
+            key = str(stage).strip().upper()
+            if key not in LeadStage.__members__:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"Unknown stage '{stage}'. Valid stages: "
+                        f"{', '.join(LeadStage.__members__)}"
+                    ),
+                )
+            where["stage"] = LeadStage[key]
+    apply_dates_unless_live(
+        where,
+        created_after=created_after,
+        created_before=created_before,
+        updated_after=updated_after,
+        updated_before=updated_before,
+        timezone=timezone,
+    )
     total = await prisma.lead.count(where=where)
     by_stage = await _group_count(field="stage", where=where)
     by_status = await _group_count(field="leadStatus", where=where)
-    return {"total": total, "by_status": by_status, "by_stage": by_stage}
+    result: dict[str, Any] = {
+        "total": total,
+        "by_status": by_status,
+        "by_stage": by_stage,
+    }
+    return await attach_window_facets(
+        result,
+        where,
+        count_fn=lambda w: prisma.lead.count(where=w),
+        created_after=created_after,
+        created_before=created_before,
+        updated_after=updated_after,
+        updated_before=updated_before,
+        timezone=timezone,
+    )
 
 
 async def list_follow_ups(
@@ -485,15 +866,17 @@ async def list_follow_ups(
         if bucket in ("due_now", "later_today"):
             buckets["today"] += 1
         buckets[bucket] = buckets.get(bucket, 0) + 1
-        row = serialize_lead(lead, with_last_call=True, last_call=call)
-        row["follow_up_bucket"] = bucket
+        full = serialize_lead(lead, with_last_call=True, last_call=call)
+        extra: dict[str, Any] = {
+            "follow_up_bucket": bucket,
+            "next_follow_up_at": full.get("next_follow_up_at"),
+            "last_call_outcome": full.get("last_call_outcome"),
+            "last_call_at": full.get("last_call_at"),
+        }
         if lead.assignee:
-            row["assignee"] = {
-                "id": lead.assignee.id,
-                "name": lead.assignee.name,
-                "email": lead.assignee.email,
-            }
-        items.append(row)
+            extra["assignee_id"] = lead.assignee.id
+            extra["assignee_name"] = lead.assignee.name
+        items.append(compact_lead(full, extra))
 
     total = len(items)
     return {
@@ -763,6 +1146,7 @@ async def update_lead(
     if next_follow_up_at is not None:
         update_data["nextFollowUpAt"] = next_follow_up_at
         update_data["followUpRemindedAt"] = None
+        update_data["followUpRemindedOffsets"] = []
         update_data["followUpWaRemindedAt"] = None
     if estimated_value is not None:
         update_data["estimatedValue"] = estimated_value

@@ -1,0 +1,270 @@
+{
+  "timestamp": "2026-09-22T05:11:54.689511+00:00",
+  "group": "regression",
+  "org_id": "cms70u5a70004zxlbo1in0y52",
+  "model": "openai/gpt-4.1-mini",
+  "truth": {
+    "leads_total": 703,
+    "status_active": 696,
+    "stage_contacted": 506,
+    "stage_new": 182,
+    "stage_won": 5,
+    "status_won": 4,
+    "stage_lost": 3,
+    "stage_negotiation": 1,
+    "stage_quotation": 0,
+    "quotations": 4,
+    "production_orders": 9
+  },
+  "passed": 12,
+  "total": 13,
+  "results": [
+    {
+      "case_id": "R1_count_won_month",
+      "category": "read/count",
+      "ok": true,
+      "latency_s": 5.13,
+      "http_status": 200,
+      "model": "openai/gpt-4.1-mini",
+      "path": "local-llm",
+      "tools": [
+        "count_leads"
+      ],
+      "mutations": [],
+      "reply": "The exact count of leads in the WON stage for this month (September 2026) is 5.",
+      "notes": [],
+      "error": null
+    },
+    {
+      "case_id": "R2_won_details",
+      "category": "read/list",
+      "ok": true,
+      "latency_s": 7.51,
+      "http_status": 200,
+      "model": "openai/gpt-4.1-mini",
+      "path": "local-llm",
+      "tools": [
+        "search_leads"
+      ],
+      "mutations": [],
+      "reply": "Here is the full roster of WON leads closed in September 2026 with their details:\n\n1. Guruswaroop Pommarapalli\n   - Company: D'Curve\n   - Phone: +919686116216\n   - City: Bangalore\n   - Product Interest: 40 T-Shirts\n\n2. Vijay Kumar Mahalaxmi Sweets\n   - Company: Not provided\n   - Phone: 9379368990\n   - City: Mysore\n   - Product Interest: T-Shirt & Cotton Pant\n\n3. Suresh Kumar\n   - Company: Davis Langdon\n   - Phone: +919840867122\n   - City: Pondicherry\n   - Product Interest: Not provided\n\n4. Gopinath\n   - Company: Arunachala Industries\n   - Phone: +919841699190\n   - City: Urapakkam\n   - Product Interest: 50 pcs\n\n5. karthikSV\n   - Company: Capertots\n   - Phone: +919384764500\n   - City: Chennai\n",
+      "notes": [],
+      "error": null
+    },
+    {
+      "case_id": "R3_followups_screen",
+      "category": "read/followups",
+      "ok": true,
+      "latency_s": 7.36,
+      "http_status": 200,
+      "model": "openai/gpt-4.1-mini",
+      "path": "local-llm",
+      "tools": [
+        "list_follow_ups",
+        "search_leads"
+      ],
+      "mutations": [],
+      "reply": "Currently on your Follow-ups list, there are leads whose most recent call ended in CALLBACK_SCHEDULED. Here are a few of them:\n\n1. Gani S from IBM India Pvt Ltd, Bangalore, interested in \"Not required,\" next follow-up on 25th Sep 2026.\n2. Shravan Kumar from Seapops, Bengaluru, with interest noted as \"their manager will contact us,\" next follow-up on 27th Sep 2026.\n3. Murugasarathi Palanivelu from Athenian academy, Bangalore, interested in \"200 pcs polo,\" next follow-up today (22nd Sep 2026).\n4. Rajesh G from ARC DOCUMENT SOLUTIONS, Bangalore, with interest \"another department will contact us,\" next follow-up today (22nd Sep 2026).\n\nThere are a total of 85 leads in the follow-ups list with di",
+      "notes": [],
+      "error": null
+    },
+    {
+      "case_id": "R4_latest_lead",
+      "category": "read/edge",
+      "ok": true,
+      "latency_s": 5.57,
+      "http_status": 200,
+      "model": "openai/gpt-4.1-mini",
+      "path": "local-llm",
+      "tools": [
+        "search_leads"
+      ],
+      "mutations": [],
+      "reply": "The newest lead in your system is Shravan Kumar from the company Seapops. This lead was created on 21st September 2026 and is currently in the CONTACTED stage. The lead is located in Bengaluru, and the product interest noted is that their manager will contact us. The phone number for this lead is +919121006363. Would you like any further details or actions on this lead?",
+      "notes": [],
+      "error": null
+    },
+    {
+      "case_id": "W1_schedule_followup",
+      "category": "write/followup",
+      "ok": true,
+      "latency_s": 5.64,
+      "http_status": 200,
+      "model": "openai/gpt-4.1-mini",
+      "path": "local-llm",
+      "tools": [
+        "search_leads",
+        "schedule_follow_up"
+      ],
+      "mutations": [
+        {
+          "entity": "call",
+          "action": "scheduled",
+          "id": "cmsrd603b0029utogkn1rbiwi",
+          "label": "Gani S",
+          "summary": "Follow-up scheduled for Gani S",
+          "tool": "schedule_follow_up"
+        }
+      ],
+      "reply": "Scheduled a follow-up call for Gani S on 25 September 2026 at 10:30 AM IST, now visible on the Follow-ups page.",
+      "notes": [],
+      "error": null
+    },
+    {
+      "case_id": "W2_update_lead_stage",
+      "category": "write/lead",
+      "ok": true,
+      "latency_s": 3.42,
+      "http_status": 200,
+      "model": "openai/gpt-4.1-mini",
+      "path": "local-llm",
+      "tools": [
+        "update_lead"
+      ],
+      "mutations": [
+        {
+          "entity": "lead",
+          "action": "updated",
+          "id": "cmsbqx71200zv8ja299fo1kwo",
+          "label": "Shivu S",
+          "summary": "Lead Shivu S updated",
+          "tool": "update_lead"
+        }
+      ],
+      "reply": "Lead Shivu S has been moved to the NEGOTIATION stage.",
+      "notes": [
+        "hint: Failed on 2026-09-21: model searched NEW stage only and gave up."
+      ],
+      "error": null
+    },
+    {
+      "case_id": "W3_quotation_edit",
+      "category": "write/quotation",
+      "ok": true,
+      "latency_s": 5.04,
+      "http_status": 200,
+      "model": "openai/gpt-4.1-mini",
+      "path": "local-llm",
+      "tools": [
+        "get_quotation",
+        "update_quotation"
+      ],
+      "mutations": [
+        {
+          "entity": "quotation",
+          "action": "updated",
+          "id": "cmubcbngf003p13c259xer7b4",
+          "label": "Q-2026-00005",
+          "summary": "Saved as version 8. Previous version 7 kept in history.",
+          "tool": "update_quotation"
+        }
+      ],
+      "reply": "The line description on quotation Q-2026-00005 was updated to 'premium cotton tshirts' while keeping the same quantity and unit price.",
+      "notes": [],
+      "error": null
+    },
+    {
+      "case_id": "X1_ambiguous_description",
+      "category": "edge/routing",
+      "ok": true,
+      "latency_s": 3.56,
+      "http_status": 200,
+      "model": "openai/gpt-4.1-mini",
+      "path": "local-llm",
+      "tools": [
+        "update_quotation"
+      ],
+      "mutations": [],
+      "reply": "To update the description from \"tshirts\" to \"corporate polo shirts\" on quotation Q-2026-00005, I need the existing quantity and unit price for the line with \"tshirts.\" Could you please provide those details?",
+      "notes": [],
+      "error": null
+    },
+    {
+      "case_id": "X2_factory_vs_sales_stage",
+      "category": "edge/routing",
+      "ok": true,
+      "latency_s": 5.8,
+      "http_status": 200,
+      "model": "openai/gpt-4.1-mini",
+      "path": "local-llm",
+      "tools": [
+        "list_production_orders"
+      ],
+      "mutations": [],
+      "reply": "I could not find a production order for D'Curve in the PENDING stage or any other stage. Could you please confirm if the production order for D'Curve has been created? If not, I can start the production order for you.",
+      "notes": [
+        "hint: Must not treat CUTTING as a sales pipeline stage."
+      ],
+      "error": null
+    },
+    {
+      "case_id": "L1_long_multipart",
+      "category": "long/complex",
+      "ok": false,
+      "latency_s": 14.21,
+      "http_status": 200,
+      "model": "openai/gpt-4.1-mini",
+      "path": "local-llm",
+      "tools": [
+        "count_leads",
+        "search_leads",
+        "get_lead",
+        "list_follow_ups"
+      ],
+      "mutations": [],
+      "reply": "Here is the sales review data you requested:\n\n1. There are currently 507 leads in the CONTACTED stage.\n2. The top 3 leads by estimated value in CONTACTED stage are:\n   - Mg steel suppliers (Lead: Gowtham)\n   - Sonite agriventures pvt ltd (Lead: Bhavin Thakker)\n   - Sri Ganesh agencies (Lead: Pandian Ganesan)\n3. For the highest-value lead \"Mg steel suppliers,\" there are no quotations listed.\n4. This lead does not have a follow-up scheduled on the Follow-ups screen.\n\nLet me know if you need any more details or further assistance.",
+      "notes": [
+        "expected one of [506] in reply, numbers found: [1, 2, 3, 4, 507]"
+      ],
+      "error": null
+    },
+    {
+      "case_id": "L2_very_long_context",
+      "category": "long/noise",
+      "ok": true,
+      "latency_s": 4.68,
+      "http_status": 200,
+      "model": "openai/gpt-4.1-mini",
+      "path": "local-llm",
+      "tools": [
+        "count_leads"
+      ],
+      "mutations": [],
+      "reply": "You have a total of 696 ACTIVE leads in your pipeline.",
+      "notes": [
+        "hint: ACTIVE is a leadStatus, not a stage."
+      ],
+      "error": null
+    },
+    {
+      "case_id": "H1_with_history",
+      "category": "history",
+      "ok": true,
+      "latency_s": 3.67,
+      "http_status": 200,
+      "model": "openai/gpt-4.1-mini",
+      "path": "local-llm",
+      "tools": [
+        "get_lead"
+      ],
+      "mutations": [],
+      "reply": "The phone numbers for the 3 WON leads from September 2026 are:\n\n1. D'Curve: +919686116216\n2. Capertots: +919384764500\n3. Davis Langdon: +919840867122",
+      "notes": [],
+      "error": null
+    },
+    {
+      "case_id": "N1_honesty_no_tool",
+      "category": "negative",
+      "ok": true,
+      "latency_s": 1.56,
+      "http_status": 200,
+      "model": "openai/gpt-4.1-mini",
+      "path": "local-llm",
+      "tools": [],
+      "mutations": [],
+      "reply": "I cannot delete all leads in the database permanently. If you want, I can help you with specific lead management tasks like updating, moving stages, or exporting data. Please let me know how you'd like to proceed.",
+      "notes": [],
+      "error": null
+    }
+  ]
+}

@@ -13,6 +13,7 @@ from typing import Any, Literal
 
 from fastapi import HTTPException, status
 
+from loomrun_api.config import settings
 from loomrun_api.entitlements import Entitlements, utcnow
 from loomrun_api.prisma_client import prisma
 
@@ -31,6 +32,33 @@ WEEK_SECONDS = 7 * 24 * 3600
 DEFAULT_ESTIMATED_CREDITS = 5
 
 
+def ai_usage_bypassed(organization_id: str) -> bool:
+    """True when this org is on the temporary AI metering bypass allowlist."""
+    return organization_id in settings.ai_usage_bypass_org_id_set
+
+
+def _bypassed_windows_payload(ents: Entitlements) -> dict[str, Any]:
+    """UI/API snapshot for bypassed orgs: always show zero used, full remaining."""
+    session_limit = ents.ai_credits_per_5h
+    weekly_limit = ents.ai_credits_per_week
+    return {
+        "session5h": {
+            "used": 0,
+            "limit": session_limit,
+            "remaining": session_limit if session_limit is not None else None,
+            "resetsAt": None,
+            "periodStart": None,
+        },
+        "weekly": {
+            "used": 0,
+            "limit": weekly_limit,
+            "remaining": weekly_limit if weekly_limit is not None else None,
+            "resetsAt": None,
+            "periodStart": None,
+        },
+    }
+
+
 def _as_utc(dt: datetime | None) -> datetime | None:
     if dt is None:
         return None
@@ -39,13 +67,32 @@ def _as_utc(dt: datetime | None) -> datetime | None:
     return dt.astimezone(timezone.utc)
 
 
-def credits_from_tokens(prompt_tokens: int, completion_tokens: int) -> int:
-    """~1 credit ≈ 1k effective tokens; completion weighted 3×."""
+def credits_from_tokens(
+    prompt_tokens: int,
+    completion_tokens: int,
+    cached_tokens: int = 0,
+    *,
+    no_llm: bool = False,
+) -> int:
+    """~1 credit ≈ 1k effective tokens; completion weighted 3×.
+
+    Cached prompt tokens are billed at a quarter weight, matching what the
+    provider charges to reuse a prefix — otherwise prompt caching lowers the
+    real API bill while the user's meter, and their credit cap, never move.
+
+    ``no_llm`` marks a turn answered without any model call (the deterministic
+    CRM path). Those used to fall through to DEFAULT_ESTIMATED_CREDITS and cost
+    a user the same as a full turn for a single Postgres COUNT.
+    """
     prompt = max(0, int(prompt_tokens or 0))
     completion = max(0, int(completion_tokens or 0))
+    cached = min(max(0, int(cached_tokens or 0)), prompt)
+    if no_llm:
+        return 0
     if prompt == 0 and completion == 0:
         return DEFAULT_ESTIMATED_CREDITS
-    return max(1, math.ceil((prompt + 3 * completion) / 1000))
+    effective = (prompt - cached) + 0.25 * cached
+    return max(1, math.ceil((effective + 3 * completion) / 1000))
 
 
 def parse_usage_dict(usage: dict[str, Any] | None) -> tuple[int, int]:
@@ -56,6 +103,18 @@ def parse_usage_dict(usage: dict[str, Any] | None) -> tuple[int, int]:
     return max(0, prompt), max(0, completion)
 
 
+def parse_cached_tokens(usage: dict[str, Any] | None) -> int:
+    """Cached prompt tokens, which providers bill at a fraction of input rate."""
+    if not isinstance(usage, dict):
+        return 0
+    details = usage.get("prompt_tokens_details")
+    if isinstance(details, dict):
+        cached = details.get("cached_tokens")
+        if cached is not None:
+            return max(0, int(cached or 0))
+    return max(0, int(usage.get("cached_tokens") or 0))
+
+
 def accumulate_usage(
     totals: dict[str, int],
     usage: dict[str, Any] | None,
@@ -63,6 +122,7 @@ def accumulate_usage(
     prompt, completion = parse_usage_dict(usage)
     totals["prompt_tokens"] = totals.get("prompt_tokens", 0) + prompt
     totals["completion_tokens"] = totals.get("completion_tokens", 0) + completion
+    totals["cached_tokens"] = totals.get("cached_tokens", 0) + parse_cached_tokens(usage)
 
 
 def weekly_period_bounds(anchor: datetime, now: datetime | None = None) -> tuple[datetime, datetime]:
@@ -174,6 +234,9 @@ async def get_ai_windows(
     *,
     org_created_at: datetime | None = None,
 ) -> dict[str, Any]:
+    if ai_usage_bypassed(organization_id):
+        return _bypassed_windows_payload(ents)
+
     session_limit = ents.ai_credits_per_5h
     weekly_limit = ents.ai_credits_per_week
     if session_limit is None and weekly_limit is None:
@@ -214,6 +277,9 @@ async def require_ai_capacity(
     org_created_at: datetime | None = None,
 ) -> dict[str, Any]:
     """Hard-stop when either pool is empty. Returns current window snapshot."""
+    if ai_usage_bypassed(organization_id):
+        return _bypassed_windows_payload(ents)
+
     session_limit = ents.ai_credits_per_5h
     weekly_limit = ents.ai_credits_per_week
 
@@ -292,18 +358,27 @@ async def debit_ai_usage(
     source: AiUsageSource,
     prompt_tokens: int = 0,
     completion_tokens: int = 0,
+    cached_tokens: int = 0,
     credits: int | None = None,
     model: str | None = None,
     conversation_id: str | None = None,
     org_created_at: datetime | None = None,
+    no_llm: bool = False,
 ) -> dict[str, Any]:
     """Record an AiUsageEvent and debit both active windows."""
+    if ai_usage_bypassed(organization_id):
+        return _bypassed_windows_payload(ents)
+
     charged = (
         int(credits)
         if credits is not None
-        else credits_from_tokens(prompt_tokens, completion_tokens)
+        else credits_from_tokens(
+            prompt_tokens, completion_tokens, cached_tokens, no_llm=no_llm
+        )
     )
-    charged = max(1, charged)
+    # A turn answered with no model call is genuinely free; everything else
+    # costs at least one credit.
+    charged = max(0, charged) if no_llm else max(1, charged)
 
     session_limit = ents.ai_credits_per_5h or 0
     weekly_limit = ents.ai_credits_per_week or 0

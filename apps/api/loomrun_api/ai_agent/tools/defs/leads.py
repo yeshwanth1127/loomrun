@@ -7,6 +7,7 @@ from typing import Any
 
 from loomrun_api.ai_agent.tools.registry import ToolContext, register_tool
 from loomrun_api.services import leads as lead_svc
+from loomrun_api.services import telecaller as call_svc
 
 _STAGES = "NEW, CONTACTED, QUALIFICATION, QUOTATION, NEGOTIATION, SAMPLE, WON, LOST"
 
@@ -33,16 +34,19 @@ def _create_summary(args: dict[str, Any]) -> str:
 @register_tool(
     name="search_leads",
     description=(
-        "Search and rank leads in this organization by text, stage, or assignee. "
-        "ALWAYS call this for 'latest/newest/most recent lead', 'oldest lead', "
-        "'biggest lead' or 'first N leads' — with the matching `sort` and "
-        "limit=1 for a single answer. Results are ordered by `sort` "
-        "(default newest-first by creation date) and every row carries "
-        "`created_at`, so the first item is the answer to a 'latest' question. "
-        "Never pick a lead out of background context or a prompt sample and call "
-        "it the latest — that context is unordered. Returns up to `limit` rows "
-        "(default 20, max 50) plus `total` for the full match count; never treat "
-        "the length of `items` as the organisation total."
+        "WHEN: find a set of leads — lists, 'who/which', 'latest', stage "
+        "filters (including WON/LOST). NOT: a count-only question (use "
+        "count_leads), one already-identified lead's full record (use get_lead), "
+        "or quotations for a lead (use list_quotations_for_lead after you have "
+        "a lead id). NEEDS: nothing required; pass stage, search text, sort. "
+        "Never ask the user for an internal id. RETURNS: short cards "
+        "(id, title, company, phone, city, stage, status, product_interest, "
+        "created_at, updated_at) plus `total`. Call get_lead for notes/activities. "
+        "Stage/assignee are the live board: `total`/`items` are who is in that "
+        "state now. Date bounds without a stage filter created/updated records. "
+        "Both together keep the live roster and add `in_window.created` / "
+        "`in_window.updated`. Report both; never treat a window count as how "
+        "many ARE in the stage."
     ),
     parameters={
         "search": {"type": "string", "description": "Name, phone, company, or email substring"},
@@ -60,6 +64,7 @@ def _create_summary(args: dict[str, Any]) -> str:
             ),
             "default": lead_svc.DEFAULT_LEAD_SORT,
         },
+        **lead_svc.DATE_BOUND_PARAMETERS,
     },
     kind="read",
     modes=("minimal", "advanced"),
@@ -71,6 +76,11 @@ async def search_leads(
     assignee_id: str | None = None,
     limit: int = 20,
     sort: str | None = None,
+    created_after: str | None = None,
+    created_before: str | None = None,
+    updated_after: str | None = None,
+    updated_before: str | None = None,
+    timezone: str | None = None,
     **_: Any,
 ) -> dict:
     return await lead_svc.search_leads(
@@ -80,39 +90,67 @@ async def search_leads(
         assignee_id=assignee_id,
         limit=limit,
         sort=sort,
+        created_after=created_after,
+        created_before=created_before,
+        updated_after=updated_after,
+        updated_before=updated_before,
+        timezone=timezone or ctx.timezone,
     )
 
 
 @register_tool(
     name="count_leads",
     description=(
-        "Return the organisation-wide lead total plus breakdowns by pipeline stage and "
-        "status (ACTIVE/WON/LOST). ALWAYS call this when the user asks how many leads "
-        "they have. Do not infer a count from Brain snippets or from search_leads items."
+        "WHEN: the user asks how many leads, optionally in a stage or date "
+        "window. NOT: a roster or names (use search_leads); quotations; "
+        "dashboard KPIs (use get_ceo_dashboard). NEEDS: nothing required. "
+        "RETURNS: `total` plus `by_stage` and `by_status` for the same filter. "
+        "Never treat search_leads item length as the organisation total. "
+        "When listing everyone in a stage, pass limit=50 (or higher) — "
+        "default limit truncates and `count` can be less than `total`. "
+        "Stage is live: `total` is who is in that stage now. Date bounds "
+        "without a stage filter the created/updated window. Both together "
+        "keep `total` as the live board and add `in_window.created` / "
+        "`in_window.updated`. Report both; never treat a window count as how "
+        "many ARE in the stage."
     ),
-    parameters={},
+    parameters={
+        "stage": {"type": "string", "description": f"Optional pipeline stage: {_STAGES}"},
+        **lead_svc.DATE_BOUND_PARAMETERS,
+    },
     kind="read",
     modes=("minimal", "advanced"),
 )
-async def count_leads(ctx: ToolContext, **_: Any) -> dict:
-    return await lead_svc.count_leads(organization_id=ctx.organization_id)
+async def count_leads(
+    ctx: ToolContext,
+    stage: str | None = None,
+    created_after: str | None = None,
+    created_before: str | None = None,
+    updated_after: str | None = None,
+    updated_before: str | None = None,
+    timezone: str | None = None,
+    **_: Any,
+) -> dict:
+    return await lead_svc.count_leads(
+        organization_id=ctx.organization_id,
+        stage=stage,
+        created_after=created_after,
+        created_before=created_before,
+        updated_after=updated_after,
+        updated_before=updated_before,
+        timezone=timezone or ctx.timezone,
+    )
 
 
 @register_tool(
     name="list_follow_ups",
     description=(
-        "List leads awaiting a follow-up — the exact contents of the Follow-ups "
-        "screen. Use this ONLY when the user asks about follow-ups or callbacks: "
-        "'any follow ups?', 'follow-ups today', 'who do I need to call back'. It "
-        "is NOT a way to look a lead up by name — use search_leads for that, or "
-        "pass the name straight to get_lead/update_lead. A follow-up is a "
-        "lead whose most recent call ended in CALLBACK_SCHEDULED; this is NOT the "
-        "same as a lead having a next_follow_up_at date, so do not answer these "
-        "questions from search_leads or from background context — they will "
-        "disagree with what the user sees on screen. Returns `total`, per-bucket "
-        "counts (overdue / today / upcoming / unscheduled) and the matching leads. "
-        "A lead with no date set is still a follow-up: report it under "
-        "'no date set', never as 'none'."
+        "WHEN: the user asks about follow-ups or callbacks — the Follow-ups "
+        "screen. NOT: looking up a lead by name (search_leads / get_lead), a "
+        "stage roster, or call history (list_calls). NEEDS: nothing. RETURNS: "
+        "short lead cards plus follow_up_bucket and last_call_outcome. A "
+        "follow-up is a lead whose most recent call ended in CALLBACK_SCHEDULED, "
+        "not merely next_follow_up_at."
     ),
     parameters={
         "limit": {"type": "integer", "description": "Max rows (1-100)", "default": 50},
@@ -129,9 +167,11 @@ async def list_follow_ups(ctx: ToolContext, limit: int = 50, **_: Any) -> dict:
 @register_tool(
     name="get_lead",
     description=(
-        "Get one lead, including recent activities and assignee. `lead_id` "
-        "accepts either a lead id or the customer/company name — the name is "
-        "resolved for you, and an ambiguous one comes back with the choices."
+        "WHEN: full details of one lead you already identified (notes, "
+        "activities, assignee). NOT: a list or 'who is WON' (search_leads); a "
+        "count (count_leads). NEEDS: lead_id — a lead id OR the customer/company "
+        "name. If you do not have one, call search_leads first. Never ask the "
+        "user for an internal id. RETURNS: the full lead record."
     ),
     parameters={
         "lead_id": {"type": "string", "description": "Lead id, or the lead/company name"},
@@ -147,8 +187,9 @@ async def get_lead(ctx: ToolContext, lead_id: str, **_: Any) -> dict:
 @register_tool(
     name="create_lead",
     description=(
-        "Create a new lead. Use for someone not already in the CRM. "
-        "Required: title (name). Optional: phone, email, company, notes, stage."
+        "WHEN: add someone who is not already in the CRM. NOT: updating an "
+        "existing lead (update_lead); creating a duplicate after a name lookup "
+        "failed (search_leads instead). NEEDS: title (name). RETURNS: the new lead."
     ),
     parameters={
         "title": {"type": "string", "description": "Lead / contact name"},
@@ -220,21 +261,25 @@ async def create_lead(
 @register_tool(
     name="update_lead",
     description=(
-        "Update an EXISTING lead: move its SALES stage, set follow-up, assign "
-        "owner, or change contact fields. This is the tool for 'move X to "
-        "<stage>' whenever the stage named is one of NEW, CONTACTED, "
-        "QUALIFICATION, QUOTATION, NEGOTIATION, SAMPLE, WON, LOST — factory "
-        "stages like CUTTING belong to update_production_order. `lead_id` "
-        "accepts either a lead id or the customer/company name, so you do not "
-        "need to look the id up first; an ambiguous name "
-        "comes back with the matching leads to choose from. If it reports no "
-        "match, fix the name — never call create_lead to work around it."
+        "WHEN: change an EXISTING lead — sales stage, assignee, or contact "
+        "fields. Sales stages: NEW, CONTACTED, QUALIFICATION, QUOTATION, "
+        "NEGOTIATION, SAMPLE, WON, LOST. NOT: quotation line edits "
+        "(update_quotation); scheduling a follow-up that appears on the "
+        "Follow-ups screen (schedule_follow_up). NOT: factory steps like CUTTING "
+        "(update_production_order). NEEDS: lead_id (id or customer/company name). "
+        "Never ask the user for an internal id. RETURNS: the updated lead."
     ),
     parameters={
         "lead_id": {"type": "string", "description": "Lead id, or the lead/company name"},
         "stage": {"type": "string", "description": f"New stage: {_STAGES}"},
         "assignee_id": {"type": "string", "description": "Assign to this user id"},
-        "next_follow_up_at": {"type": "string", "description": "ISO-8601 follow-up time"},
+        "next_follow_up_at": {
+            "type": "string",
+            "description": (
+                "ISO-8601 follow-up time. Does NOT add the lead to the Follow-ups "
+                "list by itself — use schedule_follow_up instead."
+            ),
+        },
         "title": {"type": "string"},
         "company": {"type": "string"},
         "phone": {"type": "string"},
@@ -290,4 +335,40 @@ async def update_lead(
         estimated_value=estimated_value,
         lead_status=lead_status,
         activity_source="loomrun_ai",
+    )
+
+
+@register_tool(
+    name="schedule_follow_up",
+    description=(
+        "WHEN: schedule a callback/follow-up that must appear on the Follow-ups "
+        "screen. NOT: bare next_follow_up_at on update_lead (that date alone is "
+        "invisible there). NEEDS: lead_id (id or name) and at (ISO-8601). "
+        "Never ask the user for an internal id."
+    ),
+    parameters={
+        "lead_id": {"type": "string", "description": "Lead id, or the lead/company name"},
+        "at": {"type": "string", "description": "ISO-8601 datetime for the follow-up"},
+        "notes": {"type": "string"},
+    },
+    kind="write",
+    modes=("advanced",),
+    required=["lead_id", "at"],
+    summary_fn=lambda a: f"Schedule follow-up for {a.get('lead_id', '?')} at {a.get('at', '?')}",
+)
+async def schedule_follow_up(
+    ctx: ToolContext,
+    lead_id: str,
+    at: str,
+    notes: str | None = None,
+    **_: Any,
+) -> dict:
+    when = datetime.fromisoformat(at.replace("Z", "+00:00"))
+    return await call_svc.log_call(
+        organization_id=ctx.organization_id,
+        user_id=ctx.user_id,
+        lead_id=lead_id,
+        outcome="CALLBACK_SCHEDULED",
+        notes=notes or "Follow-up scheduled via Loomrun AI",
+        next_call_at=when,
     )

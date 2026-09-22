@@ -15,7 +15,9 @@ reachable at one public URL.
 
 from __future__ import annotations
 
+import json
 import logging
+import time
 from typing import Any
 
 from fastmcp import FastMCP
@@ -44,6 +46,8 @@ class LoomrunCrmTool(Tool):
     """One registry tool, published over MCP."""
 
     async def run(self, arguments: dict[str, Any]) -> ToolResult:
+        started = time.monotonic()
+        arg_keys = sorted((arguments or {}).keys())
         try:
             identity = _read_context()
         except ContextError as exc:
@@ -63,6 +67,12 @@ class LoomrunCrmTool(Tool):
         )
         if (not membership or not membership.organization
                 or membership.organization.suspended or is_access_locked(membership.organization)):
+            logger.info(
+                "MCP tool %s arg_keys=%s status=error bytes=0 duration_ms=%s",
+                self.name,
+                arg_keys,
+                int((time.monotonic() - started) * 1000),
+            )
             return ToolResult(structured_content={"status": "error", "error": "Organization access denied"}, is_error=True)
         role = membership.role.name if hasattr(membership.role, "name") else str(membership.role)
         ctx = ToolContext(
@@ -70,6 +80,7 @@ class LoomrunCrmTool(Tool):
             user_id=identity["user_id"],
             mode=identity["mode"],
             role=role,
+            timezone=str(identity.get("timezone") or ""),
         )
 
         # propose_writes=False because Qlix's JIT layer now owns confirmation:
@@ -84,6 +95,18 @@ class LoomrunCrmTool(Tool):
         )
 
         is_error = outcome.get("status") == "error" or "error" in outcome
+        try:
+            result_bytes = len(json.dumps(outcome, default=str).encode("utf-8"))
+        except (TypeError, ValueError):
+            result_bytes = 0
+        logger.info(
+            "MCP tool %s arg_keys=%s status=%s bytes=%s duration_ms=%s",
+            self.name,
+            arg_keys,
+            "error" if is_error else "ok",
+            result_bytes,
+            int((time.monotonic() - started) * 1000),
+        )
         return ToolResult(structured_content=outcome, is_error=bool(is_error))
 
 

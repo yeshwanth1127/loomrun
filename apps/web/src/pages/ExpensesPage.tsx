@@ -443,6 +443,62 @@ export function ExpensesPage() {
           </div>
         )}
 
+        <InsightGrid>
+          <InsightCard title="Expense trend">
+            <Sparkline points={trendDays.map((c) => c / 100)} />
+            <p className="muted small" style={{ marginTop: '0.5rem' }}>Last 7 days</p>
+          </InsightCard>
+          <InsightCard title="Expense by category">
+            {byCategory.size === 0 ? (
+              <p className="muted small">No categories yet.</p>
+            ) : (
+              <>
+                <DonutChart
+                  segments={[...byCategory.entries()].map(([label, value], i) => ({
+                    label,
+                    value,
+                    color: ['#0F766E', '#0E7490', '#f59e0b', '#3D7A5A', '#64748b'][i % 5],
+                  }))}
+                  center={{ value: fmtINR(summary?.total_cents ?? 0), label: 'Total' }}
+                />
+                <DonutLegend
+                  segments={[...byCategory.entries()].map(([label, value], i) => ({
+                    label,
+                    value: value / 100,
+                    color: ['#0F766E', '#0E7490', '#f59e0b', '#3D7A5A', '#64748b'][i % 5],
+                  }))}
+                />
+              </>
+            )}
+          </InsightCard>
+          <InsightCard title="Top categories">
+            <BarList
+              items={[...byCategory.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([label, value]) => ({
+                label,
+                value: value / 100,
+              }))}
+              formatValue={(n) => `₹${n.toLocaleString('en-IN')}`}
+            />
+          </InsightCard>
+          <InsightCard title="Recent activity">
+            {items.length === 0 ? (
+              <p className="muted small">No expenses recorded.</p>
+            ) : (
+              <div className="stack" style={{ gap: '0.45rem', fontSize: '0.82rem' }}>
+                {[...items].sort((a, b) => +new Date(b.incurred_at) - +new Date(a.incurred_at)).slice(0, 5).map((e) => (
+                  <div key={e.id} className="row spread">
+                    <div>
+                      <div style={{ fontWeight: 600 }}>{e.category}{e.subcategory ? ` · ${e.subcategory}` : ''}</div>
+                      <div className="muted small">{e.lead_title ?? 'Overhead'}{e.created_by_name ? ` · ${e.created_by_name}` : ''}</div>
+                    </div>
+                    <strong>{fmtINR(e.amount_cents)}</strong>
+                  </div>
+                ))}
+              </div>
+            )}
+          </InsightCard>
+        </InsightGrid>
+
         {q.isLoading && <p className="muted">Loading expenses…</p>}
         {q.error && <p className="error">{(q.error as Error).message}</p>}
 
@@ -517,62 +573,6 @@ export function ExpensesPage() {
             />
           )
         )}
-
-        <InsightGrid>
-          <InsightCard title="Expense trend">
-            <Sparkline points={trendDays.map((c) => c / 100)} />
-            <p className="muted small" style={{ marginTop: '0.5rem' }}>Last 7 days</p>
-          </InsightCard>
-          <InsightCard title="Expense by category">
-            {byCategory.size === 0 ? (
-              <p className="muted small">No categories yet.</p>
-            ) : (
-              <>
-                <DonutChart
-                  segments={[...byCategory.entries()].map(([label, value], i) => ({
-                    label,
-                    value,
-                    color: ['#0F766E', '#0E7490', '#f59e0b', '#3D7A5A', '#64748b'][i % 5],
-                  }))}
-                  center={{ value: fmtINR(summary?.total_cents ?? 0), label: 'Total' }}
-                />
-                <DonutLegend
-                  segments={[...byCategory.entries()].map(([label, value], i) => ({
-                    label,
-                    value: value / 100,
-                    color: ['#0F766E', '#0E7490', '#f59e0b', '#3D7A5A', '#64748b'][i % 5],
-                  }))}
-                />
-              </>
-            )}
-          </InsightCard>
-          <InsightCard title="Top categories">
-            <BarList
-              items={[...byCategory.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([label, value]) => ({
-                label,
-                value: value / 100,
-              }))}
-              formatValue={(n) => `₹${n.toLocaleString('en-IN')}`}
-            />
-          </InsightCard>
-          <InsightCard title="Recent activity">
-            {items.length === 0 ? (
-              <p className="muted small">No expenses recorded.</p>
-            ) : (
-              <div className="stack" style={{ gap: '0.45rem', fontSize: '0.82rem' }}>
-                {[...items].sort((a, b) => +new Date(b.incurred_at) - +new Date(a.incurred_at)).slice(0, 5).map((e) => (
-                  <div key={e.id} className="row spread">
-                    <div>
-                      <div style={{ fontWeight: 600 }}>{e.category}{e.subcategory ? ` · ${e.subcategory}` : ''}</div>
-                      <div className="muted small">{e.lead_title ?? 'Overhead'}{e.created_by_name ? ` · ${e.created_by_name}` : ''}</div>
-                    </div>
-                    <strong>{fmtINR(e.amount_cents)}</strong>
-                  </div>
-                ))}
-              </div>
-            )}
-          </InsightCard>
-        </InsightGrid>
       </div>
 
       <Modal

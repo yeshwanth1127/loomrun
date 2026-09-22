@@ -4,10 +4,21 @@ from datetime import datetime, timedelta, timezone
 
 from loomrun_api.ai_usage import (
     DEFAULT_ESTIMATED_CREDITS,
+    ai_usage_bypassed,
     credits_from_tokens,
     parse_usage_dict,
     weekly_period_bounds,
 )
+from loomrun_api.config import settings
+
+
+def test_ai_usage_bypassed_respects_allowlist(monkeypatch):
+    monkeypatch.setattr(
+        settings, "ai_usage_bypass_org_ids", "org_a, org_b"
+    )
+    assert ai_usage_bypassed("org_a") is True
+    assert ai_usage_bypassed("org_b") is True
+    assert ai_usage_bypassed("org_c") is False
 
 
 def test_credits_from_tokens_minimum_and_weighting():

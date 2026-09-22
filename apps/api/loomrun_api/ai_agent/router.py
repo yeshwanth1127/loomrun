@@ -45,6 +45,7 @@ class ChatBody(BaseModel):
     history: list[ChatHistoryItem] = Field(default_factory=list)
     model: str | None = Field(default=None, max_length=120)
     conversation_id: str | None = Field(default=None, max_length=64)
+    timezone: str | None = Field(default=None, max_length=64)
 
 
 class CreateConversationBody(BaseModel):
@@ -142,6 +143,7 @@ async def ai_chat(
         history=history,
         model=body.model,
         conversation_id=body.conversation_id,
+        timezone=body.timezone,
     )
 
 
@@ -178,6 +180,7 @@ async def ai_chat_stream(
                 history=history,
                 model=body.model,
                 conversation_id=body.conversation_id,
+                timezone=body.timezone,
             ):
                 yield f"data: {json.dumps(event, default=str)}\n\n"
         except HTTPException as exc:

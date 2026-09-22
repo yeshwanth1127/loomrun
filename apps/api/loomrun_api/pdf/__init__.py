@@ -46,6 +46,9 @@ def render_quotation_pdf(
     upi_qr_path: str | None = None,
     invoiced_at=None,
     created_at=None,
+    tax_enabled: bool = False,
+    tax_rate: float | None = None,
+    version: int | None = None,
 ) -> str:
     """Write PDF to storage. Uses template layout when provided."""
     from datetime import datetime
@@ -78,8 +81,14 @@ def render_quotation_pdf(
             layout=layout,
             invoiced_at=invoiced_at,
             created_at=created_at,
+            tax_enabled=tax_enabled,
+            tax_rate=tax_rate,
+            version=version,
         )
     else:
+        tax_label_extra = ""
+        if tax_enabled and tax_rate is not None:
+            tax_label_extra = f" ({float(tax_rate):g}%)"
         context = {
             "org": {
                 "name": issuer_name,
@@ -98,6 +107,10 @@ def render_quotation_pdf(
                 "subtotal": computed_subtotal,
                 "tax": computed_tax,
                 "total": computed_total,
+                "tax_enabled": tax_enabled,
+                "tax_rate": tax_rate,
+                "tax_label_extra": tax_label_extra,
+                "version": version,
             },
             "lines": lines,
             "doc_type": doc_type,

@@ -13,11 +13,22 @@ from typing import Any
 from fastapi import HTTPException, status
 
 from loomrun_api import org_events
+from loomrun_api.collections import (
+    build_payment_timeline,
+    normalize_payment_method,
+    serialize_expected_payment,
+    serialize_payment,
+)
 from loomrun_api.pnl import compute_pnl, serialize_expense
 from loomrun_api.prisma_client import prisma
 from loomrun_api.production_activity import log_production_activity, stage_label
-from loomrun_api.services.leads import resolve_lead
+from loomrun_api.services.leads import (
+    apply_dates_unless_live,
+    attach_window_facets,
+    resolve_lead,
+)
 from prisma.enums import (
+    ExpectedPaymentStatus,
     OrderStatus,
     PaymentStatus,
     ProductionActivityType,
@@ -28,7 +39,13 @@ _ORDER_INCLUDE = {
     "lead": True,
     "quotation": True,
     "payments": True,
+    "expectedPayments": True,
     "expenses": {"include": {"createdBy": True}},
+    "activities": {
+        "where": {"type": ProductionActivityType.STAGE_CHANGED},
+        "orderBy": {"createdAt": "asc"},
+        "take": 40,
+    },
 }
 
 STAGES = [s.name for s in ProductionStage]
@@ -166,17 +183,37 @@ def serialize_order(r) -> dict[str, Any]:
         "design_garment_type": getattr(r, "designGarmentType", None),
         "design_garment_color": getattr(r, "designGarmentColor", None),
         "payments": [
-            {
-                "id": p.id,
-                "amount_cents": p.amountCents,
-                "status": _enum_name(p.status),
-                "note": p.note,
-                "recorded_at": _iso(p.recordedAt),
-            }
-            for p in (getattr(r, "payments", None) or [])
+            serialize_payment(p) for p in (getattr(r, "payments", None) or [])
+        ],
+        "expected_payments": [
+            serialize_expected_payment(ep)
+            for ep in (getattr(r, "expectedPayments", None) or [])
         ],
         "expenses": [serialize_expense(e) for e in (getattr(r, "expenses", None) or [])],
         "pnl": compute_pnl(order=r),
+        "payment_timeline": build_payment_timeline(
+            order=r,
+            payments=getattr(r, "payments", None),
+            expected_payments=getattr(r, "expectedPayments", None),
+            activities=getattr(r, "activities", None),
+        ),
+    }
+
+
+def order_card(r) -> dict[str, Any]:
+    """Short list row. get_production_order stays full (payments, expenses, P&L)."""
+    status = resolve_order_status(r)
+    return {
+        "id": r.id,
+        "order_number": r.orderNumber,
+        "display_name": r.name or (r.lead.title if getattr(r, "lead", None) else None),
+        "stage": _enum_name(r.stage),
+        "order_status": status,
+        "delay_flag": r.delayFlag or status == "DELAYED",
+        "lead_id": r.leadId,
+        "lead_title": r.lead.title if getattr(r, "lead", None) else None,
+        "created_at": _iso(getattr(r, "createdAt", None)),
+        "updated_at": _iso(getattr(r, "updatedAt", None)),
     }
 
 
@@ -216,6 +253,11 @@ async def list_production_orders(
     stage: str | None = None,
     lead_id: str | None = None,
     limit: int = 50,
+    created_after: str | None = None,
+    created_before: str | None = None,
+    updated_after: str | None = None,
+    updated_before: str | None = None,
+    timezone: str | None = None,
 ) -> dict[str, Any]:
     where: dict[str, Any] = {"organizationId": organization_id}
     if stage:
@@ -228,19 +270,37 @@ async def list_production_orders(
         where["stage"] = ProductionStage[key]
     if lead_id:
         where["leadId"] = lead_id
+    apply_dates_unless_live(
+        where,
+        created_after=created_after,
+        created_before=created_before,
+        updated_after=updated_after,
+        updated_before=updated_before,
+        timezone=timezone,
+    )
     total = await prisma.productionorder.count(where=where)
     rows = await prisma.productionorder.find_many(
         where=where,
         order={"updatedAt": "desc"},
         take=max(1, min(int(limit or 50), 100)),
-        include=_ORDER_INCLUDE,
+        include={"lead": True},
     )
-    return {
-        "items": [serialize_order(r) for r in rows],
+    result: dict[str, Any] = {
+        "items": [order_card(r) for r in rows],
         "count": len(rows),
         "total": total,
         "stages": STAGES,
     }
+    return await attach_window_facets(
+        result,
+        where,
+        count_fn=lambda w: prisma.productionorder.count(where=w),
+        created_after=created_after,
+        created_before=created_before,
+        updated_after=updated_after,
+        updated_before=updated_before,
+        timezone=timezone,
+    )
 
 
 async def get_production_order(*, organization_id: str, order_id: str) -> dict[str, Any]:
@@ -529,6 +589,11 @@ async def record_production_payment(
     amount_cents: int,
     payment_status: str = "PAID",
     note: str | None = None,
+    method: str | None = None,
+    reference: str | None = None,
+    label: str | None = None,
+    recorded_at: datetime | None = None,
+    expected_payment_id: str | None = None,
 ) -> dict[str, Any]:
     if amount_cents <= 0:
         raise HTTPException(
@@ -542,16 +607,98 @@ async def record_production_payment(
             status.HTTP_400_BAD_REQUEST,
             detail=f"Unknown payment status '{payment_status}'. Valid: {', '.join(valid)}",
         )
-    await prisma.payment.create(
+    try:
+        method_key = normalize_payment_method(method)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    expected_row = None
+    if expected_payment_id:
+        expected_row = await prisma.expectedpayment.find_first(
+            where={
+                "id": expected_payment_id,
+                "organizationId": organization_id,
+                "productionOrderId": row.id,
+            }
+        )
+        if not expected_row:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND, detail="Expected payment not found"
+            )
+        exp_status = (
+            expected_row.status.name
+            if hasattr(expected_row.status, "name")
+            else str(expected_row.status)
+        )
+        if exp_status in ("FULFILLED", "CANCELLED"):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail=f"Expected payment is already {exp_status.lower()}",
+            )
+
+    payment = await prisma.payment.create(
         data={
             "organizationId": organization_id,
             "productionOrderId": row.id,
             "amountCents": amount_cents,
             "status": PaymentStatus[key],
             "note": note,
-            "recordedAt": datetime.now(timezone.utc),
+            "method": method_key,
+            "reference": (reference or "").strip() or None,
+            "label": (label or "").strip() or None,
+            "recordedAt": recorded_at or datetime.now(timezone.utc),
+            "expectedPaymentId": expected_row.id if expected_row else None,
         }
     )
+
+    if expected_row and key in ("PAID", "PARTIAL"):
+        remaining = max(int(expected_row.remainingCents) - amount_cents, 0)
+        if remaining == 0:
+            await prisma.expectedpayment.update(
+                where={"id": expected_row.id},
+                data={
+                    "remainingCents": 0,
+                    "status": ExpectedPaymentStatus.FULFILLED,
+                },
+            )
+            fulfill_type = ProductionActivityType.EXPECTED_PAYMENT_FULFILLED
+            fulfill_body = (
+                f"Expected payment fulfilled: {amount_cents / 100:.2f}"
+                + (
+                    f" (of {expected_row.amountCents / 100:.2f})"
+                    if expected_row.amountCents != amount_cents
+                    else ""
+                )
+            )
+        else:
+            await prisma.expectedpayment.update(
+                where={"id": expected_row.id},
+                data={
+                    "remainingCents": remaining,
+                    "status": ExpectedPaymentStatus.PARTIALLY_FULFILLED,
+                },
+            )
+            fulfill_type = ProductionActivityType.EXPECTED_PAYMENT_FULFILLED
+            fulfill_body = (
+                f"Partial payment against expected: {amount_cents / 100:.2f}; "
+                f"{remaining / 100:.2f} still promised"
+            )
+        await log_production_activity(
+            organization_id=organization_id,
+            production_order_id=row.id,
+            lead_id=row.leadId,
+            user_id=user_id,
+            activity_type=fulfill_type,
+            body=fulfill_body,
+            metadata={
+                "expected_payment_id": expected_row.id,
+                "payment_id": payment.id,
+                "amount_cents": amount_cents,
+                "remaining_cents": remaining,
+                "source": "loomrun_ai",
+            },
+        )
+
     await log_production_activity(
         organization_id=organization_id,
         production_order_id=row.id,
@@ -559,7 +706,16 @@ async def record_production_payment(
         user_id=user_id,
         activity_type=ProductionActivityType.PAYMENT_RECORDED,
         body=f"Payment recorded: {amount_cents / 100:.2f} ({key})",
-        metadata={"amount_cents": amount_cents, "status": key, "source": "loomrun_ai"},
+        metadata={
+            "payment_id": payment.id,
+            "amount_cents": amount_cents,
+            "status": key,
+            "method": method_key,
+            "reference": (reference or "").strip() or None,
+            "label": (label or "").strip() or None,
+            "expected_payment_id": expected_row.id if expected_row else None,
+            "source": "loomrun_ai",
+        },
     )
     org_events.record_changed(
         organization_id=organization_id,

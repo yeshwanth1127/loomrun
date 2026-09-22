@@ -42,6 +42,12 @@ def test_round_trip_preserves_identity():
     assert identity["conversation_id"] == "conv_9"
 
 
+def test_round_trip_preserves_timezone():
+    token = _mint(timezone="Asia/Kolkata")
+    identity = verify_context(token)
+    assert identity["timezone"] == "Asia/Kolkata"
+
+
 def test_bearer_prefix_is_tolerated():
     # Qlix forwards the header verbatim, but proxies sometimes normalise it.
     token = _mint()

@@ -18,8 +18,39 @@ export type OrderPayment = {
   id: string
   amount_cents: number
   status: string
+  method: string | null
+  reference: string | null
+  label: string | null
   note: string | null
   recorded_at: string | null
+  expected_payment_id: string | null
+}
+
+export type ExpectedPayment = {
+  id: string
+  amount_cents: number
+  remaining_cents: number
+  expected_at: string | null
+  label: string | null
+  note: string | null
+  status: string
+  is_overdue: boolean
+  days_overdue: number | null
+  is_unscheduled: boolean
+  created_at: string | null
+  updated_at: string | null
+  cancelled_at: string | null
+}
+
+export type PaymentTimelineEvent = {
+  id: string
+  kind: string
+  marker: 'filled' | 'open' | 'overdue' | string
+  at: string | null
+  title: string
+  subtitle: string | null
+  amount_cents: number | null
+  meta: Record<string, unknown>
 }
 
 export type OrderPnl = {
@@ -28,6 +59,14 @@ export type OrderPnl = {
   budget_cents: number | null
   actual_cost_cents: number
   collected_cents: number
+  balance_due_cents: number | null
+  overpaid_cents: number
+  collection_percentage: number | null
+  payment_status: string
+  next_expected_payment: ExpectedPayment | null
+  overdue_expected_count: number
+  overdue_expected_cents: number
+  active_expected_count: number
   margin_cents: number | null
   budget_variance_cents: number | null
   collection_gap_cents: number | null
@@ -82,8 +121,10 @@ export type Order = {
   design_garment_type: string | null
   design_garment_color: string | null
   payments: OrderPayment[]
+  expected_payments: ExpectedPayment[]
   expenses: OrderExpense[]
   pnl: OrderPnl
+  payment_timeline: PaymentTimelineEvent[]
 }
 
 /** Order of work on the floor — also the progress order. */
@@ -265,4 +306,51 @@ export function rupeesToCents(value: string): number | null {
   const n = Number(value)
   if (!Number.isFinite(n) || n < 0) return null
   return Math.round(n * 100)
+}
+
+export const PAYMENT_METHODS = [
+  'CASH',
+  'UPI',
+  'BANK_TRANSFER',
+  'CHEQUE',
+  'CARD',
+  'OTHER',
+] as const
+
+export const PAYMENT_METHOD_LABELS: Record<string, string> = {
+  CASH: 'Cash',
+  UPI: 'UPI',
+  BANK_TRANSFER: 'Bank transfer',
+  CHEQUE: 'Cheque',
+  CARD: 'Card',
+  OTHER: 'Other',
+}
+
+export const PAYMENT_STATUS_LABELS: Record<string, string> = {
+  UNPAID: 'Unpaid',
+  PARTIALLY_PAID: 'Partially paid',
+  PAID: 'Paid',
+  OVERDUE: 'Overdue',
+}
+
+export const PAYMENT_STATUS_BADGE: Record<string, string> = {
+  UNPAID: 'badge-slate',
+  PARTIALLY_PAID: 'badge-amber',
+  PAID: 'badge-green',
+  OVERDUE: 'badge-red',
+}
+
+export const PAYMENT_LABEL_SUGGESTIONS = [
+  'Advance',
+  'Before Production',
+  'Before Dispatch',
+  'After Delivery',
+  'Final Payment',
+] as const
+
+/** Convert a date input (YYYY-MM-DD) to ISO midnight UTC for API bodies. */
+export function dateInputToIso(value: string): string | null {
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  return `${trimmed}T00:00:00.000Z`
 }

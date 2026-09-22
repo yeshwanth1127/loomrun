@@ -84,16 +84,144 @@ export function useOrderMutations(orgId: string) {
   })
 
   const addPayment = useMutation({
-    mutationFn: (p: { id: string; amount_cents: number; status: string; note: string | null }) =>
+    mutationFn: (p: {
+      id: string
+      amount_cents: number
+      status?: string
+      note?: string | null
+      method?: string | null
+      reference?: string | null
+      label?: string | null
+      recorded_at?: string | null
+      expected_payment_id?: string | null
+    }) =>
       apiFetch(`/v1/orgs/${orgId}/production/${p.id}/payments`, {
         method: 'POST',
-        json: { amount_cents: p.amount_cents, status: p.status, note: p.note },
+        json: {
+          amount_cents: p.amount_cents,
+          status: p.status ?? 'PAID',
+          note: p.note ?? null,
+          method: p.method || null,
+          reference: p.reference || null,
+          label: p.label || null,
+          recorded_at: p.recorded_at || null,
+          expected_payment_id: p.expected_payment_id || null,
+        },
       }),
     onSuccess: () => {
       done()
       toast.success('Payment recorded')
     },
     onError: (err: Error) => toast.error(err.message || 'Failed to add payment'),
+  })
+
+  const updatePayment = useMutation({
+    mutationFn: (p: {
+      orderId: string
+      paymentId: string
+      json: Record<string, unknown>
+    }) =>
+      apiFetch(`/v1/orgs/${orgId}/production/${p.orderId}/payments/${p.paymentId}`, {
+        method: 'PATCH',
+        json: p.json,
+      }),
+    onSuccess: () => {
+      done()
+      toast.success('Payment updated')
+    },
+    onError: (err: Error) => toast.error(err.message || 'Failed to update payment'),
+  })
+
+  const deletePayment = useMutation({
+    mutationFn: (p: { orderId: string; paymentId: string }) =>
+      apiFetch(`/v1/orgs/${orgId}/production/${p.orderId}/payments/${p.paymentId}`, {
+        method: 'DELETE',
+      }),
+    onSuccess: () => {
+      done()
+      toast.success('Payment deleted')
+    },
+    onError: (err: Error) => toast.error(err.message || 'Failed to delete payment'),
+  })
+
+  const addExpectedPayment = useMutation({
+    mutationFn: (p: {
+      id: string
+      amount_cents: number
+      expected_at?: string | null
+      note?: string | null
+      label?: string | null
+    }) =>
+      apiFetch(`/v1/orgs/${orgId}/production/${p.id}/expected-payments`, {
+        method: 'POST',
+        json: {
+          amount_cents: p.amount_cents,
+          expected_at: p.expected_at || null,
+          note: p.note || null,
+          label: p.label || null,
+        },
+      }),
+    onSuccess: () => {
+      done()
+      toast.success('Expected payment added')
+    },
+    onError: (err: Error) => toast.error(err.message || 'Failed to add expected payment'),
+  })
+
+  const updateExpectedPayment = useMutation({
+    mutationFn: (p: {
+      orderId: string
+      expectedId: string
+      json: Record<string, unknown>
+    }) =>
+      apiFetch(`/v1/orgs/${orgId}/production/${p.orderId}/expected-payments/${p.expectedId}`, {
+        method: 'PATCH',
+        json: p.json,
+      }),
+    onSuccess: () => {
+      done()
+      toast.success('Expected payment updated')
+    },
+    onError: (err: Error) => toast.error(err.message || 'Failed to update expected payment'),
+  })
+
+  const rescheduleExpectedPayment = useMutation({
+    mutationFn: (p: {
+      orderId: string
+      expectedId: string
+      expected_at?: string | null
+      clear_expected_at?: boolean
+      note?: string | null
+    }) =>
+      apiFetch(
+        `/v1/orgs/${orgId}/production/${p.orderId}/expected-payments/${p.expectedId}/reschedule`,
+        {
+          method: 'POST',
+          json: {
+            expected_at: p.expected_at || null,
+            clear_expected_at: p.clear_expected_at ?? false,
+            note: p.note || null,
+          },
+        },
+      ),
+    onSuccess: () => {
+      done()
+      toast.success('Expected payment rescheduled')
+    },
+    onError: (err: Error) => toast.error(err.message || 'Failed to reschedule'),
+  })
+
+  const cancelExpectedPayment = useMutation({
+    mutationFn: (p: { orderId: string; expectedId: string }) =>
+      apiFetch(
+        `/v1/orgs/${orgId}/production/${p.orderId}/expected-payments/${p.expectedId}/cancel`,
+        { method: 'POST' },
+      ),
+    onSuccess: () => {
+      done()
+      toast.success('Expected payment cancelled')
+    },
+    onError: (err: Error) => toast.error(err.message || 'Failed to cancel expected payment'),
   })
 
   const regenTracking = useMutation({
@@ -153,6 +281,12 @@ export function useOrderMutations(orgId: string) {
     moveStage,
     addExpense,
     addPayment,
+    updatePayment,
+    deletePayment,
+    addExpectedPayment,
+    updateExpectedPayment,
+    rescheduleExpectedPayment,
+    cancelExpectedPayment,
     regenTracking,
     toggleTracking,
     shareTracking,

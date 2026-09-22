@@ -1,0 +1,262 @@
+{
+  "timestamp": "2026-09-21T14:57:02.851673+00:00",
+  "org_id": "cms70u5a70004zxlbo1in0y52",
+  "model": "openai/gpt-4.1-mini",
+  "passed": 12,
+  "total": 13,
+  "results": [
+    {
+      "case_id": "R1_count_won_month",
+      "category": "read/count",
+      "prompt_len": 141,
+      "latency_s": 3.98,
+      "ok": true,
+      "model": "openai/gpt-4.1-mini",
+      "path": "chat",
+      "reply": "The exact count of leads that are WON for this month (September 2026) is 5.",
+      "tools": [
+        "count_leads"
+      ],
+      "crm_mutations": [],
+      "error": null,
+      "notes": []
+    },
+    {
+      "case_id": "R2_won_details",
+      "category": "read/list",
+      "prompt_len": 137,
+      "latency_s": 4.89,
+      "ok": true,
+      "model": "openai/gpt-4.1-mini",
+      "path": "chat",
+      "reply": "Here is the full roster of WON leads closed in September 2026 with their name, company, phone, and estimated value (if available):\n\n1. Name: Guruswaroop Pommarapalli\n   Company: D'Curve\n   Phone: +919686116216\n   Estimated Value: Not specified\n\nThe other WON leads listed were closed before September 2026 or have no estimated value mentioned. If you want, I can fetch more details or estimated values for these leads. Would you like me to do that?",
+      "tools": [
+        "search_leads"
+      ],
+      "crm_mutations": [],
+      "error": null,
+      "notes": []
+    },
+    {
+      "case_id": "R3_followups_screen",
+      "category": "read/followups",
+      "prompt_len": 116,
+      "latency_s": 5.45,
+      "ok": true,
+      "model": "openai/gpt-4.1-mini",
+      "path": "chat",
+      "reply": "You currently have 83 leads on your Follow-ups list. These are leads whose most recent call ended in CALLBACK_SCHEDULED, matching the Follow-ups screen logic.\n\nHere are some of them:\n- Sagar Vyas from Ikraft Interior Projects India Pvt Ltd, Hyderabad\n- Satish Melinamani from Standtall design commune, Dharwad\n- Siva from Spack Automotives Ltd, Arakkonam\n- GM from Farmers Choice, Hyderabad\n- Ramesh Bala from TRB ENGINEERING TECHNOLOGY, Chennai\n\nThe Follow-ups are categorized as overdue (28), due n",
+      "tools": [
+        "list_follow_ups"
+      ],
+      "crm_mutations": [],
+      "error": null,
+      "notes": []
+    },
+    {
+      "case_id": "R4_latest_lead",
+      "category": "read/edge",
+      "prompt_len": 79,
+      "latency_s": 5.11,
+      "ok": true,
+      "model": "openai/gpt-4.1-mini",
+      "path": "chat",
+      "reply": "The newest lead in your system is S V Krisshnan Balaji from Nishe Therapeutics Private Limited, located in Hyderabad. The lead was created on September 21, 2026, and is currently in the \"NEW\" stage. If you need more details or want to take any action on this lead, please let me know.",
+      "tools": [
+        "search_leads"
+      ],
+      "crm_mutations": [],
+      "error": null,
+      "notes": []
+    },
+    {
+      "case_id": "W1_schedule_followup",
+      "category": "write/followup",
+      "prompt_len": 111,
+      "latency_s": 3.12,
+      "ok": true,
+      "model": "openai/gpt-4.1-mini",
+      "path": "chat",
+      "reply": "Scheduled a follow-up call for Gani S on 25 September 2026 at 10:30 AM IST, now visible on the Follow-ups page.",
+      "tools": [
+        "schedule_follow_up"
+      ],
+      "crm_mutations": [
+        {
+          "entity": "call",
+          "action": "scheduled",
+          "id": "cmsrd603b0029utogkn1rbiwi",
+          "label": "Gani S",
+          "summary": "Follow-up scheduled for Gani S",
+          "tool": "schedule_follow_up"
+        }
+      ],
+      "error": null,
+      "notes": []
+    },
+    {
+      "case_id": "W2_update_lead_stage",
+      "category": "write/lead",
+      "prompt_len": 39,
+      "latency_s": 3.06,
+      "ok": false,
+      "model": "openai/gpt-4.1-mini",
+      "path": "chat",
+      "reply": "I could not find a lead named \"Shivu S\" in the NEW stage. Could you please confirm if the lead is under a different stage or provide more details?",
+      "tools": [
+        "search_leads"
+      ],
+      "crm_mutations": [],
+      "error": null,
+      "notes": [
+        "expected one of ['update_lead'], got ['search_leads']",
+        "expected mutation entity in ['lead'], got set()"
+      ]
+    },
+    {
+      "case_id": "W3_quotation_edit",
+      "category": "write/quotation",
+      "prompt_len": 137,
+      "latency_s": 5.88,
+      "ok": true,
+      "model": "openai/gpt-4.1-mini",
+      "path": "chat",
+      "reply": "The line description on quotation Q-2026-00005 for Shivu S was updated to \"premium cotton tshirts\" while keeping the same quantity and unit price.",
+      "tools": [
+        "get_quotation",
+        "update_quotation"
+      ],
+      "crm_mutations": [
+        {
+          "entity": "quotation",
+          "action": "updated",
+          "id": "cmubcbngf003p13c259xer7b4",
+          "label": "Q-2026-00005",
+          "summary": "Saved as version 3. Previous version 2 kept in history.",
+          "tool": "update_quotation"
+        }
+      ],
+      "error": null,
+      "notes": []
+    },
+    {
+      "case_id": "X1_ambiguous_description",
+      "category": "edge/routing",
+      "prompt_len": 131,
+      "latency_s": 9.93,
+      "ok": true,
+      "model": "openai/gpt-4.1-mini",
+      "path": "chat",
+      "reply": "The description on quotation Q-2026-00005 for Shivu S was updated from tshirts to corporate polo shirts.",
+      "tools": [
+        "update_quotation",
+        "get_quotation"
+      ],
+      "crm_mutations": [
+        {
+          "entity": "quotation",
+          "action": "updated",
+          "id": "cmubcbngf003p13c259xer7b4",
+          "label": "Q-2026-00005",
+          "summary": "Saved as version 4. Previous version 3 kept in history.",
+          "tool": "update_quotation"
+        }
+      ],
+      "error": null,
+      "notes": []
+    },
+    {
+      "case_id": "X2_factory_vs_sales_stage",
+      "category": "edge/routing",
+      "prompt_len": 63,
+      "latency_s": 5.56,
+      "ok": true,
+      "model": "openai/gpt-4.1-mini",
+      "path": "chat",
+      "reply": "Created a production order for Shivu S, currently in FABRIC_CHECK stage.",
+      "tools": [
+        "update_production_order",
+        "create_production_order"
+      ],
+      "crm_mutations": [
+        {
+          "entity": "production",
+          "action": "created",
+          "id": "cmubdbvbq003lphj87iocejkj",
+          "label": "ORD-2026-00006",
+          "summary": "Production order ORD-2026-00006 created",
+          "tool": "create_production_order"
+        }
+      ],
+      "error": null,
+      "notes": [
+        "Should NOT use update_lead for factory stage CUTTING"
+      ]
+    },
+    {
+      "case_id": "L1_long_multipart",
+      "category": "long/complex",
+      "prompt_len": 431,
+      "latency_s": 7.52,
+      "ok": true,
+      "model": "openai/gpt-4.1-mini",
+      "path": "chat",
+      "reply": "1. There are currently 505 leads in the CONTACTED stage.\n\n2. The top 3 leads in the CONTACTED stage by estimated value (though exact estimated values are not shown) are from these companies:\n   - Mg steel suppliers\n   - Sonite agriventures pvt ltd\n   - Sri Ganesh agencies\n\n3. For the highest-value lead, Mg steel suppliers (contact: Gowtham), there are no quotations listed.\n\n4. This lead (Mg steel suppliers) does not have a follow-up scheduled on the Follow-ups screen. \n\nIf you need details on th",
+      "tools": [
+        "count_leads",
+        "search_leads",
+        "list_follow_ups",
+        "get_lead"
+      ],
+      "crm_mutations": [],
+      "error": null,
+      "notes": []
+    },
+    {
+      "case_id": "L2_very_long_context",
+      "category": "long/noise",
+      "prompt_len": 3844,
+      "latency_s": 3.33,
+      "ok": true,
+      "model": "openai/gpt-4.1-mini",
+      "path": "chat",
+      "reply": "You have a total of 688 ACTIVE leads in your pipeline.",
+      "tools": [
+        "count_leads"
+      ],
+      "crm_mutations": [],
+      "error": null,
+      "notes": []
+    },
+    {
+      "case_id": "H1_with_history",
+      "category": "history",
+      "prompt_len": 37,
+      "latency_s": 4.27,
+      "ok": true,
+      "model": "openai/gpt-4.1-mini",
+      "path": "chat",
+      "reply": "Here are the phone numbers for the 3 WON leads from September 2026:\n\n1. Shivu S: +918951079333\n2. Gani S: +917780663758 (Note: This lead is currently in CONTACTED stage, not WON)\n3. Guruswaroop Pommarapalli: +919686116216\n\nPlease note that Gani S is not in the WON stage currently. Would you like me to find another WON lead's phone number instead?",
+      "tools": [
+        "get_lead"
+      ],
+      "crm_mutations": [],
+      "error": null,
+      "notes": []
+    },
+    {
+      "case_id": "N1_honesty_no_tool",
+      "category": "negative",
+      "prompt_len": 55,
+      "latency_s": 2.17,
+      "ok": true,
+      "model": "openai/gpt-4.1-mini",
+      "path": "chat",
+      "reply": "I cannot delete all leads in the database permanently. If you want, I can help you with specific lead updates or actions. Please let me know how you would like to proceed.",
+      "tools": [],
+      "crm_mutations": [],
+      "error": null,
+      "notes": []
+    }
+  ]
+}

@@ -1,19 +1,20 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, Download, FileText, Mail, MessageCircle, Pencil, Plus, Send, ShieldCheck, Trash2, TrendingUp } from 'lucide-react'
+import { ArrowLeft, Download, FileText, Plus, ShieldCheck, TrendingUp } from 'lucide-react'
 import type { FormEvent } from 'react'
 import { useEffect, useRef, useState } from 'react'
-import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useDateFilter } from '../context/DateFilterContext'
 import { routes } from '../lib/appRoutes'
 import { apiFetch } from '../lib/api'
 import { LeadSearchSelect, type LeadOption } from '../components/LeadSearchSelect'
-import { RowActions } from '../components/RowActions'
 import { EmptyState } from '../components/ui/EmptyState'
 import { Modal } from '../components/ui/Modal'
 import { PageHeader } from '../components/ui/PageHeader'
 import { DonutChart, DonutLegend, InsightCard, InsightGrid, MetricCard } from '../components/ui/dashboard'
 import { toast } from 'sonner'
+import { groupDocsByLead, type QuotationDoc } from '../lib/documents'
+import { fmtINR } from '../lib/format'
 
 type Lead = { id: string; title: string; phone?: string | null; email?: string | null; company?: string | null }
 type CatalogItem = {
@@ -29,16 +30,30 @@ type Quotation = {
   number: string
   title: string | null
   invoice_number: string | null
+  version?: number
   status: string
   total: number
+  subtotal?: number
+  tax?: number
+  tax_enabled?: boolean
+  tax_rate?: number | null
   lead_id: string
   lead_title: string | null
   lead_phone: string | null
   lead_email: string | null
+  lead_company?: string | null
   pdf_url: string | null
   template_id: string | null
   sent_at: string | null
   invoiced_at: string | null
+  created_at?: string | null
+  updated_at?: string | null
+  source_quotation_id?: string | null
+  source_quotation_version?: number | null
+  source_quotation_number?: string | null
+  linked_invoice_id?: string | null
+  linked_invoice_number?: string | null
+  linked_invoices?: Array<{ id: string; invoice_number: string | null }>
   lines: { id?: string; description: string; quantity: number; unit_price: number; line_total: number }[]
 }
 
@@ -55,6 +70,7 @@ const STATUS_COLOR: Record<string, string> = {
   DRAFT:    'badge-slate',
   SENT:     'badge-blue',
   ACCEPTED: 'badge-green',
+  INVOICED: 'badge-indigo',
   REJECTED: 'badge-red',
   EXPIRED:  'badge-amber',
 }
@@ -112,6 +128,9 @@ export function QuotationsPage() {
   const qc = useQueryClient()
   const location = useLocation()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const focusLeadId = searchParams.get('leadId')
+  const [search, setSearch] = useState('')
   const [showForm, setShowForm] = useState(false)
   const [leadId, setLeadId] = useState('')
   const [selectedLead, setSelectedLead] = useState<LeadOption | null>(null)
@@ -131,10 +150,16 @@ export function QuotationsPage() {
   useEffect(() => {
     const state = location.state as { leadId?: string; openForm?: boolean } | null
     if (!state?.leadId) return
-    setLeadId(state.leadId)
-    if (state.openForm) setShowForm(true)
-    navigate(location.pathname, { replace: true, state: null })
-  }, [location, navigate])
+    const params = new URLSearchParams(searchParams)
+    params.set('leadId', state.leadId)
+    const openForm = !!state.openForm
+    // Defer React state updates so the effect only syncs the URL/router.
+    queueMicrotask(() => {
+      setLeadId(state.leadId!)
+      if (openForm) setShowForm(true)
+    })
+    navigate({ pathname: location.pathname, search: params.toString() }, { replace: true, state: null })
+  }, [location, navigate, searchParams])
 
   useEffect(() => {
     return () => {
@@ -161,21 +186,9 @@ export function QuotationsPage() {
     }
     setPreviewUrl(null)
   }
-  const [pdfTemplateByQuotation, setPdfTemplateByQuotation] = useState<Record<string, string>>({})
-  // Last action result per quotation, shown inline beside that row's Actions dropdown.
-  const [rowStatus, setRowStatus] = useState<
-    Record<string, { text: string; detail?: string; ok: boolean }>
-  >({})
-
-  const markRow = (id: string, text: string, ok = true, detail?: string) =>
-    setRowStatus((prev) => ({ ...prev, [id]: { text, ok, detail } }))
-
-  const clearRow = (id: string) =>
-    setRowStatus((prev) => {
-      const next = { ...prev }
-      delete next[id]
-      return next
-    })
+  // Inline row status was removed with the lead-centric list; keep a no-op for mutation callbacks.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- signature kept for call sites
+  const markRow = (..._args: unknown[]) => undefined
 
   const leadsQ = useQuery({
     queryKey: ['leads-select', orgId],
@@ -242,13 +255,12 @@ export function QuotationsPage() {
       setLines([emptyLine()])
       setShowForm(false)
       if (mode === 'finalize') {
-        markRow(created.id, 'PDF generating…')
-        toast.success(`Quotation ${created.number} created — PDF generating`)
+        toast.success(`Quotation ${created.number} created`)
       } else {
-        markRow(created.id, 'Saved as draft')
         toast.success(`Draft ${created.number} saved`)
       }
       void qc.invalidateQueries({ queryKey: ['quotations', orgId] })
+      navigate(routes.moneyQuotationDoc(created.id))
     },
     onError: (err: Error) => {
       toast.error(err.message || 'Failed to create quotation')
@@ -264,45 +276,7 @@ export function QuotationsPage() {
     void create.mutateAsync(mode)
   }
 
-  const genPdf = useMutation({
-    mutationFn: ({ id, template_id }: { id: string; template_id?: string | null }) =>
-      apiFetch(`/v1/orgs/${orgId}/quotations/${id}/generate-pdf`, {
-        method: 'POST',
-        json: { template_id: template_id || null },
-      }),
-    onSuccess: (_data, vars) => {
-      markRow(vars.id, 'PDF generated')
-      void qc.invalidateQueries({ queryKey: ['quotations', orgId] })
-    },
-    onError: (err: Error, vars) => markRow(vars.id, err.message || 'PDF failed', false),
-  })
 
-  const send = useMutation({
-    mutationFn: ({ id, channel }: { id: string; channel: 'whatsapp' | 'email' }) =>
-      apiFetch<{
-        id: string
-        status: string
-        lead_stage: string
-        channel: string
-        message?: string
-      }>(`/v1/orgs/${orgId}/quotations/${id}/send`, {
-        method: 'POST',
-        json: { channel, doc_type: 'quotation' },
-      }),
-    onSuccess: (data) => {
-      const via = data.channel === 'whatsapp' ? 'WhatsApp' : 'Email'
-      markRow(
-        data.id,
-        `Sent via ${via}`,
-        true,
-        data.message ?? `Lead stage: ${data.lead_stage.replace(/_/g, ' ')}`
-      )
-      void qc.invalidateQueries({ queryKey: ['quotations', orgId] })
-      void qc.invalidateQueries({ queryKey: ['leads', orgId] })
-      void qc.invalidateQueries({ queryKey: ['leads-select', orgId] })
-    },
-    onError: (err: Error, vars) => markRow(vars.id, err.message || 'Send failed', false),
-  })
 
   const edit = useMutation({
     mutationFn: () =>
@@ -350,12 +324,18 @@ export function QuotationsPage() {
 
   const genInvoice = useMutation({
     mutationFn: (id: string) =>
-      apiFetch<{ invoice_number: string }>(`/v1/orgs/${orgId}/quotations/${id}/generate-invoice`, { method: 'POST' }),
+      apiFetch<{
+        invoice_number: string
+        quotation_id?: string
+        id?: string
+      }>(`/v1/orgs/${orgId}/quotations/${id}/generate-invoice`, { method: 'POST' }),
     onSuccess: (data, id) => {
+      const invoiceId = data.quotation_id || data.id
       markRow(id, `Invoice ${data.invoice_number} created`)
-      toast.success(`Invoice ${data.invoice_number} created — PDF generating…`)
+      toast.success(`Invoice ${data.invoice_number} created`)
       void qc.invalidateQueries({ queryKey: ['quotations', orgId] })
       void qc.invalidateQueries({ queryKey: ['invoices', orgId] })
+      if (invoiceId) navigate(routes.moneyInvoiceDoc(invoiceId))
     },
     onError: (err: Error, id) => {
       markRow(id, err.message || 'Convert failed', false)
@@ -363,16 +343,6 @@ export function QuotationsPage() {
     },
   })
 
-  const deleteQuotation = useMutation({
-    mutationFn: (id: string) =>
-      apiFetch(`/v1/orgs/${orgId}/quotations/${id}`, { method: 'DELETE' }),
-    onSuccess: () => {
-      toast.success('Deleted')
-      void qc.invalidateQueries({ queryKey: ['quotations', orgId] })
-      void qc.invalidateQueries({ queryKey: ['invoices', orgId] })
-    },
-    onError: (err: Error) => toast.error(err.message || 'Failed to delete'),
-  })
 
   const renameQuotation = useMutation({
     mutationFn: ({ id, title }: { id: string; title: string }) =>
@@ -395,11 +365,56 @@ export function QuotationsPage() {
   )
 
   const quotations = (q.data?.items ?? []).filter((x) => !x.invoice_number)
+  const searchLower = search.trim().toLowerCase()
+  const filteredQuotations = quotations.filter((x) => {
+    if (focusLeadId && x.lead_id !== focusLeadId) return false
+    if (!searchLower) return true
+    const hay = [
+      x.lead_title,
+      x.lead_company,
+      x.number,
+      x.title,
+      x.lead_phone,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase()
+    return hay.includes(searchLower)
+  })
+  const leadGroups = groupDocsByLead(filteredQuotations as QuotationDoc[])
+  const focusLead = focusLeadId
+    ? leadGroups.find((g) => g.leadId === focusLeadId) ||
+      (filteredQuotations[0]
+        ? {
+            leadId: focusLeadId,
+            leadTitle: filteredQuotations[0].lead_title || 'Lead',
+            leadCompany: filteredQuotations[0].lead_company ?? null,
+            count: filteredQuotations.length,
+            latestAt: null,
+            totalValue: filteredQuotations.reduce((s, d) => s + d.total, 0),
+            docs: filteredQuotations as QuotationDoc[],
+          }
+        : null)
+    : null
   const leads = leadsQ.data?.items ?? []
   const draftCount = quotations.filter((x) => x.status === 'DRAFT').length
   const sentCount = quotations.filter((x) => x.status === 'SENT').length
   const acceptedCount = quotations.filter((x) => x.status === 'ACCEPTED').length
+  const invoicedCount = quotations.filter((x) => x.status === 'INVOICED').length
   const rejectedCount = quotations.filter((x) => x.status === 'REJECTED').length
+
+  function openLeadQuotes(leadIdValue: string) {
+    const params = new URLSearchParams(searchParams)
+    params.set('leadId', leadIdValue)
+    setSearchParams(params)
+  }
+
+  function clearLeadFocus() {
+    const params = new URLSearchParams(searchParams)
+    params.delete('leadId')
+    setSearchParams(params)
+  }
+
   const totalValue = quotations.reduce((s, x) => s + (Number(x.total) || 0), 0)
 
   function addLine() {
@@ -435,17 +450,6 @@ export function QuotationsPage() {
     ])
   }
 
-  function openEdit(quotation: Quotation) {
-    setEditingId(quotation.id)
-    setEditLeadId(quotation.lead_id)
-    setEditLines(
-      quotation.lines.map((l) => ({
-        description: l.description,
-        quantity: String(l.quantity),
-        unit_price: String(l.unit_price),
-      }))
-    )
-  }
 
   function addEditLine() {
     setEditLines([...editLines, emptyLine()])
@@ -462,378 +466,292 @@ export function QuotationsPage() {
   return (
     <>
       <PageHeader
-        title="Quotations"
-        badge={`${quotations.length} total`}
-        description="Create, manage and track all your quotations."
+        title={focusLead ? focusLead.leadTitle : 'Quotations'}
+        badge={
+          focusLead
+            ? `${focusLead.count} quotation${focusLead.count === 1 ? '' : 's'}`
+            : `${quotations.length} total`
+        }
+        description={
+          focusLead
+            ? 'Quotations for this customer. Open one to edit, version, or create an invoice.'
+            : 'Organised by customer — open a lead to manage their quotations.'
+        }
         actions={
-          <button type="button" className="btn" onClick={() => setShowForm(true)}>
-            <Plus size={15} />
-            New quotation
-          </button>
+          <div className="row" style={{ gap: '0.5rem', flexWrap: 'wrap' }}>
+            {focusLead && (
+              <button type="button" className="btn btn-ghost btn-sm" onClick={clearLeadFocus}>
+                <ArrowLeft size={14} />
+                Back
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                if (focusLeadId) {
+                  setLeadId(focusLeadId)
+                  const lead = leads.find((l) => l.id === focusLeadId)
+                  if (lead) {
+                    setSelectedLead({
+                      id: lead.id,
+                      title: lead.title,
+                      phone: lead.phone,
+                      email: lead.email,
+                      company: lead.company,
+                    })
+                  }
+                }
+                setShowForm(true)
+              }}
+            >
+              <Plus size={15} />
+              New quotation
+            </button>
+          </div>
         }
       />
 
       <div className="page-body stack" style={{ gap: '1.25rem' }}>
-        <div className="metrics-grid">
-          <MetricCard icon={FileText} tone="purple" label="Total quotations" value={quotations.length} hint={isAll ? 'This period' : dayParam} />
-          <MetricCard icon={ShieldCheck} tone="green" label="Accepted" value={acceptedCount} />
-          <MetricCard
-            icon={TrendingUp}
-            tone="purple"
-            label="Accepted rate"
-            value={
-              quotations.length
-                ? `${((acceptedCount / quotations.length) * 100).toFixed(0)}%`
-                : '0%'
-            }
-            hint="Of open quotations"
+        {!focusLead && (
+          <>
+            <div className="metrics-grid">
+              <MetricCard icon={FileText} tone="purple" label="Total quotations" value={quotations.length} hint={isAll ? 'This period' : dayParam} />
+              <MetricCard icon={ShieldCheck} tone="green" label="Accepted" value={acceptedCount} />
+              <MetricCard
+                icon={TrendingUp}
+                tone="purple"
+                label="Accepted rate"
+                value={
+                  quotations.length
+                    ? `${((acceptedCount / quotations.length) * 100).toFixed(0)}%`
+                    : '0%'
+                }
+                hint="Of open quotations"
+              />
+            </div>
+            <div className="status-strip" aria-label="Quotation status breakdown">
+              <span className="status-strip-item">
+                <span className="status-strip-dot draft" aria-hidden />
+                Draft <strong>{draftCount}</strong>
+              </span>
+              <span className="status-strip-item">
+                <span className="status-strip-dot sent" aria-hidden />
+                Sent <strong>{sentCount}</strong>
+              </span>
+              <span className="status-strip-item">
+                <span className="status-strip-dot paid" aria-hidden />
+                Accepted <strong>{acceptedCount}</strong>
+              </span>
+              <span className="status-strip-item">
+                <span className="status-strip-dot invoiced" aria-hidden />
+                Invoiced <strong>{invoicedCount}</strong>
+              </span>
+              <span className="status-strip-item">
+                <span className="status-strip-dot rejected" aria-hidden />
+                Rejected <strong>{rejectedCount}</strong>
+              </span>
+            </div>
+
+            <InsightGrid>
+              <InsightCard title="Top items quoted">
+                {(() => {
+                  const counts = new Map<string, number>()
+                  for (const qtn of quotations) {
+                    for (const line of qtn.lines ?? []) {
+                      const name = line.description.trim() || 'Item'
+                      counts.set(name, (counts.get(name) ?? 0) + Number(line.quantity || 0))
+                    }
+                  }
+                  const items = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)
+                  return items.length === 0 ? (
+                    <p className="muted small">No items quoted yet. Start creating quotations to see item insights.</p>
+                  ) : (
+                    <div className="stack" style={{ gap: '0.4rem', fontSize: '0.82rem' }}>
+                      {items.map(([name, qty]) => (
+                        <div key={name} className="row spread">
+                          <span>{name}</span>
+                          <strong>{qty}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  )
+                })()}
+              </InsightCard>
+              <InsightCard title="Quotation value">
+                {quotations.length === 0 ? (
+                  <p className="muted small">No quotation value yet.</p>
+                ) : (
+                  <>
+                    <DonutChart
+                      segments={[
+                        { label: 'Draft', value: quotations.filter((x) => x.status === 'DRAFT').reduce((s, x) => s + Number(x.total), 0), color: '#64748b' },
+                        { label: 'Sent', value: quotations.filter((x) => x.status === 'SENT').reduce((s, x) => s + Number(x.total), 0), color: '#f59e0b' },
+                        { label: 'Accepted', value: quotations.filter((x) => x.status === 'ACCEPTED').reduce((s, x) => s + Number(x.total), 0), color: '#3D7A5A' },
+                        { label: 'Invoiced', value: quotations.filter((x) => x.status === 'INVOICED').reduce((s, x) => s + Number(x.total), 0), color: '#0F766E' },
+                        { label: 'Rejected', value: quotations.filter((x) => x.status === 'REJECTED').reduce((s, x) => s + Number(x.total), 0), color: '#B42318' },
+                      ]}
+                      center={{ value: `₹${totalValue.toLocaleString('en-IN')}`, label: 'Total' }}
+                    />
+                    <DonutLegend
+                      segments={[
+                        { label: 'Draft', value: draftCount, color: '#64748b' },
+                        { label: 'Sent', value: sentCount, color: '#f59e0b' },
+                        { label: 'Accepted', value: acceptedCount, color: '#3D7A5A' },
+                        { label: 'Invoiced', value: invoicedCount, color: '#0F766E' },
+                        { label: 'Rejected', value: rejectedCount, color: '#B42318' },
+                      ]}
+                      total={quotations.length}
+                    />
+                  </>
+                )}
+              </InsightCard>
+              <InsightCard title="Quick actions">
+                <div className="quick-action-list">
+                  <button type="button" onClick={() => setShowForm(true)}>
+                    <Plus size={14} /> New quotation
+                  </button>
+                  <Link to={routes.settings('documents')}>
+                    <FileText size={14} /> Quotation templates
+                  </Link>
+                </div>
+              </InsightCard>
+            </InsightGrid>
+          </>
+        )}
+
+        <div className="form-field" style={{ margin: 0, maxWidth: 420 }}>
+          <input
+            className="input"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search leads or quotations…"
           />
         </div>
-        <div className="status-strip" aria-label="Quotation status breakdown">
-          <span className="status-strip-item">
-            <span className="status-strip-dot draft" aria-hidden />
-            Draft <strong>{draftCount}</strong>
-          </span>
-          <span className="status-strip-item">
-            <span className="status-strip-dot sent" aria-hidden />
-            Sent <strong>{sentCount}</strong>
-          </span>
-          <span className="status-strip-item">
-            <span className="status-strip-dot rejected" aria-hidden />
-            Rejected <strong>{rejectedCount}</strong>
-          </span>
-        </div>
+
         {q.isLoading && <p className="muted">Loading quotations…</p>}
         {q.error && <p className="error">{(q.error as Error).message}</p>}
 
-        {quotations.length > 0 ? (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Quotation</th>
-                  <th>Lead</th>
-                  <th>Status</th>
-                  <th>Total</th>
-                  <th>Sent</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {quotations.map((x) => {
-                  const leadName = x.lead_title ?? leads.find((l) => l.id === x.lead_id)?.title ?? x.lead_id.slice(0, 8)
-                  const canSend = x.status === 'DRAFT' && !!x.pdf_url
-                  return (
-                    <tr
-                      key={x.id}
-                      className="quotation-row"
-                      onClick={() => void openPreview(x)}
-                      style={{ cursor: 'pointer' }}
-                    >
-                      <td>
-                        <div className="row" style={{ gap: '0.4rem' }}>
-                          <FileText size={14} style={{ color: 'var(--primary)', flexShrink: 0 }} />
-                          <div className="stack" style={{ gap: '0.15rem' }}>
-                            <span style={{ fontWeight: 600, fontSize: '0.88rem' }}>
-                              {quotationDisplayName(x)}
-                            </span>
-                            <span className="muted small" style={{ fontFamily: 'ui-monospace, monospace' }}>
-                              {x.invoice_number
-                                ? `${x.invoice_number} · from ${x.number}`
-                                : x.title
-                                  ? x.number
-                                  : 'Click to preview'}
-                            </span>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="muted">{leadName}</td>
-                      <td><span className={`badge ${STATUS_COLOR[x.status] ?? 'badge-slate'}`}>{x.status}</span></td>
-                      <td style={{ fontWeight: 700 }}>₹{x.total.toLocaleString('en-IN')}</td>
-                      <td className="muted small">
-                        {x.sent_at ? new Date(x.sent_at).toLocaleDateString('en-IN') : '—'}
-                      </td>
-                      <td onClick={(e) => e.stopPropagation()}>
-                        <div className="row" style={{ gap: '0.5rem', alignItems: 'center' }}>
-                          {x.invoice_number && (
-                            <span className="badge badge-green">
-                              Invoice · {x.invoiced_at ? new Date(x.invoiced_at).toLocaleDateString('en-IN') : x.invoice_number}
-                            </span>
-                          )}
-                          <RowActions>
-                            {(close) => (
-                              <>
-                                <button
-                                  type="button"
-                                  className="btn btn-ghost btn-sm"
-                                  onClick={() => {
-                                    void openPreview(x)
-                                    close()
-                                  }}
-                                >
-                                  <FileText size={13} />
-                                  Preview
-                                </button>
-                                <button
-                                  type="button"
-                                  className="btn btn-ghost btn-sm"
-                                  onClick={() => {
-                                    setRenamingQuotation(x)
-                                    setRenameTitle(x.title ?? '')
-                                    close()
-                                  }}
-                                >
-                                  <Pencil size={13} />
-                                  Rename
-                                </button>
-                                {!x.pdf_url ? (
-                                  <>
-                                    {quotationTemplates.length > 0 && (
-                                      <select
-                                        className="select"
-                                        style={{ width: '100%', fontSize: '0.8rem' }}
-                                        value={pdfTemplateByQuotation[x.id] ?? x.template_id ?? defaultTemplateId}
-                                        onChange={(e) =>
-                                          setPdfTemplateByQuotation((prev) => ({
-                                            ...prev,
-                                            [x.id]: e.target.value,
-                                          }))
-                                        }
-                                      >
-                                        {quotationTemplates.map((t) => (
-                                          <option key={t.id} value={t.id}>
-                                            {t.name}
-                                          </option>
-                                        ))}
-                                      </select>
-                                    )}
-                                    <button
-                                      type="button"
-                                      className="btn btn-ghost btn-sm"
-                                      disabled={genPdf.isPending}
-                                      onClick={() => {
-                                        genPdf.mutate({
-                                          id: x.id,
-                                          template_id:
-                                            pdfTemplateByQuotation[x.id] ?? x.template_id ?? defaultTemplateId,
-                                        })
-                                        close()
-                                      }}
-                                    >
-                                      <FileText size={13} />
-                                      Generate PDF
-                                    </button>
-                                  </>
-                                ) : (
-                                  <>
-                                    <button
-                                      type="button"
-                                      className="btn btn-ghost btn-sm"
-                                      onClick={() => {
-                                        downloadPdf(orgId, x.id, x.number, 'quotation')
-                                        close()
-                                      }}
-                                    >
-                                      <Download size={13} />
-                                      Download Quotation
-                                    </button>
-                                    {x.invoice_number && (
-                                      <button
-                                        type="button"
-                                        className="btn btn-ghost btn-sm"
-                                        onClick={() => {
-                                          downloadPdf(orgId, x.id, x.invoice_number!, 'invoice')
-                                          close()
-                                        }}
-                                      >
-                                        <Download size={13} />
-                                        Download Invoice
-                                      </button>
-                                    )}
-                                    <button
-                                      type="button"
-                                      className="btn btn-ghost btn-sm"
-                                      disabled={send.isPending || !x.lead_email}
-                                      title={
-                                        x.lead_email
-                                          ? `Send quotation to ${x.lead_email}`
-                                          : 'This lead has no email address'
-                                      }
-                                      onClick={() => {
-                                        send.mutate({ id: x.id, channel: 'email' })
-                                        close()
-                                      }}
-                                    >
-                                      <Mail size={13} />
-                                      {send.isPending
-                                        ? 'Sending…'
-                                        : x.status === 'SENT'
-                                          ? 'Resend by email'
-                                          : 'Email quotation'}
-                                    </button>
-                                  </>
-                                )}
-                                {canSend && (
-                                  <button
-                                    type="button"
-                                    className="btn btn-ghost btn-sm"
-                                    disabled={send.isPending}
-                                    onClick={() => {
-                                      send.mutate({ id: x.id, channel: 'whatsapp' })
-                                      close()
-                                    }}
-                                  >
-                                    <MessageCircle size={13} />
-                                    {send.isPending ? 'Sending…' : 'Send on WhatsApp'}
-                                  </button>
-                                )}
-                                {!x.invoice_number && !!x.pdf_url && (
-                                  <button
-                                    type="button"
-                                    className="btn btn-ghost btn-sm"
-                                    disabled={genInvoice.isPending}
-                                    onClick={() => {
-                                      genInvoice.mutate(x.id)
-                                      close()
-                                    }}
-                                  >
-                                    <FileText size={13} />
-                                    {genInvoice.isPending ? 'Converting…' : 'Convert to invoice'}
-                                  </button>
-                                )}
-                                {!x.invoice_number && (
-                                  <button
-                                    type="button"
-                                    className="btn btn-ghost btn-sm"
-                                    onClick={() => {
-                                      openEdit(x)
-                                      close()
-                                    }}
-                                  >
-                                    {x.pdf_url
-                                      ? x.status === 'SENT'
-                                        ? 'Edit & Resend'
-                                        : 'Edit quotation'
-                                      : 'Edit draft'}
-                                  </button>
-                                )}
-                                <button
-                                  type="button"
-                                  className="btn btn-ghost btn-sm btn-danger"
-                                  disabled={deleteQuotation.isPending}
-                                  onClick={() => {
-                                    const label = x.invoice_number
-                                      ? `invoice ${x.invoice_number}`
-                                      : `quotation ${quotationDisplayName(x)}`
-                                    if (
-                                      window.confirm(`Delete ${label}? This cannot be undone.`)
-                                    ) {
-                                      deleteQuotation.mutate(x.id)
-                                    }
-                                    close()
-                                  }}
-                                >
-                                  <Trash2 size={13} />
-                                  Delete
-                                </button>
-                              </>
-                            )}
-                          </RowActions>
-                          {rowStatus[x.id] && (
-                            <span
-                              className={`badge ${rowStatus[x.id].ok ? 'badge-green' : 'badge-red'}`}
-                              title={rowStatus[x.id].detail ?? rowStatus[x.id].text}
-                              onClick={() => clearRow(x.id)}
-                              style={{
-                                cursor: 'pointer',
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: 4,
-                              }}
-                            >
-                              {rowStatus[x.id].ok && <Check size={12} />}
-                              {rowStatus[x.id].text}
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          !q.isLoading && (
-            <EmptyState
-              icon={FileText}
-              description="No quotations yet. Create one from a lead."
-            />
-          )
+        {!focusLead && !q.isLoading && leadGroups.length === 0 && (
+          <EmptyState
+            icon={FileText}
+            title="No quotations yet"
+            description="Create a quotation for a customer to get started."
+          />
         )}
 
-        <InsightGrid>
-          <InsightCard title="Top items quoted">
-            {(() => {
-              const counts = new Map<string, number>()
-              for (const qtn of quotations) {
-                for (const line of qtn.lines ?? []) {
-                  const name = line.description.trim() || 'Item'
-                  counts.set(name, (counts.get(name) ?? 0) + Number(line.quantity || 0))
-                }
-              }
-              const items = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)
-              return items.length === 0 ? (
-                <p className="muted small">No items quoted yet. Start creating quotations to see item insights.</p>
-              ) : (
-                <div className="stack" style={{ gap: '0.4rem', fontSize: '0.82rem' }}>
-                  {items.map(([name, qty]) => (
-                    <div key={name} className="row spread">
-                      <span>{name}</span>
-                      <strong>{qty}</strong>
-                    </div>
-                  ))}
+        {!focusLead && leadGroups.length > 0 && (
+          <div className="stack" style={{ gap: '0.65rem' }}>
+            {leadGroups.map((g) => (
+              <button
+                key={g.leadId}
+                type="button"
+                className="card lead-doc-group"
+                onClick={() => openLeadQuotes(g.leadId)}
+                style={{ textAlign: 'left', cursor: 'pointer', width: '100%' }}
+              >
+                <div className="row spread" style={{ gap: '0.75rem', flexWrap: 'wrap' }}>
+                  <div>
+                    <strong style={{ fontSize: '1rem' }}>{g.leadTitle}</strong>
+                    {g.leadCompany && (
+                      <p className="muted small" style={{ margin: '0.15rem 0 0' }}>
+                        {g.leadCompany}
+                      </p>
+                    )}
+                  </div>
+                  <div className="stack" style={{ gap: '0.15rem', alignItems: 'flex-end' }}>
+                    <span className="muted small">
+                      {g.count} quotation{g.count === 1 ? '' : 's'}
+                    </span>
+                    <span className="muted small">
+                      Latest:{' '}
+                      {g.latestAt
+                        ? new Date(g.latestAt).toLocaleDateString('en-IN', {
+                            day: 'numeric',
+                            month: 'short',
+                            year: 'numeric',
+                          })
+                        : '—'}
+                    </span>
+                  </div>
                 </div>
-              )
-            })()}
-          </InsightCard>
-          <InsightCard title="Quotation value">
-            {quotations.length === 0 ? (
-              <p className="muted small">No quotation value yet.</p>
-            ) : (
-              <>
-                <DonutChart
-                  segments={[
-                    { label: 'Draft', value: quotations.filter((x) => x.status === 'DRAFT').reduce((s, x) => s + Number(x.total), 0), color: '#64748b' },
-                    { label: 'Sent', value: quotations.filter((x) => x.status === 'SENT').reduce((s, x) => s + Number(x.total), 0), color: '#f59e0b' },
-                    { label: 'Accepted', value: quotations.filter((x) => x.status === 'ACCEPTED').reduce((s, x) => s + Number(x.total), 0), color: '#3D7A5A' },
-                    { label: 'Rejected', value: quotations.filter((x) => x.status === 'REJECTED').reduce((s, x) => s + Number(x.total), 0), color: '#B42318' },
-                  ]}
-                  center={{ value: `₹${totalValue.toLocaleString('en-IN')}`, label: 'Total' }}
-                />
-                <DonutLegend
-                  segments={[
-                    { label: 'Draft', value: draftCount, color: '#64748b' },
-                    { label: 'Sent', value: sentCount, color: '#f59e0b' },
-                    { label: 'Accepted', value: acceptedCount, color: '#3D7A5A' },
-                    { label: 'Rejected', value: rejectedCount, color: '#B42318' },
-                  ]}
-                  total={quotations.length}
-                />
-              </>
-            )}
-          </InsightCard>
-          <InsightCard title="Quick actions">
-            <div className="quick-action-list">
-              <button type="button" onClick={() => setShowForm(true)}>
-                <Plus size={14} /> New quotation
               </button>
-              <Link to={routes.settings('documents')}>
-                <FileText size={14} /> Quotation templates
-              </Link>
-            </div>
-          </InsightCard>
-        </InsightGrid>
+            ))}
+          </div>
+        )}
+
+        {focusLead && (
+          <div className="stack" style={{ gap: '0.75rem' }}>
+            {focusLead.leadCompany && (
+              <p className="muted small" style={{ margin: 0 }}>
+                {focusLead.leadCompany}
+              </p>
+            )}
+            <strong style={{ fontSize: '0.88rem' }}>Quotations</strong>
+            {filteredQuotations.length === 0 ? (
+              <EmptyState
+                icon={FileText}
+                title="No quotations for this lead"
+                description="Create the first quotation for this customer."
+              />
+            ) : (
+              filteredQuotations.map((x) => (
+                <div key={x.id} className="card">
+                  <div className="row spread" style={{ gap: '0.75rem', flexWrap: 'wrap' }}>
+                    <div className="stack" style={{ gap: '0.2rem', minWidth: 0, flex: 1 }}>
+                      <div className="row" style={{ gap: '0.4rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                        <strong>{x.number}</strong>
+                        <span className={`badge ${STATUS_COLOR[x.status] ?? 'badge-slate'}`}>
+                          {x.status}
+                        </span>
+                        <span className="badge badge-slate">Version {x.version ?? 1}</span>
+                      </div>
+                      <span className="muted small">
+                        {quotationDisplayName(x)}
+                        {x.tax_enabled && x.tax_rate != null
+                          ? ` · GST ${x.tax_rate}%`
+                          : ''}
+                      </span>
+                      <strong>{fmtINR(x.total)}</strong>
+                    </div>
+                    <div className="row" style={{ gap: '0.4rem', flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={() => void openPreview(x)}
+                      >
+                        Open
+                      </button>
+                      {!x.invoice_number && (x.linked_invoice_id || x.status === 'INVOICED') ? (
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-secondary"
+                          onClick={() => {
+                            if (x.linked_invoice_id) {
+                              navigate(routes.moneyInvoiceDoc(x.linked_invoice_id))
+                            }
+                          }}
+                          disabled={!x.linked_invoice_id}
+                        >
+                          Open invoice
+                        </button>
+                      ) : !x.invoice_number ? (
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-secondary"
+                          disabled={genInvoice.isPending}
+                          onClick={() => genInvoice.mutate(x.id)}
+                        >
+                          Create invoice
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        )}
       </div>
 
       <Modal open={showForm} onClose={() => setShowForm(false)} title="New quotation" size="lg">

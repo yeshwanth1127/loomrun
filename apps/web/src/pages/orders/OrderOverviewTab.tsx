@@ -27,12 +27,14 @@ export function OrderOverviewTab({
   order,
   orgId,
   isOwner,
+  canViewMoney = false,
   mutations,
   onOpenTab,
 }: {
   order: Order
   orgId: string
   isOwner: boolean
+  canViewMoney?: boolean
   mutations: OrderMutations
   onOpenTab: (tab: 'design' | 'production' | 'shipping' | 'money') => void
 }) {
@@ -152,7 +154,7 @@ export function OrderOverviewTab({
         )}
       </div>
 
-      {isOwner && (
+      {(isOwner || canViewMoney) && (
         <div className="card">
           <div className="card-title-row">
             <strong>Money</strong>
@@ -170,22 +172,22 @@ export function OrderOverviewTab({
               <strong>{fmtINR(pnl?.revenue_cents, { cents: true })}</strong>
             </span>
             <span>
-              <span className="muted">Spent</span>{' '}
-              <strong>{fmtINR(pnl?.actual_cost_cents, { cents: true })}</strong>
-            </span>
-            <span>
-              <span className="muted">Profit</span>{' '}
-              <strong className={(pnl?.margin_cents ?? 0) < 0 ? 'error' : undefined}>
-                {fmtINR(pnl?.margin_cents, { cents: true })}
-              </strong>
-            </span>
-            <span>
-              <span className="muted">Received</span>{' '}
+              <span className="muted">Collected</span>{' '}
               <strong>{fmtINR(pnl?.collected_cents, { cents: true })}</strong>
             </span>
             <span>
-              <span className="muted">Budget</span>{' '}
-              <strong>{fmtINR(pnl?.budget_cents, { cents: true })}</strong>
+              <span className="muted">Balance due</span>{' '}
+              <strong>
+                {fmtINR(pnl?.balance_due_cents ?? pnl?.collection_gap_cents, { cents: true })}
+              </strong>
+            </span>
+            <span>
+              <span className="muted">Status</span>{' '}
+              <strong>
+                {pnl?.payment_status
+                  ? pnl.payment_status.replace(/_/g, ' ')
+                  : '—'}
+              </strong>
             </span>
           </div>
         </div>

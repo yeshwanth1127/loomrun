@@ -66,6 +66,10 @@ type HomeOrder = {
     revenue_cents: number | null
     collected_cents: number
     collection_gap_cents: number | null
+    balance_due_cents?: number | null
+    overdue_expected_count?: number
+    overdue_expected_cents?: number
+    payment_status?: string
     over_budget: boolean
   } | null
 }
@@ -289,9 +293,25 @@ export function HomePage() {
   ]
 
   const collectible = orders
-    .filter((o) => (o.pnl?.collection_gap_cents ?? 0) > 0)
-    .sort((a, b) => (b.pnl?.collection_gap_cents ?? 0) - (a.pnl?.collection_gap_cents ?? 0))
-  const collectionGap = collectible.reduce((sum, o) => sum + (o.pnl?.collection_gap_cents ?? 0), 0)
+    .filter((o) => (o.pnl?.collection_gap_cents ?? o.pnl?.balance_due_cents ?? 0) > 0)
+    .sort(
+      (a, b) =>
+        (b.pnl?.collection_gap_cents ?? b.pnl?.balance_due_cents ?? 0) -
+        (a.pnl?.collection_gap_cents ?? a.pnl?.balance_due_cents ?? 0),
+    )
+  const collectionGap = collectible.reduce(
+    (sum, o) => sum + (o.pnl?.collection_gap_cents ?? o.pnl?.balance_due_cents ?? 0),
+    0,
+  )
+  const overdueCollectible = orders
+    .filter((o) => (o.pnl?.overdue_expected_count ?? 0) > 0)
+    .sort(
+      (a, b) => (b.pnl?.overdue_expected_cents ?? 0) - (a.pnl?.overdue_expected_cents ?? 0),
+    )
+  const overdueCents = overdueCollectible.reduce(
+    (sum, o) => sum + (o.pnl?.overdue_expected_cents ?? 0),
+    0,
+  )
 
   const attentionTotal =
     dueFollowUps.length +
@@ -299,7 +319,8 @@ export function HomePage() {
     waitingQuotes.length +
     ordersNeedingAttention.length +
     delayedOrders.length +
-    collectible.length
+    collectible.length +
+    overdueCollectible.length
 
   const anyLoading =
     followUpsQ.isLoading || newLeadsQ.isLoading || quotationsQ.isLoading || ordersQ.isLoading
@@ -361,193 +382,7 @@ export function HomePage() {
           </Link>
         </div>
       )}
-      <div className="page-body">
-        <div className="attention-grid">
-          {showSales && (
-            <AttentionCard
-              icon={CalendarClock}
-              tone={overdueCount > 0 ? 'red' : 'blue'}
-              title="Follow-ups due"
-              count={dueFollowUps.length}
-              hint={overdueCount > 0 ? `${overdueCount} overdue` : 'Scheduled for today'}
-              loading={followUpsQ.isLoading}
-              items={dueFollowUps.slice(0, 4).map((l) => ({
-                id: l.id,
-                primary: l.title,
-                secondary: l.company ?? l.phone,
-                meta: l.next_follow_up_at ? (
-                  <span
-                    className={
-                      followUpBucket(l.next_follow_up_at) === 'overdue' ? 'error' : 'muted'
-                    }
-                  >
-                    {fmtFollowUpRelative(l.next_follow_up_at)}
-                  </span>
-                ) : null,
-                to: routes.lead(l.id),
-              }))}
-              emptyText="No follow-ups due"
-              action={{
-                label: 'Open follow-ups',
-                to: routes.sales('follow-ups'),
-              }}
-            />
-          )}
-
-          {showSales && (
-            <AttentionCard
-              icon={UserPlus}
-              tone={newLeads.length > 0 ? 'amber' : 'slate'}
-              title="New leads"
-              count={newLeads.length}
-              hint="Not contacted yet"
-              loading={newLeadsQ.isLoading}
-              items={newLeads.slice(0, 4).map((l) => ({
-                id: l.id,
-                primary: l.title,
-                secondary: l.company ?? l.phone,
-                meta: <span className="muted">{timeAgo(l.updated_at)}</span>,
-                to: routes.lead(l.id),
-              }))}
-              emptyText="Every lead has been contacted"
-              action={{ label: 'Open new leads', to: routes.sales('new') }}
-            />
-          )}
-
-          {showQuotes && (
-            <AttentionCard
-              icon={PhoneCall}
-              tone={draftQuotes.length > 0 ? 'amber' : 'blue'}
-              title="Quotations waiting"
-              count={waitingQuotes.length}
-              hint={
-                draftQuotes.length > 0
-                  ? `${draftQuotes.length} draft${draftQuotes.length === 1 ? '' : 's'} to send`
-                  : 'Sent, awaiting a reply'
-              }
-              loading={quotationsQ.isLoading}
-              items={waitingQuotes.slice(0, 4).map((q) => ({
-                id: q.id,
-                primary: q.lead_title ?? q.title ?? q.number,
-                secondary: `${q.title?.trim() || q.number} · ${fmtINR(q.total)}`,
-                meta: (
-                  <span className={q.status === 'DRAFT' ? 'muted' : 'muted'}>
-                    {q.status === 'DRAFT' ? 'Draft' : 'Sent'}
-                  </span>
-                ),
-                to: q.lead_id ? routes.lead(q.lead_id, 'quotes') : quotesHome,
-              }))}
-              emptyText="No quotations pending"
-              action={{ label: 'Open quotations', to: quotesHome }}
-            />
-          )}
-
-          {showOrders && (
-            <AttentionCard
-              icon={Package}
-              tone={ordersNeedingAttention.length > 0 ? 'amber' : 'slate'}
-              title="Orders needing attention"
-              count={ordersNeedingAttention.length}
-              hint="On hold, payment hold, or past dispatch date"
-              loading={ordersQ.isLoading}
-              items={ordersNeedingAttention.slice(0, 4).map((o) => ({
-                id: o.id,
-                primary: orderName(o),
-                secondary: PRODUCTION_STAGE_LABELS[o.stage] ?? o.stage,
-                meta:
-                  o.days_until_dispatch != null && o.days_until_dispatch < 0 ? (
-                    <span className="error">{Math.abs(o.days_until_dispatch)}d overdue</span>
-                  ) : o.order_status === 'ON_HOLD' ? (
-                    <span className="muted">On hold</span>
-                  ) : o.stage === 'READY_DISPATCH' ? (
-                    <span className="muted">Ready</span>
-                  ) : (
-                    <span className="muted">Payment hold</span>
-                  ),
-                to: routes.order(o.id),
-              }))}
-              emptyText="Every order is moving"
-              action={{ label: 'Open orders', to: routes.orders() }}
-            />
-          )}
-
-          {showOrders && (
-            <AttentionCard
-              icon={AlertTriangle}
-              tone={delayedOrders.length > 0 ? 'red' : 'green'}
-              title="Delayed production"
-              count={delayedOrders.length}
-              hint="Flagged as delayed"
-              loading={ordersQ.isLoading}
-              items={delayedOrders.slice(0, 4).map((o) => ({
-                id: o.id,
-                primary: orderName(o),
-                secondary: PRODUCTION_STAGE_LABELS[o.stage] ?? o.stage,
-                meta: <span className="error">Delayed</span>,
-                to: routes.order(o.id),
-              }))}
-              emptyText="Nothing is running late"
-              action={{
-                label: 'Open delayed orders',
-                to: routes.orders('delayed'),
-              }}
-            />
-          )}
-
-          {isOwner && (
-            <AttentionCard
-              icon={IndianRupee}
-              tone={collectible.length > 0 ? 'amber' : 'green'}
-              title="Money to collect"
-              count={collectible.length}
-              hint={
-                collectionGap > 0
-                  ? `${fmtINR(collectionGap, { cents: true })} outstanding`
-                  : 'All settled'
-              }
-              loading={ordersQ.isLoading}
-              items={collectible.slice(0, 4).map((o) => ({
-                id: o.id,
-                primary: orderName(o),
-                secondary: PRODUCTION_STAGE_LABELS[o.stage] ?? o.stage,
-                meta: (
-                  <span className="muted">
-                    {fmtINR(o.pnl?.collection_gap_cents ?? 0, { cents: true })}
-                  </span>
-                ),
-                to: routes.order(o.id, 'money'),
-              }))}
-              emptyText="Nothing outstanding"
-              action={{ label: 'Open money', to: routes.money('invoices') }}
-            />
-          )}
-        </div>
-
-        {!anyLoading && attentionTotal === 0 && (
-          <div className="card home-all-clear">
-            <CheckCircle2 size={22} />
-            <div>
-              <strong>You're all caught up.</strong>
-              <p className="muted small">
-                Nothing is overdue. {showSales ? 'Add a lead or ' : ''}Ask AI if you want a summary
-                of the week.
-              </p>
-            </div>
-            <div className="row" style={{ gap: '0.5rem', marginLeft: 'auto', flexWrap: 'wrap' }}>
-              {showSales && (
-                <Link to={routes.sales()} className="btn btn-sm btn-secondary">
-                  <Plus size={14} />
-                  Add a lead
-                </Link>
-              )}
-              <Link to={routes.ai} className="btn btn-sm btn-secondary">
-                <Sparkles size={14} />
-                Ask AI
-              </Link>
-            </div>
-          </div>
-        )}
-
+      <div className="page-body stack" style={{ gap: '1.25rem' }}>
         {isOwner && (
           <section className="home-business">
             <div className="section-title-row">
@@ -621,6 +456,206 @@ export function HomePage() {
               </div>
             ) : null}
           </section>
+        )}
+
+        <div className="attention-grid">
+          {showSales && (
+            <AttentionCard
+              icon={CalendarClock}
+              tone={overdueCount > 0 ? 'red' : 'blue'}
+              title="Follow-ups due"
+              count={dueFollowUps.length}
+              hint={overdueCount > 0 ? `${overdueCount} overdue` : 'Scheduled for today'}
+              loading={followUpsQ.isLoading}
+              items={dueFollowUps.slice(0, 4).map((l) => ({
+                id: l.id,
+                primary: l.title,
+                secondary: l.company ?? l.phone,
+                meta: l.next_follow_up_at ? (
+                  <span
+                    className={
+                      followUpBucket(l.next_follow_up_at) === 'overdue' ? 'error' : 'muted'
+                    }
+                  >
+                    {fmtFollowUpRelative(l.next_follow_up_at)}
+                  </span>
+                ) : null,
+                to: routes.lead(l.id),
+              }))}
+              emptyText="No follow-ups due"
+              action={{
+                label: 'Open follow-ups',
+                to: routes.sales('follow-ups'),
+              }}
+            />
+          )}
+
+          {showSales && (
+            <AttentionCard
+              icon={UserPlus}
+              tone={newLeads.length > 0 ? 'amber' : 'slate'}
+              title="New leads"
+              count={newLeads.length}
+              hint="Not contacted yet"
+              loading={newLeadsQ.isLoading}
+              items={newLeads.slice(0, 4).map((l) => ({
+                id: l.id,
+                primary: l.title,
+                secondary: l.company ?? l.phone,
+                meta: <span className="muted">{timeAgo(l.updated_at)}</span>,
+                to: routes.lead(l.id),
+              }))}
+              emptyText="Every lead has been contacted"
+              action={{ label: 'Open new leads', to: routes.sales('new') }}
+            />
+          )}
+
+          {showQuotes && (
+            <AttentionCard
+              icon={PhoneCall}
+              tone={draftQuotes.length > 0 ? 'amber' : 'blue'}
+              title="Quotations waiting"
+              count={waitingQuotes.length}
+              hint={
+                draftQuotes.length > 0
+                  ? `${draftQuotes.length} draft${draftQuotes.length === 1 ? '' : 's'} to send`
+                  : 'Sent, awaiting a reply'
+              }
+              loading={quotationsQ.isLoading}
+              items={waitingQuotes.slice(0, 4).map((q) => ({
+                id: q.id,
+                primary: q.lead_title ?? q.title ?? q.number,
+                secondary: `${q.title?.trim() || q.number} · ${fmtINR(q.total)}`,
+                meta: (
+                  <span className={q.status === 'DRAFT' ? 'muted' : 'muted'}>
+                    {q.status === 'DRAFT'
+                      ? 'Draft'
+                      : q.status === 'INVOICED'
+                        ? 'Invoiced'
+                        : q.status === 'ACCEPTED'
+                          ? 'Accepted'
+                          : 'Sent'}
+                  </span>
+                ),
+                to: q.lead_id ? routes.lead(q.lead_id, 'quotes') : quotesHome,
+              }))}
+              emptyText="No quotations pending"
+              action={{ label: 'Open quotations', to: quotesHome }}
+            />
+          )}
+
+          {showOrders && (
+            <AttentionCard
+              icon={Package}
+              tone={ordersNeedingAttention.length > 0 ? 'amber' : 'slate'}
+              title="Orders needing attention"
+              count={ordersNeedingAttention.length}
+              hint="On hold, payment hold, or past dispatch date"
+              loading={ordersQ.isLoading}
+              items={ordersNeedingAttention.slice(0, 4).map((o) => ({
+                id: o.id,
+                primary: orderName(o),
+                secondary: PRODUCTION_STAGE_LABELS[o.stage] ?? o.stage,
+                meta:
+                  o.days_until_dispatch != null && o.days_until_dispatch < 0 ? (
+                    <span className="error">{Math.abs(o.days_until_dispatch)}d overdue</span>
+                  ) : o.order_status === 'ON_HOLD' ? (
+                    <span className="muted">On hold</span>
+                  ) : o.stage === 'READY_DISPATCH' ? (
+                    <span className="muted">Ready</span>
+                  ) : (
+                    <span className="muted">Payment hold</span>
+                  ),
+                to: routes.order(o.id),
+              }))}
+              emptyText="Every order is moving"
+              action={{ label: 'Open orders', to: routes.orders() }}
+            />
+          )}
+
+          {showOrders && (
+            <AttentionCard
+              icon={AlertTriangle}
+              tone={delayedOrders.length > 0 ? 'red' : 'green'}
+              title="Delayed production"
+              count={delayedOrders.length}
+              hint="Flagged as delayed"
+              loading={ordersQ.isLoading}
+              items={delayedOrders.slice(0, 4).map((o) => ({
+                id: o.id,
+                primary: orderName(o),
+                secondary: PRODUCTION_STAGE_LABELS[o.stage] ?? o.stage,
+                meta: <span className="error">Delayed</span>,
+                to: routes.order(o.id),
+              }))}
+              emptyText="Nothing is running late"
+              action={{
+                label: 'Open delayed orders',
+                to: routes.orders('delayed'),
+              }}
+            />
+          )}
+
+          {isOwner && (
+            <AttentionCard
+              icon={IndianRupee}
+              tone={overdueCollectible.length > 0 ? 'red' : collectible.length > 0 ? 'amber' : 'green'}
+              title="Money to collect"
+              count={collectible.length}
+              hint={
+                overdueCollectible.length > 0
+                  ? `${overdueCollectible.length} overdue · ${fmtINR(overdueCents, { cents: true })}`
+                  : collectionGap > 0
+                    ? `${fmtINR(collectionGap, { cents: true })} outstanding`
+                    : 'All settled'
+              }
+              loading={ordersQ.isLoading}
+              items={(overdueCollectible.length > 0 ? overdueCollectible : collectible)
+                .slice(0, 4)
+                .map((o) => ({
+                  id: o.id,
+                  primary: orderName(o),
+                  secondary: PRODUCTION_STAGE_LABELS[o.stage] ?? o.stage,
+                  meta: (
+                    <span className={(o.pnl?.overdue_expected_count ?? 0) > 0 ? 'error' : 'muted'}>
+                      {(o.pnl?.overdue_expected_count ?? 0) > 0
+                        ? `Overdue · ${fmtINR(o.pnl?.overdue_expected_cents ?? 0, { cents: true })}`
+                        : fmtINR(o.pnl?.collection_gap_cents ?? o.pnl?.balance_due_cents ?? 0, {
+                            cents: true,
+                          })}
+                    </span>
+                  ),
+                  to: routes.order(o.id, 'money'),
+                }))}
+              emptyText="Nothing outstanding"
+              action={{ label: 'Open money', to: routes.money('invoices') }}
+            />
+          )}
+        </div>
+
+        {!anyLoading && attentionTotal === 0 && (
+          <div className="card home-all-clear">
+            <CheckCircle2 size={22} />
+            <div>
+              <strong>You're all caught up.</strong>
+              <p className="muted small">
+                Nothing is overdue. {showSales ? 'Add a lead or ' : ''}Ask AI if you want a summary
+                of the week.
+              </p>
+            </div>
+            <div className="row" style={{ gap: '0.5rem', marginLeft: 'auto', flexWrap: 'wrap' }}>
+              {showSales && (
+                <Link to={routes.sales()} className="btn btn-sm btn-secondary">
+                  <Plus size={14} />
+                  Add a lead
+                </Link>
+              )}
+              <Link to={routes.ai} className="btn btn-sm btn-secondary">
+                <Sparkles size={14} />
+                Ask AI
+              </Link>
+            </div>
+          </div>
         )}
 
         {isProduction && !isOwner && (

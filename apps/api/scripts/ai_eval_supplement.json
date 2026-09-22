@@ -1,0 +1,67 @@
+{
+  "qlix": {
+    "connected": true,
+    "status": "connected",
+    "agent_id": "cmsznxmgl0001ld3dtxkuzmqj",
+    "collection_id": null,
+    "backfill_done": true,
+    "backfill": {
+      "queued": 585,
+      "started_at": "2026-08-19T05:50:27.927536+00:00"
+    },
+    "last_synced_at": "2026-08-19T12:17:43.785000+00:00",
+    "last_error": null,
+    "configured": true,
+    "sync": {
+      "pending": 245,
+      "failed": 703,
+      "last_synced_at": "2026-08-19T12:17:43.785000+00:00",
+      "backfill_done": true
+    }
+  },
+  "extra": [
+    {
+      "id": "S1_update_lead_by_name",
+      "latency_s": 3.94,
+      "tools": [
+        "update_lead"
+      ],
+      "mutations": [
+        {
+          "entity": "lead",
+          "action": "updated",
+          "id": "cmsbqx71200zv8ja299fo1kwo",
+          "label": "Shivu S",
+          "summary": "Lead Shivu S updated",
+          "tool": "update_lead"
+        }
+      ],
+      "reply": "I moved lead Shivu S to the NEGOTIATION stage."
+    },
+    {
+      "id": "S2_won_roster_strict",
+      "latency_s": 4.77,
+      "tools": [
+        "search_leads"
+      ],
+      "mutations": [],
+      "reply": "Here are the names of all 5 leads in the WON stage created in September 2026:\n\n1. Guruswaroop Pommarapalli\n2. Vijay Kumar Mahalaxmi Sweets (created in August but still marked WON)\n3. Suresh Kumar (created in August but still marked WON)\n4. Gopinath (created in August but still marked WON)\n5. karthikSV (created in August but still marked WON)\n\nOnly Guruswaroop Pommarapalli was created in September 2026, while the others were created earlier but are currently in the WON stage. Let me know if you want more details or any other info."
+    },
+    {
+      "id": "S3_create_quote",
+      "latency_s": 1.84,
+      "tools": [],
+      "mutations": [],
+      "reply": "Could you please provide the lead's company name, phone number, email, city, product interest, quantity estimate, notes (if any), stage, assignee ID, next follow-up date, estimated value, and lead source? This information is needed to create the lead and then proceed with the draft quotation."
+    },
+    {
+      "id": "S4_mixed_hindi",
+      "latency_s": 3.79,
+      "tools": [
+        "count_leads"
+      ],
+      "mutations": [],
+      "reply": "September 2026 mein total 5 leads WON hue hain. Ismein se 1 lead is mahine create hua aur 4 leads update hue hain. Kya aapko in leads ki details chahiye?"
+    }
+  ]
+}

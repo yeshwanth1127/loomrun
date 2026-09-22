@@ -10,6 +10,7 @@ from loomrun_api.services import dashboard as dash_svc
 from loomrun_api.services import expenses as exp_svc
 from loomrun_api.services import production as prod_svc
 from loomrun_api.services import telecaller as call_svc
+from loomrun_api.services.leads import DATE_BOUND_PARAMETERS
 
 _STAGE_LIST = ", ".join(prod_svc.STAGES)
 _OUTCOMES = ", ".join(call_svc.OUTCOMES)
@@ -20,10 +21,13 @@ _OUTCOMES = ", ".join(call_svc.OUTCOMES)
 @register_tool(
     name="list_production_orders",
     description=(
-        "List production orders — the Production screen's contents. Use for "
-        "'what's in production', 'what's stuck', 'orders at stitching'. Optionally "
-        f"filter by stage ({_STAGE_LIST}). Each row carries its stage, delay flag, "
-        "payments, expenses and P&L."
+        "WHEN: list factory jobs — 'what's in production', 'stuck', 'at stitching'. "
+        "NOT: listing leads or sales stages (search_leads). NEEDS: nothing required; "
+        "optional factory_step. RETURNS: short cards (id, order_number, "
+        "display_name, stage, delay, lead). Factory step is live: items are "
+        "jobs in that step now. Date bounds without a step filter created/"
+        "updated jobs; both together add `in_window` counts. Use "
+        "get_production_order for payments, expenses and P&L."
     ),
     parameters={
         "factory_step": {
@@ -31,6 +35,7 @@ _OUTCOMES = ", ".join(call_svc.OUTCOMES)
             "description": f"Optional factory-step filter: {_STAGE_LIST}",
         },
         "limit": {"type": "integer", "description": "Max rows (1-100)", "default": 50},
+        **DATE_BOUND_PARAMETERS,
     },
     kind="read",
     modes=("minimal", "advanced"),
@@ -40,20 +45,32 @@ async def list_production_orders(
     factory_step: str | None = None,
     stage: str | None = None,
     limit: int = 50,
+    created_after: str | None = None,
+    created_before: str | None = None,
+    updated_after: str | None = None,
+    updated_before: str | None = None,
+    timezone: str | None = None,
     **_: Any,
 ) -> dict:
     return await prod_svc.list_production_orders(
         organization_id=ctx.organization_id,
         stage=factory_step or stage,
         limit=limit,
+        created_after=created_after,
+        created_before=created_before,
+        updated_after=updated_after,
+        updated_before=updated_before,
+        timezone=timezone or ctx.timezone,
     )
 
 
 @register_tool(
     name="get_production_order",
     description=(
-        "Get one production order with its stage, payments, expenses and P&L. "
-        "`order_id` accepts the order id OR the customer/lead name."
+        "WHEN: full details of one production order (stage, payments, expenses, "
+        "P&L). NOT: a factory roster (list_production_orders) or a sales-stage "
+        "move (update_lead). NEEDS: order_id (order id or customer/lead name). "
+        "Never ask the user for an internal id. RETURNS: the full order."
     ),
     parameters={"order_id": {"type": "string", "description": "Order id, or the lead/company name"}},
     kind="read",
@@ -69,9 +86,9 @@ async def get_production_order(ctx: ToolContext, order_id: str, **_: Any) -> dic
 @register_tool(
     name="create_production_order",
     description=(
-        "Create an order for a lead, beginning at FABRIC_CHECK. "
-        "`lead_id` accepts a lead id or the customer/company name. "
-        "A lead can have multiple orders."
+        "WHEN: start manufacturing for a lead, beginning at FABRIC_CHECK. NOT: "
+        "moving a sales stage (update_lead). NEEDS: lead_id (id or customer/"
+        "company name). Never ask the user for an internal id."
     ),
     parameters={
         "lead_id": {"type": "string", "description": "Lead id, or the lead/company name"},
@@ -96,14 +113,10 @@ async def create_production_order(
 @register_tool(
     name="update_production_order",
     description=(
-        "Advance a manufacturing job on the FACTORY FLOOR — cutting, printing, "
-        "stitching, QC, packing, dispatch — or flag a delay, rename it, or set "
-        f"its budget. Valid factory steps: {_STAGE_LIST}. This tool has NOTHING "
-        "to do with the sales pipeline: NEW, CONTACTED, QUALIFICATION, QUOTATION, "
-        "NEGOTIATION, SAMPLE, WON and LOST are sales stages and belong to "
-        "update_lead — never route those here, and never create a production "
-        "order in order to change one. `order_id` accepts the order id OR the "
-        "customer/lead name."
+        "WHEN: advance a factory job (cutting, printing, stitching, QC, packing, "
+        f"dispatch) or set delay/budget/name. Valid factory steps: {_STAGE_LIST}. "
+        "NOT: sales pipeline stages NEW…WON/LOST (those are update_lead). NEEDS: "
+        "order_id (id or customer/lead name). Never ask the user for an internal id."
     ),
     parameters={
         "order_id": {"type": "string", "description": "Order id, or the lead/company name"},
@@ -152,9 +165,9 @@ async def update_production_order(
 @register_tool(
     name="record_production_payment",
     description=(
-        "Record a customer payment against a production order. Amounts are in the "
-        "smallest currency unit (paise), so ₹5,000 is 500000. `order_id` accepts "
-        "the order id or the customer/lead name."
+        "WHEN: record a customer payment against a production order. Amounts in "
+        "paise (₹1 = 100). NEEDS: order_id (id or customer/lead name) and "
+        "amount_cents. Never ask the user for an internal id."
     ),
     parameters={
         "order_id": {"type": "string", "description": "Order id, or the lead/company name"},
@@ -188,9 +201,9 @@ async def record_production_payment(
 @register_tool(
     name="record_production_expense",
     description=(
-        "Add a cost against a production order, which feeds its P&L. Amounts are "
-        "in paise (₹1 = 100). Category is free text (e.g. Production); subcategory "
-        "is the spend type (e.g. marketing, making)."
+        "WHEN: add a cost against a production order (feeds its P&L). Amounts in "
+        "paise. NEEDS: order_id (id or name), category, amount_cents. Never ask "
+        "the user for an internal id."
     ),
     parameters={
         "order_id": {"type": "string", "description": "Order id, or the lead/company name"},
@@ -232,30 +245,49 @@ async def record_production_expense(
 @register_tool(
     name="list_expenses",
     description=(
-        "List business expenses — the Expenses screen's contents. Optionally "
-        "filter by category (free text). Amounts are in paise."
+        "WHEN: list business expenses, optionally by category or date window. "
+        "created_after/before filter incurred_at (when the spend happened). "
+        "NOT: production-order costs only (those also appear on "
+        "get_production_order). RETURNS: short cards (id, category, amount, "
+        "vendor, dates)."
     ),
     parameters={
         "category": {"type": "string", "description": "Optional free-text category filter"},
         "limit": {"type": "integer", "description": "Max rows (1-100)", "default": 50},
+        **DATE_BOUND_PARAMETERS,
     },
     kind="read",
     modes=("minimal", "advanced"),
 )
 async def list_expenses(
-    ctx: ToolContext, category: str | None = None, limit: int = 50, **_: Any
+    ctx: ToolContext,
+    category: str | None = None,
+    limit: int = 50,
+    created_after: str | None = None,
+    created_before: str | None = None,
+    updated_after: str | None = None,
+    updated_before: str | None = None,
+    timezone: str | None = None,
+    **_: Any,
 ) -> dict:
     return await exp_svc.list_expenses(
-        organization_id=ctx.organization_id, category=category, limit=limit
+        organization_id=ctx.organization_id,
+        category=category,
+        limit=limit,
+        created_after=created_after,
+        created_before=created_before,
+        updated_after=updated_after,
+        updated_before=updated_before,
+        timezone=timezone or ctx.timezone,
     )
 
 
 @register_tool(
     name="create_expense",
     description=(
-        "Record a business expense. Category is free text (e.g. Production); "
-        "subcategory is the spend type (e.g. marketing). Amounts are in "
-        "paise (₹1 = 100). Optionally attach it to a lead by id or name."
+        "WHEN: record a business expense. Amounts in paise (₹1 = 100). Optional "
+        "lead_id is an id or name. NOT: a production-order cost "
+        "(record_production_expense). Never ask the user for an internal id."
     ),
     parameters={
         "category": {"type": "string", "description": "Free-text category, e.g. Production"},
@@ -294,7 +326,10 @@ async def create_expense(
 
 @register_tool(
     name="delete_expense",
-    description="Delete a recorded expense by its id. Get ids from list_expenses.",
+    description=(
+        "WHEN: delete a recorded expense. NEEDS: expense_id from list_expenses. "
+        "Never ask the user for an internal id."
+    ),
     parameters={"expense_id": {"type": "string"}},
     kind="write",
     modes=("advanced",),
@@ -312,14 +347,11 @@ async def delete_expense(ctx: ToolContext, expense_id: str, **_: Any) -> dict:
 @register_tool(
     name="log_call",
     description=(
-        "Record that a PHONE CALL happened with a lead, exactly as the Telecaller "
-        "screen does. Use this ONLY when someone actually made or took a call. "
-        f"Call outcomes: {_OUTCOMES}. Logging CALLBACK_SCHEDULED (Follow Up) is what puts a "
-        "lead on the Follow-ups screen. "
-        "DO NOT use this tool to change a lead's pipeline stage — call outcomes are "
-        "disposition codes for the telecaller log, not pipeline stage names. "
-        "To move a lead's stage, call update_lead. "
-        "`lead_id` accepts a lead id or the customer name."
+        "WHEN: record that a PHONE CALL happened with a lead. NOT: changing a "
+        "pipeline stage (update_lead) — outcomes are telecaller dispositions, "
+        f"not sales stages. Outcomes: {_OUTCOMES}. CALLBACK_SCHEDULED puts the "
+        "lead on Follow-ups. NEEDS: lead_id (id or name) and outcome. Never ask "
+        "the user for an internal id."
     ),
     parameters={
         "lead_id": {"type": "string", "description": "Lead id, or the lead/company name"},
@@ -359,21 +391,40 @@ async def log_call(
 @register_tool(
     name="list_calls",
     description=(
-        "List logged calls, newest first, optionally for one lead (`lead_id` "
-        "accepts an id or a name). Use for call history and 'have we called X'."
+        "WHEN: call history, 'have we called X', calls in a date window. NOT: "
+        "the Follow-ups screen (list_follow_ups) or a lead roster. NEEDS: "
+        "nothing required; optional lead_id (id or name) and date bounds. "
+        "RETURNS: short cards without call notes. Never ask the user for an "
+        "internal id."
     ),
     parameters={
         "lead_id": {"type": "string", "description": "Optional lead id or name"},
         "limit": {"type": "integer", "description": "Max rows (1-100)", "default": 30},
+        **DATE_BOUND_PARAMETERS,
     },
     kind="read",
     modes=("minimal", "advanced"),
 )
 async def list_calls(
-    ctx: ToolContext, lead_id: str | None = None, limit: int = 30, **_: Any
+    ctx: ToolContext,
+    lead_id: str | None = None,
+    limit: int = 30,
+    created_after: str | None = None,
+    created_before: str | None = None,
+    updated_after: str | None = None,
+    updated_before: str | None = None,
+    timezone: str | None = None,
+    **_: Any,
 ) -> dict:
     return await call_svc.list_calls(
-        organization_id=ctx.organization_id, lead_id=lead_id, limit=limit
+        organization_id=ctx.organization_id,
+        lead_id=lead_id,
+        limit=limit,
+        created_after=created_after,
+        created_before=created_before,
+        updated_after=updated_after,
+        updated_before=updated_before,
+        timezone=timezone or ctx.timezone,
     )
 
 
@@ -382,11 +433,10 @@ async def list_calls(
 @register_tool(
     name="get_ceo_dashboard",
     description=(
-        "The CEO dashboard figures: hot leads, deals won, deals lost, win rate, "
-        "pending quotations, delayed follow-ups, production bottlenecks, "
-        "collections and revenue. Use for "
-        "'how are we doing', 'summary', 'today's numbers'. These are the same "
-        "numbers the CEO Dashboard screen shows."
+        "WHEN: organisation KPIs — 'how are we doing', 'summary', today's "
+        "numbers. NOT: a lead roster or a filtered count (search_leads / "
+        "count_leads). RETURNS: hot leads, deals won/lost, win rate, pending "
+        "quotations, delayed follow-ups, production bottlenecks, collections."
     ),
     parameters={
         "day": {"type": "string", "description": "YYYY-MM-DD for one day, or 'all' (default)"},

@@ -101,6 +101,70 @@ async def _tool_governance() -> dict[str, str]:
     return {spec.name: "auto" for spec in all_tools()}
 
 
+async def _key_usable(api_key: str) -> bool:
+    """Return True when Qlix accepts this org key."""
+    if not api_key.strip():
+        return False
+    try:
+        await qlix.auth_me(api_key)
+        return True
+    except qlix.QlixError as exc:
+        if exc.unauthorized:
+            return False
+        raise
+
+
+async def probe_key(row) -> bool | None:
+    """Live check: True/False when probed, None when not connected or probe inconclusive."""
+    if not row or row.status != conn.STATUS_CONNECTED:
+        return None
+    key = conn.read_api_key(row)
+    if not key:
+        return False
+    try:
+        return await _key_usable(key)
+    except qlix.QlixError:
+        return None
+
+
+async def _rotate_and_store_key(organization_id: str) -> str:
+    result = await qlix.rotate_tenant_key(external_org_id=organization_id)
+    api_key = str(result.get("apiKey") or "").strip()
+    if not api_key:
+        raise ProvisionError("Qlix did not return an API key for this organization.")
+    await conn.update_connection(
+        organization_id,
+        credentials=conn.write_api_key(api_key),
+    )
+    return api_key
+
+
+async def reconnect(*, organization_id: str) -> dict[str, Any]:
+    """Mint a fresh qlix_live_* key for an org whose stored key no longer works."""
+    if not settings.qlix_ready:
+        raise ProvisionError(
+            "Qlix is not configured on this server. Set QLIX_PARTNER_KEY and QLIX_MCP_URL."
+        )
+    org = await prisma.organization.find_unique(where={"id": organization_id})
+    if not org:
+        raise ProvisionError("Organization not found")
+
+    try:
+        api_key = await _rotate_and_store_key(organization_id)
+        if not await _key_usable(api_key):
+            raise ProvisionError("Qlix did not accept the new API key.")
+        await conn.update_connection(
+            organization_id,
+            status=conn.STATUS_CONNECTED,
+            lastError=None,
+        )
+    except qlix.QlixError as exc:
+        await conn.mark_error(organization_id, str(exc))
+        raise ProvisionError(str(exc)) from exc
+
+    return conn.public_state(await conn.get_connection(organization_id))
+
+
 async def activate(
     *, organization_id: str, owner_email: str | None = None
 ) -> dict[str, Any]:
@@ -115,8 +179,17 @@ async def activate(
         raise ProvisionError("Organization not found")
 
     row = await conn.ensure_row(organization_id)
-    if row.status == conn.STATUS_CONNECTED and conn.read_api_key(row):
-        return conn.public_state(row)
+    if row.status == conn.STATUS_CONNECTED:
+        key = conn.read_api_key(row)
+        if key:
+            try:
+                if await _key_usable(key):
+                    return conn.public_state(row)
+            except qlix.QlixError as exc:
+                if not exc.unauthorized:
+                    raise ProvisionError(str(exc)) from exc
+            logger.info("Qlix key stale for org %s; rotating", organization_id)
+            return await reconnect(organization_id=organization_id)
 
     await conn.update_connection(
         organization_id, status=conn.STATUS_PROVISIONING, lastError=None

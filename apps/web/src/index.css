@@ -270,7 +270,6 @@ a:hover {
 
 .smooth-scroll-content {
   min-height: 100%;
-  height: 100%;
   display: flex;
   flex-direction: column;
 }
@@ -382,8 +381,8 @@ h3 {
 
 .sidebar-noolrun-wordmark {
   width: auto;
-  max-width: 16rem;
-  height: 2.75rem;
+  max-width: 9.25rem;
+  height: 1.7rem;
   margin-inline: 0;
 }
 
@@ -1007,6 +1006,9 @@ h3 {
 }
 .status-strip-dot.paid {
   background: var(--success);
+}
+.status-strip-dot.invoiced {
+  background: #0F766E;
 }
 
 .insight-grid {
@@ -5105,7 +5107,7 @@ textarea.input:focus {
 }
 
 .home-business {
-  margin-top: 1.75rem;
+  margin-top: 0;
 }
 
 /* ──────────────────────────────────────────────────────────────────
@@ -5589,6 +5591,125 @@ textarea.input:focus {
 .order-money-row {
   padding: 0.3rem 0;
   border-bottom: 1px solid var(--border);
+}
+
+.order-collections-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 0.85rem;
+  margin-top: 0.65rem;
+}
+
+.order-collections-summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.order-collections-summary strong {
+  font-size: 1.05rem;
+}
+
+.order-collection-bar-wrap {
+  margin-top: 0.85rem;
+}
+
+.order-collection-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--secondary);
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.order-collection-bar-fill {
+  height: 100%;
+  background: var(--primary);
+  border-radius: 999px;
+  min-width: 0;
+  transition: width 0.2s ease;
+}
+
+.order-expected-row {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  padding: 0.55rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.order-expected-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.payment-timeline {
+  display: flex;
+  flex-direction: column;
+}
+
+.payment-timeline-item {
+  display: flex;
+  gap: 0.75rem;
+  padding-bottom: 1rem;
+  position: relative;
+}
+
+.payment-timeline-item::before {
+  content: "";
+  position: absolute;
+  left: 11px;
+  top: 22px;
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+}
+
+.payment-timeline-item:last-child {
+  padding-bottom: 0;
+}
+
+.payment-timeline-item:last-child::before {
+  display: none;
+}
+
+.payment-timeline-dot {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1;
+  border: 1px solid var(--border);
+  background: var(--card, var(--background));
+  color: var(--muted-fg);
+}
+
+.payment-timeline-dot--filled {
+  background: var(--secondary);
+  color: var(--primary);
+}
+
+.payment-timeline-dot--open {
+  background: transparent;
+  color: var(--muted-fg);
+}
+
+.payment-timeline-dot--overdue {
+  background: rgba(180, 35, 24, 0.1);
+  border-color: rgba(180, 35, 24, 0.35);
+  color: var(--destructive);
+}
+
+.payment-timeline-body {
+  flex: 1;
+  min-width: 0;
 }
 
 .link-button {
@@ -6212,4 +6333,121 @@ textarea.input:focus {
 }
 .design-viewer-meta .muted {
   color: rgba(248, 250, 252, 0.45);
+}
+
+/* ──────────────────────────────────────────────────────────────────
+   PLATFORM SUPER-ADMIN DASHBOARD
+   ────────────────────────────────────────────────────────────────── */
+.platform-dash {
+  min-width: 0;
+  max-width: 100%;
+  width: 100%;
+  overflow-x: clip;
+}
+.platform-dash .section-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.15rem 0.5rem;
+}
+.platform-dash .page-body {
+  min-width: 0;
+  max-width: 100%;
+}
+.platform-dash .platform-search {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  max-width: min(420px, 100%);
+  color: var(--muted-fg);
+}
+.platform-dash .platform-search .input {
+  flex: 1;
+  min-width: 0;
+}
+.platform-split {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.3fr);
+  gap: 1.15rem;
+  align-items: start;
+  min-width: 0;
+}
+.platform-orgs,
+.platform-detail {
+  min-width: 0;
+  max-width: 100%;
+}
+.platform-dash .table-wrap {
+  overflow-x: auto;
+  max-width: 100%;
+  -webkit-overflow-scrolling: touch;
+}
+.platform-dash .table-wrap table {
+  width: 100%;
+}
+.platform-row-active td {
+  background: color-mix(in srgb, var(--primary) 10%, var(--card));
+}
+.platform-num {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.platform-kpi-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+  gap: 0.75rem;
+  min-width: 0;
+}
+.platform-usage-track {
+  height: 8px;
+  border-radius: 99px;
+  background: var(--secondary);
+  overflow: hidden;
+}
+.platform-usage-fill {
+  height: 100%;
+  border-radius: 99px;
+  background: var(--primary);
+}
+.platform-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  min-width: 0;
+}
+.platform-chip {
+  border: 1px solid var(--border);
+  background: var(--secondary);
+  color: inherit;
+  border-radius: 999px;
+  padding: 0.15rem 0.55rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.platform-chip span {
+  margin-left: 0.35rem;
+  color: var(--muted-fg);
+}
+.platform-dash .btn-ghost.btn-sm.active {
+  background: color-mix(in srgb, var(--primary) 14%, var(--card));
+  color: var(--foreground);
+}
+.platform-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  min-width: 0;
+}
+.platform-detail-actions .select,
+.platform-detail-actions .input {
+  width: auto;
+  min-width: 0;
+}
+@media (max-width: 1100px) {
+  .platform-split {
+    grid-template-columns: 1fr;
+  }
 }

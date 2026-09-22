@@ -4,6 +4,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr, Field
 
+from loomrun_api.admin_overview import list_ai_turns, platform_overview
 from loomrun_api.deps import require_super_admin
 from loomrun_api.entitlements import default_trial_ends_at, max_seats_for_org, require_valid_plan
 from loomrun_api.prisma_client import prisma
@@ -251,6 +252,29 @@ async def join_as_support(
         "role": m.role.name if hasattr(m.role, "name") else str(m.role),
         "already_member": False,
     }
+
+
+@router.get("/overview")
+async def admin_overview(_admin: User = Depends(require_super_admin)) -> dict:
+    """Orgs, members, and AI token usage across the platform."""
+    return await platform_overview()
+
+
+@router.get("/ai-usage")
+async def admin_ai_usage(
+    organization_id: str | None = None,
+    skip: int = 0,
+    take: int = 50,
+    days: int | None = None,
+    _admin: User = Depends(require_super_admin),
+) -> dict:
+    """Per-turn token counts. Filter by org and recent window."""
+    return await list_ai_turns(
+        organization_id=organization_id,
+        skip=skip,
+        take=take,
+        days=days,
+    )
 
 
 @router.get("/analytics")

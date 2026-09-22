@@ -15,7 +15,7 @@ from fastapi import HTTPException, status
 
 from loomrun_api.lead_call_sync import sync_lead_after_call
 from loomrun_api.prisma_client import prisma
-from loomrun_api.services.leads import resolve_lead
+from loomrun_api.services.leads import apply_created_updated_filters, resolve_lead
 from loomrun_api.call_outcomes import TELECALLER_OUTCOMES
 from prisma.enums import CallOutcome
 
@@ -75,10 +75,12 @@ async def log_call(
     if next_call_at is not None:
         lead_update["nextFollowUpAt"] = next_call_at
         lead_update["followUpRemindedAt"] = None
+        lead_update["followUpRemindedOffsets"] = []
         lead_update["followUpWaRemindedAt"] = None
     elif key != "CALLBACK_SCHEDULED":
         lead_update["nextFollowUpAt"] = None
         lead_update["followUpRemindedAt"] = None
+        lead_update["followUpRemindedOffsets"] = []
         lead_update["followUpWaRemindedAt"] = None
     if lead_update:
         await prisma.lead.update(where={"id": lead.id}, data=lead_update)
@@ -106,12 +108,27 @@ async def log_call(
 
 
 async def list_calls(
-    *, organization_id: str, lead_id: str | None = None, limit: int = 30
+    *,
+    organization_id: str,
+    lead_id: str | None = None,
+    limit: int = 30,
+    created_after: str | None = None,
+    created_before: str | None = None,
+    updated_after: str | None = None,
+    updated_before: str | None = None,
+    timezone: str | None = None,
 ) -> dict[str, Any]:
     where: dict[str, Any] = {"organizationId": organization_id}
     if lead_id:
         lead = await resolve_lead(organization_id=organization_id, lead_id=lead_id)
         where["leadId"] = lead.id
+    # Call logs have createdAt only — treat updated_* as created_*.
+    apply_created_updated_filters(
+        where,
+        created_after=created_after or updated_after,
+        created_before=created_before or updated_before,
+        timezone=timezone,
+    )
     total = await prisma.telecallercalllog.count(where=where)
     rows = await prisma.telecallercalllog.find_many(
         where=where,
@@ -127,7 +144,6 @@ async def list_calls(
                 "lead_title": r.lead.title if r.lead else None,
                 "outcome": _enum_name(r.outcome),
                 "attempt_number": r.attemptNumber,
-                "notes": r.notes,
                 "duration_seconds": r.durationSeconds,
                 "next_call_at": r.nextCallAt.isoformat() if r.nextCallAt else None,
                 "logged_by": (r.user.name or r.user.email) if r.user else None,

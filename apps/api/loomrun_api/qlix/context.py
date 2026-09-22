@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone as utc
 from typing import Any
 
 from jose import JWTError, jwt
@@ -47,8 +47,9 @@ def mint_context(
     role: str,
     mode: str,
     conversation_id: str | None = None,
+    timezone: str | None = None,
 ) -> str:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(utc.utc)
     payload: dict[str, Any] = {
         "typ": TOKEN_TYPE,
         "org": organization_id,
@@ -60,6 +61,9 @@ def mint_context(
     }
     if conversation_id:
         payload["conv"] = conversation_id
+    tz = (timezone or "").strip()
+    if tz:
+        payload["tz"] = tz[:64]
     return jwt.encode(payload, _signing_key(), algorithm=ALGORITHM)
 
 
@@ -98,4 +102,5 @@ def verify_context(token: str | None) -> dict[str, Any]:
         "role": str(payload.get("role") or ""),
         "mode": str(payload.get("mode") or "advanced"),
         "conversation_id": payload.get("conv"),
+        "timezone": str(payload.get("tz") or ""),
     }

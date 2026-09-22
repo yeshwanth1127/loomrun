@@ -136,52 +136,6 @@ export function VendorsPage() {
           <MetricCard icon={Store} tone="purple" label="Total payable" value={fmtINR(totalPayable, { cents: true })} />
         </div>
 
-        {q.isLoading && <p className="muted">Loading vendors…</p>}
-
-        {visible.length > 0 ? (
-          <div className="table-wrap card">
-            <table>
-              <thead>
-                <tr>
-                  <th>Vendor name</th>
-                  <th>Type</th>
-                  <th>Category</th>
-                  <th>Payable</th>
-                  <th>Last transaction</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visible.map((v) => (
-                  <tr key={v.name}>
-                    <td>
-                      <div className="row" style={{ gap: '0.55rem' }}>
-                        <div className="user-avatar" style={{ width: 32, height: 32, fontSize: '0.7rem' }}>{initials(v.name)}</div>
-                        <div>
-                          <div style={{ fontWeight: 600 }}>{v.name}</div>
-                          <div className="muted small">{v.count} bill{v.count === 1 ? '' : 's'}</div>
-                        </div>
-                      </div>
-                    </td>
-                    <td><span className="badge badge-purple">{v.type}</span></td>
-                    <td className="muted">{v.category}</td>
-                    <td style={{ fontWeight: 700 }}>{fmtINR(v.payable, { cents: true })}</td>
-                    <td className="muted small">{timeAgo(v.lastAt)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          !q.isLoading && (
-            <EmptyState
-              icon={Store}
-              title="No vendors yet"
-              description="Vendors are created automatically when you record an expense with a vendor name."
-              action={<Link to={routes.money('expenses')} className="btn">Record an expense</Link>}
-            />
-          )
-        )}
-
         <InsightGrid>
           <InsightCard title="Top vendors by payable" action={{ label: 'View expenses', to: routes.money('expenses') }}>
             <BarList
@@ -238,6 +192,52 @@ export function VendorsPage() {
             )}
           </InsightCard>
         </InsightGrid>
+
+        {q.isLoading && <p className="muted">Loading vendors…</p>}
+
+        {visible.length > 0 ? (
+          <div className="table-wrap card">
+            <table>
+              <thead>
+                <tr>
+                  <th>Vendor name</th>
+                  <th>Type</th>
+                  <th>Category</th>
+                  <th>Payable</th>
+                  <th>Last transaction</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visible.map((v) => (
+                  <tr key={v.name}>
+                    <td>
+                      <div className="row" style={{ gap: '0.55rem' }}>
+                        <div className="user-avatar" style={{ width: 32, height: 32, fontSize: '0.7rem' }}>{initials(v.name)}</div>
+                        <div>
+                          <div style={{ fontWeight: 600 }}>{v.name}</div>
+                          <div className="muted small">{v.count} bill{v.count === 1 ? '' : 's'}</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td><span className="badge badge-purple">{v.type}</span></td>
+                    <td className="muted">{v.category}</td>
+                    <td style={{ fontWeight: 700 }}>{fmtINR(v.payable, { cents: true })}</td>
+                    <td className="muted small">{timeAgo(v.lastAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          !q.isLoading && (
+            <EmptyState
+              icon={Store}
+              title="No vendors yet"
+              description="Vendors are created automatically when you record an expense with a vendor name."
+              action={<Link to={routes.money('expenses')} className="btn">Record an expense</Link>}
+            />
+          )
+        )}
       </div>
     </div>
   )

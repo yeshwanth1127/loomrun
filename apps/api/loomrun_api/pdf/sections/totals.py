@@ -24,9 +24,15 @@ def render_totals(section: TotalsSection, state: CanvasState, ctx: dict[str, Any
         state.c.drawString(value_x, state.y, f"{currency}{float(q['subtotal']):,.2f}")
         state.move(14)
 
-    if section.show_tax:
-        state.c.drawString(label_x, state.y, f"{section.tax_label}:")
-        state.c.drawString(value_x, state.y, f"{currency}{float(q['tax']):,.2f}")
+    tax_enabled = bool(q.get("tax_enabled"))
+    tax_amount = float(q.get("tax") or 0)
+    show_tax_row = section.show_tax and (tax_enabled or tax_amount > 0)
+    if show_tax_row:
+        base_label = section.tax_label or "GST"
+        extra = q.get("tax_label_extra") or ""
+        label = f"{base_label}{extra}:"
+        state.c.drawString(label_x, state.y, label)
+        state.c.drawString(value_x, state.y, f"{currency}{tax_amount:,.2f}")
         state.move(14)
 
     if section.show_discount:

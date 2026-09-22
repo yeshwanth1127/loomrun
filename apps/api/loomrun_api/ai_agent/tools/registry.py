@@ -35,6 +35,9 @@ class ToolContext:
     # No safe default on purpose: callers must pass the caller's real membership
     # role so owner_only tools fail closed if a caller forgets to thread it through.
     role: str = ""
+    # IANA timezone for this chat turn (from the browser). Date-only filters
+    # use this calendar. Blank means Asia/Kolkata at parse time.
+    timezone: str = ""
 
 
 @dataclass
@@ -133,14 +136,13 @@ def openai_tools_for_mode(mode: str, *, role: str = "") -> list[dict[str, Any]]:
 
 
 # Always available — cheap CRM primitives the model needs for almost any turn.
+# Team/history tools are packs: putting them here made "give me the details"
+# look like a roster of people or past chats instead of search_leads.
 _CORE_TOOL_NAMES = frozenset(
     {
         "search_leads",
         "count_leads",
         "get_lead",
-        "list_follow_ups",
-        "list_team_members",
-        "search_past_chats",
     }
 )
 
@@ -166,6 +168,7 @@ _TOOL_PACKS: dict[str, frozenset[str]] = {
         {
             "create_lead",
             "update_lead",
+            "schedule_follow_up",
             "search_leads",
             "count_leads",
             "get_lead",
@@ -178,6 +181,7 @@ _TOOL_PACKS: dict[str, frozenset[str]] = {
             "get_quotation",
             "list_quotations_for_lead",
             "create_quotation",
+            "update_quotation",
             "send_quotation",
             "generate_invoice",
             "send_invoice",
@@ -201,6 +205,8 @@ _TOOL_PACKS: dict[str, frozenset[str]] = {
     ),
     "expenses": frozenset({"list_expenses", "create_expense", "delete_expense"}),
     "ceo": frozenset({"get_ceo_dashboard"}),
+    "team": frozenset({"list_team_members"}),
+    "history": frozenset({"search_past_chats"}),
 }
 
 _PACK_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
@@ -229,6 +235,8 @@ _PACK_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
         "quotations",
         (
             "quot",
+            "quotation",
+            "quote",
             "invoice",
             "catalog",
             "price",
@@ -256,6 +264,28 @@ _PACK_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
     ),
     ("expenses", ("expense", "expenses", "cost", "spend", "spent")),
     ("ceo", ("ceo", "dashboard", "win rate", "deals won", "deals lost", "hot leads")),
+    (
+        "team",
+        (
+            "team member",
+            "teammate",
+            "assignee",
+            "assigned to",
+            "who owns",
+            "reassign",
+            "list the team",
+        ),
+    ),
+    (
+        "history",
+        (
+            "past chat",
+            "previous chat",
+            "earlier conversation",
+            "last time we",
+            "what did i ask",
+        ),
+    ),
 ]
 
 

@@ -5,12 +5,23 @@ from pydantic import BaseModel, Field
 
 from loomrun_api.date_filter import apply_created_at
 from loomrun_api.deps import OrgContext, require_roles
+from loomrun_api.collections import (
+    normalize_payment_method,
+    serialize_expected_payment,
+    serialize_payment,
+)
 from loomrun_api.pnl import compute_pnl, serialize_expense
 from loomrun_api import org_events
 from loomrun_api.prisma_client import prisma
 from loomrun_api.production_activity import log_production_activity, stage_label
 from loomrun_api.services.production import next_order_number, new_tracking_token, serialize_order
-from prisma.enums import OrderStatus, PaymentStatus, ProductionActivityType, ProductionStage
+from prisma.enums import (
+    ExpectedPaymentStatus,
+    OrderStatus,
+    PaymentStatus,
+    ProductionActivityType,
+    ProductionStage,
+)
 
 router = APIRouter()
 
@@ -47,6 +58,42 @@ class PaymentCreate(BaseModel):
     amount_cents: int = Field(gt=0)
     status: PaymentStatus = PaymentStatus.PAID
     note: str | None = None
+    method: str | None = None
+    reference: str | None = Field(default=None, max_length=200)
+    label: str | None = Field(default=None, max_length=80)
+    recorded_at: datetime | None = None
+    expected_payment_id: str | None = None
+
+
+class PaymentUpdate(BaseModel):
+    amount_cents: int | None = Field(default=None, gt=0)
+    status: PaymentStatus | None = None
+    note: str | None = None
+    method: str | None = None
+    reference: str | None = Field(default=None, max_length=200)
+    label: str | None = Field(default=None, max_length=80)
+    recorded_at: datetime | None = None
+
+
+class ExpectedPaymentCreate(BaseModel):
+    amount_cents: int = Field(gt=0)
+    expected_at: datetime | None = None
+    note: str | None = Field(default=None, max_length=2000)
+    label: str | None = Field(default=None, max_length=80)
+
+
+class ExpectedPaymentUpdate(BaseModel):
+    amount_cents: int | None = Field(default=None, gt=0)
+    expected_at: datetime | None = None
+    clear_expected_at: bool = False
+    note: str | None = Field(default=None, max_length=2000)
+    label: str | None = Field(default=None, max_length=80)
+
+
+class ExpectedPaymentReschedule(BaseModel):
+    expected_at: datetime | None = None
+    clear_expected_at: bool = False
+    note: str | None = Field(default=None, max_length=2000)
 
 
 class NestedExpenseCreate(BaseModel):
@@ -105,23 +152,58 @@ def _is_owner(ctx: OrgContext) -> bool:
 
 def _serialize_order_for_role(r, ctx: OrgContext) -> dict:
     data = serialize_order(r)
-    if not _is_owner(ctx):
-        # Factory staff see ops fields only — no money.
-        data["payments"] = []
+    role = _role_name(ctx)
+    if role == "OWNER":
+        return data
+    if role == "PRODUCTION_MANAGER":
+        # Managers may view collection position, not company costs.
         data["expenses"] = []
+        data["budget_cents"] = None
+        pnl = data.get("pnl") or {}
         data["pnl"] = {
-            "revenue_cents": None,
-            "revenue_source": None,
+            **pnl,
             "budget_cents": None,
             "actual_cost_cents": 0,
-            "collected_cents": 0,
             "margin_cents": None,
             "budget_variance_cents": None,
-            "collection_gap_cents": None,
             "over_budget": False,
         }
-        data["budget_cents"] = None
+        return data
+    # Factory staff see ops fields only — no money.
+    data["payments"] = []
+    data["expected_payments"] = []
+    data["payment_timeline"] = []
+    data["expenses"] = []
+    data["pnl"] = {
+        "revenue_cents": None,
+        "revenue_source": None,
+        "budget_cents": None,
+        "actual_cost_cents": 0,
+        "collected_cents": 0,
+        "balance_due_cents": None,
+        "overpaid_cents": 0,
+        "collection_percentage": None,
+        "payment_status": "UNPAID",
+        "next_expected_payment": None,
+        "overdue_expected_count": 0,
+        "overdue_expected_cents": 0,
+        "active_expected_count": 0,
+        "margin_cents": None,
+        "budget_variance_cents": None,
+        "collection_gap_cents": None,
+        "over_budget": False,
+    }
+    data["budget_cents"] = None
     return data
+
+
+_ORDER_MONEY_INCLUDE = {
+    "lead": True,
+    "quotation": True,
+    "payments": True,
+    "expectedPayments": True,
+    "expenses": True,
+}
 
 
 _OPS_ROLES = require_roles("OWNER", "PRODUCTION", "PRODUCTION_MANAGER")
@@ -204,6 +286,7 @@ async def list_production(
             "lead": True,
             "quotation": True,
             "payments": True,
+            "expectedPayments": True,
             "expenses": {"include": {"createdBy": True}},
         },
     )
@@ -280,6 +363,7 @@ async def create_production(org_id: str, body: ProductionCreate, ctx: OrgContext
             "lead": True,
             "quotation": True,
             "payments": True,
+            "expectedPayments": True,
             "expenses": {"include": {"createdBy": True}},
         },
     )
@@ -436,6 +520,7 @@ async def update_production(
                 "lead": True,
                 "quotation": True,
                 "payments": True,
+                "expectedPayments": True,
                 "expenses": {"include": {"createdBy": True}},
             },
         )
@@ -450,6 +535,7 @@ async def update_production(
                 "lead": True,
                 "quotation": True,
                 "payments": True,
+                "expectedPayments": True,
                 "expenses": {"include": {"createdBy": True}},
             },
         )
@@ -465,6 +551,7 @@ async def update_production(
                 "lead": True,
                 "quotation": True,
                 "payments": True,
+                "expectedPayments": True,
                 "expenses": {"include": {"createdBy": True}},
             },
         )
@@ -622,6 +709,7 @@ async def regenerate_tracking_token(
             "lead": True,
             "quotation": True,
             "payments": True,
+            "expectedPayments": True,
             "expenses": {"include": {"createdBy": True}},
         },
     )
@@ -664,6 +752,7 @@ async def patch_tracking(
             "lead": True,
             "quotation": True,
             "payments": True,
+            "expectedPayments": True,
             "expenses": {"include": {"createdBy": True}},
         },
     )
@@ -709,7 +798,13 @@ async def get_production_pnl(
 ) -> dict:
     row = await prisma.productionorder.find_first(
         where={"id": order_id, "organizationId": ctx.organization_id},
-        include={"lead": True, "quotation": True, "payments": True, "expenses": True},
+        include={
+            "lead": True,
+            "quotation": True,
+            "payments": True,
+            "expectedPayments": True,
+            "expenses": True,
+        },
     )
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Production order not found")
@@ -721,6 +816,50 @@ async def get_production_pnl(
     }
 
 
+async def _apply_expected_fulfillment(
+    *,
+    organization_id: str,
+    order,
+    payment,
+    expected_row,
+    amount_cents: int,
+    user_id: str,
+) -> None:
+    remaining = max(int(expected_row.remainingCents) - amount_cents, 0)
+    if remaining == 0:
+        await prisma.expectedpayment.update(
+            where={"id": expected_row.id},
+            data={"remainingCents": 0, "status": ExpectedPaymentStatus.FULFILLED},
+        )
+        body = f"Expected payment fulfilled: ₹{amount_cents / 100:,.2f}"
+    else:
+        await prisma.expectedpayment.update(
+            where={"id": expected_row.id},
+            data={
+                "remainingCents": remaining,
+                "status": ExpectedPaymentStatus.PARTIALLY_FULFILLED,
+            },
+        )
+        body = (
+            f"Partial payment against expected: ₹{amount_cents / 100:,.2f}; "
+            f"₹{remaining / 100:,.2f} still promised"
+        )
+    await log_production_activity(
+        organization_id=organization_id,
+        production_order_id=order.id,
+        lead_id=order.leadId,
+        user_id=user_id,
+        activity_type=ProductionActivityType.EXPECTED_PAYMENT_FULFILLED,
+        body=body,
+        metadata={
+            "expected_payment_id": expected_row.id,
+            "payment_id": payment.id,
+            "amount_cents": amount_cents,
+            "remaining_cents": remaining,
+        },
+    )
+
+
 @router.post("/orgs/{org_id}/production/{order_id}/payments", status_code=status.HTTP_201_CREATED)
 async def add_payment(
     org_id: str, order_id: str, body: PaymentCreate, ctx: OrgContext = Depends(_OWNER_ONLY)
@@ -730,6 +869,30 @@ async def add_payment(
     )
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Production order not found")
+    try:
+        method = normalize_payment_method(body.method)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    expected_row = None
+    if body.expected_payment_id:
+        expected_row = await prisma.expectedpayment.find_first(
+            where={
+                "id": body.expected_payment_id,
+                "organizationId": ctx.organization_id,
+                "productionOrderId": order_id,
+            }
+        )
+        if not expected_row:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Expected payment not found")
+        exp_status = _enum_name(expected_row.status)
+        if exp_status in ("FULFILLED", "CANCELLED"):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail=f"Expected payment is already {exp_status.lower()}",
+            )
+
+    recorded_at = body.recorded_at or datetime.now(timezone.utc)
     p = await prisma.payment.create(
         data={
             "organizationId": ctx.organization_id,
@@ -737,9 +900,14 @@ async def add_payment(
             "amountCents": body.amount_cents,
             "status": body.status,
             "note": body.note,
+            "method": method,
+            "reference": (body.reference or "").strip() or None,
+            "label": (body.label or "").strip() or None,
+            "recordedAt": recorded_at,
+            "expectedPaymentId": expected_row.id if expected_row else None,
         }
     )
-    status_name = body.status.name if hasattr(body.status, "name") else str(body.status)
+    status_name = _enum_name(body.status)
     amount = body.amount_cents / 100
     await log_production_activity(
         organization_id=ctx.organization_id,
@@ -752,7 +920,205 @@ async def add_payment(
             "payment_id": p.id,
             "amount_cents": body.amount_cents,
             "status": status_name,
+            "method": method,
+            "reference": (body.reference or "").strip() or None,
+            "label": (body.label or "").strip() or None,
             "note": body.note,
+            "expected_payment_id": expected_row.id if expected_row else None,
+        },
+    )
+    if expected_row and status_name in ("PAID", "PARTIAL"):
+        await _apply_expected_fulfillment(
+            organization_id=ctx.organization_id,
+            order=row,
+            payment=p,
+            expected_row=expected_row,
+            amount_cents=body.amount_cents,
+            user_id=ctx.membership.userId,
+        )
+    org_events.record_changed(
+        organization_id=ctx.organization_id,
+        entity_type=org_events.qlix_docs.ENTITY_PRODUCTION,
+        entity_id=order_id,
+    )
+    return serialize_payment(p)
+
+
+@router.patch("/orgs/{org_id}/production/{order_id}/payments/{payment_id}")
+async def update_payment(
+    org_id: str,
+    order_id: str,
+    payment_id: str,
+    body: PaymentUpdate,
+    ctx: OrgContext = Depends(_OWNER_ONLY),
+) -> dict:
+    order = await prisma.productionorder.find_first(
+        where={"id": order_id, "organizationId": ctx.organization_id},
+    )
+    if not order:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Production order not found")
+    payment = await prisma.payment.find_first(
+        where={
+            "id": payment_id,
+            "organizationId": ctx.organization_id,
+            "productionOrderId": order_id,
+        }
+    )
+    if not payment:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Payment not found")
+
+    data: dict = {}
+    if body.amount_cents is not None:
+        data["amountCents"] = body.amount_cents
+    if body.status is not None:
+        data["status"] = body.status
+    if body.note is not None:
+        data["note"] = body.note
+    if body.method is not None:
+        try:
+            data["method"] = normalize_payment_method(body.method)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if body.reference is not None:
+        data["reference"] = body.reference.strip() or None
+    if body.label is not None:
+        data["label"] = body.label.strip() or None
+    if body.recorded_at is not None:
+        data["recordedAt"] = body.recorded_at
+    if not data:
+        return serialize_payment(payment)
+
+    updated = await prisma.payment.update(where={"id": payment_id}, data=data)
+    amount = updated.amountCents / 100
+    await log_production_activity(
+        organization_id=ctx.organization_id,
+        production_order_id=order_id,
+        lead_id=order.leadId,
+        user_id=ctx.membership.userId,
+        activity_type=ProductionActivityType.PAYMENT_UPDATED,
+        body=f"Payment of ₹{amount:,.2f} updated",
+        metadata={"payment_id": payment_id, "changes": {k: str(v) for k, v in data.items()}},
+    )
+    org_events.record_changed(
+        organization_id=ctx.organization_id,
+        entity_type=org_events.qlix_docs.ENTITY_PRODUCTION,
+        entity_id=order_id,
+    )
+    return serialize_payment(updated)
+
+
+@router.delete(
+    "/orgs/{org_id}/production/{order_id}/payments/{payment_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_payment(
+    org_id: str,
+    order_id: str,
+    payment_id: str,
+    ctx: OrgContext = Depends(_OWNER_ONLY),
+) -> None:
+    order = await prisma.productionorder.find_first(
+        where={"id": order_id, "organizationId": ctx.organization_id},
+    )
+    if not order:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Production order not found")
+    payment = await prisma.payment.find_first(
+        where={
+            "id": payment_id,
+            "organizationId": ctx.organization_id,
+            "productionOrderId": order_id,
+        }
+    )
+    if not payment:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Payment not found")
+
+    if payment.expectedPaymentId:
+        expected = await prisma.expectedpayment.find_first(
+            where={"id": payment.expectedPaymentId, "productionOrderId": order_id}
+        )
+        if expected and _enum_name(expected.status) != "CANCELLED":
+            status_name = _enum_name(payment.status)
+            restore = payment.amountCents if status_name in ("PAID", "PARTIAL") else 0
+            if restore:
+                new_remaining = min(expected.amountCents, expected.remainingCents + restore)
+                new_status = (
+                    ExpectedPaymentStatus.FULFILLED
+                    if new_remaining <= 0
+                    else (
+                        ExpectedPaymentStatus.OPEN
+                        if new_remaining >= expected.amountCents
+                        else ExpectedPaymentStatus.PARTIALLY_FULFILLED
+                    )
+                )
+                await prisma.expectedpayment.update(
+                    where={"id": expected.id},
+                    data={"remainingCents": new_remaining, "status": new_status},
+                )
+
+    amount = payment.amountCents / 100
+    await prisma.payment.delete(where={"id": payment_id})
+    await log_production_activity(
+        organization_id=ctx.organization_id,
+        production_order_id=order_id,
+        lead_id=order.leadId,
+        user_id=ctx.membership.userId,
+        activity_type=ProductionActivityType.PAYMENT_DELETED,
+        body=f"Payment of ₹{amount:,.2f} deleted",
+        metadata={"payment_id": payment_id, "amount_cents": payment.amountCents},
+    )
+    org_events.record_changed(
+        organization_id=ctx.organization_id,
+        entity_type=org_events.qlix_docs.ENTITY_PRODUCTION,
+        entity_id=order_id,
+    )
+
+
+@router.post(
+    "/orgs/{org_id}/production/{order_id}/expected-payments",
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_expected_payment(
+    org_id: str,
+    order_id: str,
+    body: ExpectedPaymentCreate,
+    ctx: OrgContext = Depends(_OWNER_ONLY),
+) -> dict:
+    row = await prisma.productionorder.find_first(
+        where={"id": order_id, "organizationId": ctx.organization_id},
+    )
+    if not row:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Production order not found")
+    ep = await prisma.expectedpayment.create(
+        data={
+            "organizationId": ctx.organization_id,
+            "productionOrderId": order_id,
+            "amountCents": body.amount_cents,
+            "remainingCents": body.amount_cents,
+            "expectedAt": body.expected_at,
+            "note": body.note,
+            "label": (body.label or "").strip() or None,
+            "status": ExpectedPaymentStatus.OPEN,
+        }
+    )
+    amount = body.amount_cents / 100
+    when = (
+        body.expected_at.date().isoformat()
+        if body.expected_at is not None
+        else "unscheduled"
+    )
+    await log_production_activity(
+        organization_id=ctx.organization_id,
+        production_order_id=order_id,
+        lead_id=row.leadId,
+        user_id=ctx.membership.userId,
+        activity_type=ProductionActivityType.EXPECTED_PAYMENT_ADDED,
+        body=f"Expected payment added: ₹{amount:,.2f} for {when}",
+        metadata={
+            "expected_payment_id": ep.id,
+            "amount_cents": body.amount_cents,
+            "expected_at": body.expected_at.isoformat() if body.expected_at else None,
+            "note": body.note,
+            "label": (body.label or "").strip() or None,
         },
     )
     org_events.record_changed(
@@ -760,11 +1126,204 @@ async def add_payment(
         entity_type=org_events.qlix_docs.ENTITY_PRODUCTION,
         entity_id=order_id,
     )
-    return {
-        "id": p.id,
-        "amount_cents": p.amountCents,
-        "status": p.status.name if hasattr(p.status, "name") else str(p.status),
-    }
+    return serialize_expected_payment(ep)
+
+
+@router.patch("/orgs/{org_id}/production/{order_id}/expected-payments/{expected_id}")
+async def update_expected_payment(
+    org_id: str,
+    order_id: str,
+    expected_id: str,
+    body: ExpectedPaymentUpdate,
+    ctx: OrgContext = Depends(_OWNER_ONLY),
+) -> dict:
+    order = await prisma.productionorder.find_first(
+        where={"id": order_id, "organizationId": ctx.organization_id},
+    )
+    if not order:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Production order not found")
+    ep = await prisma.expectedpayment.find_first(
+        where={
+            "id": expected_id,
+            "organizationId": ctx.organization_id,
+            "productionOrderId": order_id,
+        }
+    )
+    if not ep:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Expected payment not found")
+    if _enum_name(ep.status) in ("FULFILLED", "CANCELLED"):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot edit a {_enum_name(ep.status).lower()} expected payment",
+        )
+
+    data: dict = {}
+    if body.amount_cents is not None:
+        fulfilled = ep.amountCents - ep.remainingCents
+        if body.amount_cents < fulfilled:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail="Amount cannot be less than already fulfilled amount",
+            )
+        data["amountCents"] = body.amount_cents
+        data["remainingCents"] = body.amount_cents - fulfilled
+        if data["remainingCents"] == 0:
+            data["status"] = ExpectedPaymentStatus.FULFILLED
+        elif fulfilled > 0:
+            data["status"] = ExpectedPaymentStatus.PARTIALLY_FULFILLED
+        else:
+            data["status"] = ExpectedPaymentStatus.OPEN
+    if body.clear_expected_at:
+        data["expectedAt"] = None
+    elif body.expected_at is not None:
+        data["expectedAt"] = body.expected_at
+    if body.note is not None:
+        data["note"] = body.note
+    if body.label is not None:
+        data["label"] = body.label.strip() or None
+    if not data:
+        return serialize_expected_payment(ep)
+
+    updated = await prisma.expectedpayment.update(where={"id": expected_id}, data=data)
+    amount = updated.amountCents / 100
+    await log_production_activity(
+        organization_id=ctx.organization_id,
+        production_order_id=order_id,
+        lead_id=order.leadId,
+        user_id=ctx.membership.userId,
+        activity_type=ProductionActivityType.EXPECTED_PAYMENT_ADDED,
+        body=f"Expected payment updated: ₹{amount:,.2f}",
+        metadata={"expected_payment_id": expected_id, "changes": list(data.keys())},
+    )
+    org_events.record_changed(
+        organization_id=ctx.organization_id,
+        entity_type=org_events.qlix_docs.ENTITY_PRODUCTION,
+        entity_id=order_id,
+    )
+    return serialize_expected_payment(updated)
+
+
+@router.post("/orgs/{org_id}/production/{order_id}/expected-payments/{expected_id}/reschedule")
+async def reschedule_expected_payment(
+    org_id: str,
+    order_id: str,
+    expected_id: str,
+    body: ExpectedPaymentReschedule,
+    ctx: OrgContext = Depends(_OWNER_ONLY),
+) -> dict:
+    order = await prisma.productionorder.find_first(
+        where={"id": order_id, "organizationId": ctx.organization_id},
+    )
+    if not order:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Production order not found")
+    ep = await prisma.expectedpayment.find_first(
+        where={
+            "id": expected_id,
+            "organizationId": ctx.organization_id,
+            "productionOrderId": order_id,
+        }
+    )
+    if not ep:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Expected payment not found")
+    if _enum_name(ep.status) in ("FULFILLED", "CANCELLED"):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot reschedule a {_enum_name(ep.status).lower()} expected payment",
+        )
+
+    old_at = ep.expectedAt
+    if body.clear_expected_at:
+        new_at = None
+    elif body.expected_at is not None:
+        new_at = body.expected_at
+    else:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Provide expected_at or clear_expected_at",
+        )
+
+    data: dict = {"expectedAt": new_at}
+    if body.note is not None:
+        data["note"] = body.note
+    updated = await prisma.expectedpayment.update(where={"id": expected_id}, data=data)
+
+    def _fmt(dt):
+        if dt is None:
+            return "unscheduled"
+        return dt.date().isoformat() if hasattr(dt, "date") else str(dt)
+
+    await log_production_activity(
+        organization_id=ctx.organization_id,
+        production_order_id=order_id,
+        lead_id=order.leadId,
+        user_id=ctx.membership.userId,
+        activity_type=ProductionActivityType.EXPECTED_PAYMENT_RESCHEDULED,
+        body=f"Expected payment rescheduled from {_fmt(old_at)} → {_fmt(new_at)}",
+        metadata={
+            "expected_payment_id": expected_id,
+            "from": old_at.isoformat() if old_at else None,
+            "to": new_at.isoformat() if new_at else None,
+        },
+    )
+    org_events.record_changed(
+        organization_id=ctx.organization_id,
+        entity_type=org_events.qlix_docs.ENTITY_PRODUCTION,
+        entity_id=order_id,
+    )
+    return serialize_expected_payment(updated)
+
+
+@router.post("/orgs/{org_id}/production/{order_id}/expected-payments/{expected_id}/cancel")
+async def cancel_expected_payment(
+    org_id: str,
+    order_id: str,
+    expected_id: str,
+    ctx: OrgContext = Depends(_OWNER_ONLY),
+) -> dict:
+    order = await prisma.productionorder.find_first(
+        where={"id": order_id, "organizationId": ctx.organization_id},
+    )
+    if not order:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Production order not found")
+    ep = await prisma.expectedpayment.find_first(
+        where={
+            "id": expected_id,
+            "organizationId": ctx.organization_id,
+            "productionOrderId": order_id,
+        }
+    )
+    if not ep:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Expected payment not found")
+    if _enum_name(ep.status) == "CANCELLED":
+        return serialize_expected_payment(ep)
+    if _enum_name(ep.status) == "FULFILLED":
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, detail="Cannot cancel a fulfilled expected payment"
+        )
+
+    updated = await prisma.expectedpayment.update(
+        where={"id": expected_id},
+        data={
+            "status": ExpectedPaymentStatus.CANCELLED,
+            "cancelledAt": datetime.now(timezone.utc),
+        },
+    )
+    amount = ep.remainingCents / 100
+    await log_production_activity(
+        organization_id=ctx.organization_id,
+        production_order_id=order_id,
+        lead_id=order.leadId,
+        user_id=ctx.membership.userId,
+        activity_type=ProductionActivityType.EXPECTED_PAYMENT_CANCELLED,
+        body=f"Expected payment cancelled: ₹{amount:,.2f}",
+        metadata={"expected_payment_id": expected_id, "amount_cents": ep.remainingCents},
+    )
+    org_events.record_changed(
+        organization_id=ctx.organization_id,
+        entity_type=org_events.qlix_docs.ENTITY_PRODUCTION,
+        entity_id=order_id,
+    )
+    return serialize_expected_payment(updated)
 
 
 @router.post("/orgs/{org_id}/production/{order_id}/expenses", status_code=status.HTTP_201_CREATED)

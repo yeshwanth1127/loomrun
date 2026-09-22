@@ -92,11 +92,13 @@ async def _apply_lead_updates_from_call(
         update_data["nextFollowUpAt"] = follow_up
         # New schedule → allow reminders again
         update_data["followUpRemindedAt"] = None
+        update_data["followUpRemindedOffsets"] = []
         update_data["followUpWaRemindedAt"] = None
     elif not is_follow_up_outcome(outcome_name):
         # Non–follow-up outcome clears the scheduled follow-up
         update_data["nextFollowUpAt"] = None
         update_data["followUpRemindedAt"] = None
+        update_data["followUpRemindedOffsets"] = []
         update_data["followUpWaRemindedAt"] = None
 
     if body.product_interest is not None or body.phone is not None or body.email is not None or body.city is not None:

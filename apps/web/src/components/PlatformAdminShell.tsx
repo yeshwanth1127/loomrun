@@ -13,7 +13,7 @@ import { NoolrunWordmark } from './react-bits/NoolrunWordmark'
 import { SmoothScroll } from './SmoothScroll'
 
 const NAV = [
-  { to: '/platform', end: true, icon: BarChart2, label: 'Dashboard' },
+  { to: '/platform', end: true, icon: BarChart2, label: 'Overview' },
 ] as const
 
 export function PlatformAdminShell() {
@@ -24,7 +24,7 @@ export function PlatformAdminShell() {
   if (loading) {
     return (
       <div className="app-loading">
-        <img src="/noolrun-mark.png?v=3" alt="" className="app-loading-mark" />
+        <img src="/noolrun-mark.png?v=5" alt="" className="app-loading-mark" />
         <p className="muted">Loading platform…</p>
       </div>
     )
@@ -100,7 +100,16 @@ export function PlatformAdminShell() {
             transition={{ duration: 0.32, ease: [0.22, 1, 0.36, 1] }}
             style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
           >
-            <SmoothScroll style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+            <SmoothScroll
+              enabled={false}
+              style={{
+                flex: 1,
+                minHeight: 0,
+                overflow: 'auto',
+                display: 'flex',
+                flexDirection: 'column',
+              }}
+            >
               <Outlet />
             </SmoothScroll>
           </motion.div>

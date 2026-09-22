@@ -29,6 +29,8 @@ export function OrderWorkspacePage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const membership = membershipForOrg(me, orgId)
   const isOwner = isOwnerRole(membership) || !!me?.is_super_admin
+  const isProductionManager = membership?.role === 'PRODUCTION_MANAGER'
+  const canViewMoney = isOwner || isProductionManager
   const canEditDesign =
     isOwner || membership?.role === 'PRODUCTION' || membership?.role === 'PRODUCTION_MANAGER'
 
@@ -41,8 +43,8 @@ export function OrderWorkspacePage() {
 
   const tabParam = searchParams.get('tab')
   const requested = TAB_KEYS.includes(tabParam as TabKey) ? (tabParam as TabKey) : 'overview'
-  // Money is Owner-only; anyone deep-linking into it lands on Overview.
-  const tab: TabKey = requested === 'money' && !isOwner ? 'overview' : requested
+  // Money: Owner (full) + Production Manager (collections view). Others land on Overview.
+  const tab: TabKey = requested === 'money' && !canViewMoney ? 'overview' : requested
 
   function setTab(next: TabKey) {
     const params = new URLSearchParams(searchParams)
@@ -115,7 +117,7 @@ export function OrderWorkspacePage() {
     { key: 'design', label: 'Design', show: true },
     { key: 'production', label: 'Production', show: true },
     { key: 'shipping', label: 'Shipping', show: true },
-    { key: 'money', label: 'Money', show: isOwner },
+    { key: 'money', label: 'Money', show: canViewMoney },
   ]
 
   return (
@@ -255,6 +257,7 @@ export function OrderWorkspacePage() {
             order={order}
             orgId={orgId}
             isOwner={isOwner}
+            canViewMoney={canViewMoney}
             mutations={mutations}
             onOpenTab={setTab}
           />
@@ -281,11 +284,12 @@ export function OrderWorkspacePage() {
             mutations={mutations}
           />
         )}
-        {tab === 'money' && isOwner && (
+        {tab === 'money' && canViewMoney && (
           <OrderMoneyTab
-            key={`${order.id}:${order.budget_cents ?? ''}`}
+            key={`${order.id}:${order.budget_cents ?? ''}:${order.pnl?.collected_cents ?? 0}`}
             order={order}
             mutations={mutations}
+            canWrite={isOwner}
           />
         )}
       </div>

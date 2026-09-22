@@ -48,9 +48,20 @@ export function isHomePath(pathname: string): boolean {
   return pathMatches(pathname, HOME_PATHS)
 }
 
+export function isPipelinesPath(pathname: string): boolean {
+  return (
+    pathname === '/app/sales/organize' ||
+    pathname.startsWith('/app/sales/organize/') ||
+    pathname === '/app/pipelines' ||
+    pathname.startsWith('/app/pipelines/')
+  )
+}
+
 export function isSalesPath(pathname: string): boolean {
   // Integrations live under Settings even though the legacy URL sits under /app/leads.
   if (pathname.startsWith('/app/leads/connections')) return false
+  // Organize/pipelines has its own sidebar item.
+  if (isPipelinesPath(pathname)) return false
   return pathMatches(pathname, SALES_PATHS) || pathMatches(pathname, SALES_LEGACY_PATHS)
 }
 
