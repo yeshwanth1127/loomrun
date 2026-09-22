@@ -333,7 +333,7 @@ export function SalesPage() {
                   </div>
                 )}
                 <FilterToolbar
-                  defaultOpen={filtersActive}
+                  collapsible={false}
                   trailing={
                     filtersActive ? (
                       <button

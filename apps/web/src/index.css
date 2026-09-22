@@ -2928,7 +2928,12 @@ textarea.input:focus {
   }
 
   .sales-toolbar-right {
-    margin-left: 0;
+    flex-wrap: wrap;
+  }
+
+  .sales-toolbar-right > .filter-toolbar-inline {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
   }
 
   .money-tabs {
@@ -5108,9 +5113,9 @@ textarea.input:focus {
    ────────────────────────────────────────────────────────────────── */
 .sales-toolbar {
   display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.65rem;
   width: 100%;
 }
 
@@ -5165,8 +5170,68 @@ textarea.input:focus {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  margin-left: auto;
-  flex-wrap: wrap;
+  width: 100%;
+  margin-left: 0;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.sales-toolbar-right > .select,
+.sales-toolbar-right > .view-toggle {
+  flex: 0 0 auto;
+}
+
+.sales-toolbar-right > .select {
+  height: 2.35rem;
+  min-height: 2.35rem;
+  box-sizing: border-box;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.sales-toolbar-right > .view-toggle {
+  height: 2.35rem;
+  box-sizing: border-box;
+  align-items: stretch;
+}
+
+.sales-toolbar-right > .view-toggle .view-toggle-btn {
+  height: 100%;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.sales-toolbar-right > .filter-toolbar-inline {
+  flex: 1 1 auto;
+  flex-wrap: nowrap;
+  min-width: 0;
+  gap: 0.5rem;
+}
+
+.sales-toolbar-right > .filter-toolbar-inline > .input[type='search'],
+.sales-toolbar-right > .filter-toolbar-inline > .input:not([type]),
+.sales-toolbar-right > .filter-toolbar-inline > .input[type='text'] {
+  flex: 1 1 10rem;
+  min-width: 8rem;
+  max-width: none;
+}
+
+.sales-toolbar-right > .filter-toolbar-inline > .select {
+  flex: 0 1 9rem;
+  min-width: 7.5rem;
+  width: auto;
+}
+
+.sales-toolbar-right > .filter-toolbar-inline > .input[type='number'] {
+  flex: 0 0 5.75rem;
+  width: 5.75rem;
+  min-width: 5.75rem;
+}
+
+.sales-toolbar-right > .filter-toolbar-inline > .input,
+.sales-toolbar-right > .filter-toolbar-inline > .select {
+  padding-top: 0;
+  padding-bottom: 0;
 }
 
 .sales-subpage {
