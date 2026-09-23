@@ -42,25 +42,40 @@ class _NewLeadScreenState extends State<NewLeadScreen> {
     super.dispose();
   }
 
-  void _save() {
+  Future<void> _save() async {
     FocusScope.of(context).unfocus();
     if (!_formKey.currentState!.validate()) return;
 
-    final lead = Lead(
-      id: DateTime.now().microsecondsSinceEpoch.toString(),
+    final created = await leadsController.createLead(
       name: _name.text.trim(),
       company: _company.text.trim(),
       phone: _phone.text.trim(),
       location: _location.text.trim(),
       source: _source,
-      score: int.tryParse(_score.text.trim())?.clamp(0, 100) ?? 0,
-      status: _status.text.trim(),
       stage: _stage,
       value: double.tryParse(_value.text.trim()) ?? 0,
-      lastActivity: DateTime.now(),
+      notes: _status.text.trim().isEmpty ? null : _status.text.trim(),
     );
-    leadsController.add(lead);
-    Navigator.of(context).pop(lead);
+    if (!mounted) return;
+    if (created == null) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            backgroundColor: AppColors.inverseSurface,
+            behavior: SnackBarBehavior.floating,
+            content: Text(
+              leadsController.error ?? 'Could not create lead.',
+              style: const TextStyle(
+                color: AppColors.inverseOnSurface,
+                fontSize: 13,
+              ),
+            ),
+          ),
+        );
+      return;
+    }
+    Navigator.of(context).pop(created);
   }
 
   @override

@@ -25,6 +25,12 @@ class _LeadsScreenState extends State<LeadsScreen> {
   void initState() {
     super.initState();
     leadsController.addListener(_onChanged);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (!leadsController.loadedOnce) {
+        leadsController.refresh();
+      }
+    });
   }
 
   @override

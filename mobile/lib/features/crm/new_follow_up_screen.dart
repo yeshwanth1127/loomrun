@@ -55,31 +55,46 @@ class _NewFollowUpScreenState extends State<NewFollowUpScreen> {
     return '${_date.day}/${_date.month}/${_date.year}';
   }
 
-  void _save() {
+  Future<void> _save() async {
     FocusScope.of(context).unfocus();
     if (!_formKey.currentState!.validate()) return;
 
     final lead = leadsController.all.firstWhere((l) => l.id == _leadId);
     final ref = _relatedRef.text.trim();
+    final when = DateTime(
+      _date.year,
+      _date.month,
+      _date.day,
+      _time.hour,
+      _time.minute,
+    );
 
-    final followUp = FollowUp(
-      id: DateTime.now().microsecondsSinceEpoch.toString(),
-      leadId: lead.id,
-      customerName: lead.name,
-      company: lead.company,
-      phone: lead.phone,
-      dateTime: DateTime(
-        _date.year,
-        _date.month,
-        _date.day,
-        _time.hour,
-        _time.minute,
-      ),
+    final followUp = await followUpsController.schedule(
+      lead: lead,
+      when: when,
       action: _action.text.trim(),
       relatedRef: ref.isEmpty ? null : ref,
       highPriority: _highPriority,
     );
-    followUpsController.add(followUp);
+    if (!mounted) return;
+    if (followUp == null) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            backgroundColor: AppColors.inverseSurface,
+            behavior: SnackBarBehavior.floating,
+            content: Text(
+              followUpsController.error ?? 'Could not schedule follow-up.',
+              style: const TextStyle(
+                color: AppColors.inverseOnSurface,
+                fontSize: 13,
+              ),
+            ),
+          ),
+        );
+      return;
+    }
     Navigator.of(context).pop(followUp);
   }
 

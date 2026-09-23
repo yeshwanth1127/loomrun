@@ -239,6 +239,39 @@ class _HomePageState extends State<HomePage> {
   /// Defaults to today; updated via the date picker.
   DateTime _asOfDate = DateTime.now();
 
+  @override
+  void initState() {
+    super.initState();
+    leadsController.addListener(_onCrmChanged);
+    followUpsController.addListener(_onCrmChanged);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _refreshCrm();
+    });
+  }
+
+  @override
+  void dispose() {
+    leadsController.removeListener(_onCrmChanged);
+    followUpsController.removeListener(_onCrmChanged);
+    super.dispose();
+  }
+
+  void _onCrmChanged() {
+    if (!mounted) return;
+    // Controllers may notify while another route is still building (e.g.
+    // IndexedStack children). Defer so we never markNeedsBuild mid-build.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  Future<void> _refreshCrm() async {
+    await Future.wait([
+      leadsController.refresh(silent: leadsController.loadedOnce),
+      followUpsController.refresh(silent: followUpsController.loadedOnce),
+    ]);
+  }
+
   String _greeting() {
     final hour = DateTime.now().hour;
     if (hour < 12) return 'Good morning';
@@ -296,6 +329,8 @@ class _HomePageState extends State<HomePage> {
       children: [
         const _LoomHeader(),
         Expanded(
+          child: RefreshIndicator(
+            onRefresh: _refreshCrm,
           child: ListView(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
             children: [
@@ -473,6 +508,7 @@ class _HomePageState extends State<HomePage> {
                 ],
               ),
             ],
+          ),
           ),
         ),
       ],

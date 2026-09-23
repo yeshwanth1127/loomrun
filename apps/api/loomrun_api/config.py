@@ -1,15 +1,45 @@
 from pathlib import Path
 
+from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+def _find_repo_root(start: Path) -> Path:
+    """Walk up from this file until the repository-root `.env` is found.
+
+    pydantic-settings silently skips a missing ``env_file`` (returns ``{}``),
+    which surfaces as ``database_url`` Field required with ``input_value={}``.
+    A hard-coded ``parents[N]`` depth breaks if the package layout or install
+    path changes; locating `.env` by presence is the reliable contract.
+    """
+    for directory in (start, *start.parents):
+        if (directory / ".env").is_file():
+            return directory
+    # Fallback: apps/api/loomrun_api → repo root (legacy layout).
+    return start.parents[3]
+
+
+_REPO_ROOT = _find_repo_root(Path(__file__).resolve().parent)
+_ENV_FILE = _REPO_ROOT / ".env"
+
+# Load into os.environ first so EnvSettingsSource still sees DATABASE_URL even
+# if DotEnvSettingsSource skips the file for any reason.
+if _ENV_FILE.is_file():
+    load_dotenv(_ENV_FILE, override=False)
+else:
+    raise FileNotFoundError(
+        f"Repository root .env not found (expected {_ENV_FILE}). "
+        "Copy .env.example to the repo root and set DATABASE_URL."
+    )
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=str(_REPO_ROOT / ".env"),
+        env_file=_ENV_FILE,
         env_file_encoding="utf-8",
         extra="ignore",
+        # DATABASE_URL in .env must map to field database_url
+        case_sensitive=False,
     )
 
     # Set DATABASE_URL in the repository root `.env` (or the process environment).

@@ -19,9 +19,11 @@ class AuthScreen extends StatefulWidget {
 class _AuthScreenState extends State<AuthScreen> {
   final _formKey = GlobalKey<FormState>();
   final _fullName = TextEditingController();
+  final _organization = TextEditingController();
   final _email = TextEditingController();
   final _password = TextEditingController();
   final _confirmPassword = TextEditingController();
+  bool _submitting = false;
 
   _AuthMode _mode = _AuthMode.logIn;
   bool _obscurePassword = true;
@@ -32,6 +34,7 @@ class _AuthScreenState extends State<AuthScreen> {
   @override
   void dispose() {
     _fullName.dispose();
+    _organization.dispose();
     _email.dispose();
     _password.dispose();
     _confirmPassword.dispose();
@@ -48,20 +51,27 @@ class _AuthScreenState extends State<AuthScreen> {
   Future<void> _submit() async {
     FocusScope.of(context).unfocus();
     if (!_formKey.currentState!.validate()) return;
+    if (_submitting) return;
 
+    setState(() => _submitting = true);
     final String? error;
-    if (_isSignIn) {
-      error = await authController.signIn(
-        fullName: _fullName.text,
-        email: _email.text,
-        password: _password.text,
-        confirmPassword: _confirmPassword.text,
-      );
-    } else {
-      error = await authController.logIn(
-        email: _email.text,
-        password: _password.text,
-      );
+    try {
+      if (_isSignIn) {
+        error = await authController.signIn(
+          fullName: _fullName.text,
+          email: _email.text,
+          password: _password.text,
+          confirmPassword: _confirmPassword.text,
+          organizationName: _organization.text,
+        );
+      } else {
+        error = await authController.logIn(
+          email: _email.text,
+          password: _password.text,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _submitting = false);
     }
 
     if (!mounted) return;
@@ -105,8 +115,8 @@ class _AuthScreenState extends State<AuthScreen> {
         backgroundColor: AppColors.surface,
         title: const Text('Forgot Password'),
         content: const Text(
-          'Password recovery will be available once accounts are connected '
-          'to the backend. For now, sign in again to create a new account.',
+          'Password recovery is not available in the app yet. '
+          'Reset your password from the web app, or contact your admin.',
           style: TextStyle(fontSize: 14, height: 1.5),
         ),
         actions: [
@@ -163,6 +173,16 @@ class _AuthScreenState extends State<AuthScreen> {
                             : null,
                       ),
                       const SizedBox(height: 20),
+                      _field(
+                        controller: _organization,
+                        label: 'Organization',
+                        textInputAction: TextInputAction.next,
+                        textCapitalization: TextCapitalization.words,
+                        validator: (v) => (v == null || v.trim().isEmpty)
+                            ? 'Enter your organization name.'
+                            : null,
+                      ),
+                      const SizedBox(height: 20),
                     ],
 
                     _field(
@@ -196,8 +216,8 @@ class _AuthScreenState extends State<AuthScreen> {
                       validator: (v) {
                         final value = v ?? '';
                         if (value.isEmpty) return 'Enter your password.';
-                        if (_isSignIn && value.length < 6) {
-                          return 'Password must be at least 6 characters.';
+                        if (_isSignIn && value.length < 8) {
+                          return 'Password must be at least 8 characters.';
                         }
                         return null;
                       },
@@ -259,16 +279,25 @@ class _AuthScreenState extends State<AuthScreen> {
                             borderRadius: BorderRadius.circular(8),
                           ),
                         ),
-                        onPressed: _submit,
-                        child: Text(
-                          _isSignIn ? 'SIGN IN' : 'LOG IN',
-                          style: const TextStyle(
-                            fontFamily: _mono,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            letterSpacing: 1,
-                          ),
-                        ),
+                        onPressed: _submitting ? null : _submit,
+                        child: _submitting
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : Text(
+                                _isSignIn ? 'SIGN IN' : 'LOG IN',
+                                style: const TextStyle(
+                                  fontFamily: _mono,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: 1,
+                                ),
+                              ),
                       ),
                     ),
 

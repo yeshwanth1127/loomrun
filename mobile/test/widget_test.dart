@@ -29,11 +29,13 @@ void main() {
     await tester.enterText(
         find.widgetWithText(TextFormField, 'Full Name'), 'Asha Menon');
     await tester.enterText(
+        find.widgetWithText(TextFormField, 'Organization'), 'Asha Org');
+    await tester.enterText(
         find.widgetWithText(TextFormField, 'Email ID'), 'asha@example.com');
     await tester.enterText(
-        find.widgetWithText(TextFormField, 'Password'), 'secret1');
+        find.widgetWithText(TextFormField, 'Password'), 'secret12');
     await tester.enterText(
-        find.widgetWithText(TextFormField, 'Confirm Password'), 'secret1');
+        find.widgetWithText(TextFormField, 'Confirm Password'), 'secret12');
     await tester.tap(find.widgetWithText(FilledButton, 'SIGN IN'));
     await tester.pumpAndSettle();
   }
@@ -90,7 +92,7 @@ void main() {
     await logIn(tester, 'nobody@example.com', 'whatever');
     expect(find.text('No account found. Please sign in.'), findsOneWidget);
 
-    await logIn(tester, 'asha@example.com', 'secret1');
+    await logIn(tester, 'asha@example.com', 'secret12');
     expect(find.text('Follow-ups due'), findsOneWidget);
   });
 
@@ -107,7 +109,7 @@ void main() {
     expect(find.text('Log in'), findsOneWidget);
     expect(authController.hasAccount('asha@example.com'), isTrue);
 
-    await logIn(tester, 'asha@example.com', 'secret1');
+    await logIn(tester, 'asha@example.com', 'secret12');
     expect(find.text('Follow-ups due'), findsOneWidget);
   });
 }

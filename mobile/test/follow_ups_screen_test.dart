@@ -2,9 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:loom_run/features/crm/follow_ups_controller.dart';
 import 'package:loom_run/features/crm/follow_ups_screen.dart';
+import 'package:loom_run/features/crm/leads_controller.dart';
+
+import 'crm_test_seed.dart';
 
 void main() {
-  setUp(() => followUpsController.query = '');
+  setUp(() {
+    followUpsController.query = '';
+    followUpsController.debugReplaceAll(testSeedFollowUps());
+    leadsController.debugReplaceAll(testSeedLeads());
+  });
 
   // Give tests a tall phone-sized viewport so list content is on screen.
   Future<void> pump(WidgetTester tester) async {

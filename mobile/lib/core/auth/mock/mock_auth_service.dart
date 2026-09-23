@@ -8,6 +8,8 @@ import '../auth_service.dart';
 import 'account_store.dart';
 import 'account_store_factory.dart';
 
+// OrgMembership is defined in app_user.dart and re-exported via auth.dart.
+
 /// Frontend-only authentication backed by a local [AccountStore].
 ///
 /// - Registered accounts are persisted (survive quit/restart).
@@ -44,11 +46,38 @@ class MockAuthService extends ChangeNotifier implements AuthService {
   }
 
   @override
+  String? get activeOrgId =>
+      isAuthenticated ? 'mock-org' : null;
+
+  @override
+  String? get activeOrgName =>
+      isAuthenticated ? 'Mock Organization' : null;
+
+  @override
+  List<OrgMembership> get organizations => isAuthenticated
+      ? const [
+          OrgMembership(
+            membershipId: 'mock-membership',
+            role: 'OWNER',
+            orgId: 'mock-org',
+            orgName: 'Mock Organization',
+            orgSlug: 'mock-org',
+            plan: 'free',
+            suspended: false,
+          ),
+        ]
+      : const [];
+
+  @override
+  Future<void> setActiveOrg(String orgId) async {}
+
+  @override
   Future<String?> signIn({
     required String fullName,
     required String email,
     required String password,
     required String confirmPassword,
+    String? organizationName,
   }) async {
     final name = fullName.trim();
     final mail = _normalizeEmail(email);

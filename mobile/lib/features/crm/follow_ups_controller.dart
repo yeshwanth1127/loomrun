@@ -1,108 +1,21 @@
 import 'package:flutter/foundation.dart';
 
+import '../../core/api/api_exception.dart';
+import 'follow_ups_repository.dart';
 import 'models/follow_up.dart';
+import 'models/lead.dart';
 
-/// Frontend-only in-memory follow-up store.
+/// Follow-up store backed by lead follow-up fields on the API.
 class FollowUpsController extends ChangeNotifier {
-  FollowUpsController() {
-    final now = DateTime.now();
-    DateTime at(int dayOffset, int hour, int minute) => DateTime(
-          now.year,
-          now.month,
-          now.day + dayOffset,
-          hour,
-          minute,
-        );
+  FollowUpsController({FollowUpsRepository? repository})
+      : _repository = repository ?? followUpsRepository;
 
-    _followUps.addAll([
-      // Overdue
-      FollowUp(
-        id: 'fu-1',
-        leadId: 'lead-3',
-        customerName: 'Nikhil Rao',
-        company: 'Welspun India',
-        phone: '+91 98330 22114',
-        dateTime: at(-1, 11, 0),
-        action: 'Follow up on quotation response',
-        relatedRef: 'QT-418',
-        highPriority: true,
-      ),
-      FollowUp(
-        id: 'fu-2',
-        leadId: 'lead-8',
-        customerName: 'Deepak Joshi',
-        company: 'RSWM Ltd',
-        phone: '+91 94140 88123',
-        dateTime: at(-3, 15, 0),
-        action: 'Re-engage after no reply for two weeks',
-      ),
-      // Due today
-      FollowUp(
-        id: 'fu-3',
-        leadId: 'lead-2',
-        customerName: 'Sunita Desai',
-        company: 'Arvind Mills',
-        phone: '+91 99201 44556',
-        dateTime: at(0, 10, 30),
-        action: 'Confirm greige fabric specifications',
-        relatedRef: 'QT-419',
-        highPriority: true,
-        outcome: FollowUpOutcome.quote,
-      ),
-      FollowUp(
-        id: 'fu-4',
-        leadId: 'lead-1',
-        customerName: 'Raghu',
-        company: 'Exora Solutions',
-        phone: '+91 98450 11223',
-        dateTime: at(0, 14, 0),
-        action: 'Share revised pricing and catalogue',
-      ),
-      FollowUp(
-        id: 'fu-5',
-        leadId: 'lead-4',
-        customerName: 'Priya Nair',
-        company: 'Vardhman Textiles',
-        phone: '+91 90080 91234',
-        dateTime: at(0, 16, 30),
-        action: 'Call about sample dispatch timeline',
-      ),
-      // Upcoming
-      FollowUp(
-        id: 'fu-6',
-        leadId: 'lead-5',
-        customerName: 'Lakshmi Iyer',
-        company: 'KPR Mill',
-        phone: '+91 97890 55321',
-        dateTime: at(1, 9, 30),
-        action: 'Present quotation and payment terms',
-        relatedRef: 'QT-430',
-      ),
-      FollowUp(
-        id: 'fu-7',
-        leadId: 'lead-6',
-        customerName: 'Ashok Menon',
-        company: 'Raymond Ltd',
-        phone: '+91 98110 77654',
-        dateTime: at(2, 15, 0),
-        action: 'Negotiate volume discount',
-        relatedRef: 'Order #9024',
-        outcome: FollowUpOutcome.order,
-      ),
-      FollowUp(
-        id: 'fu-8',
-        leadId: 'lead-7',
-        customerName: 'Farah Khan',
-        company: 'Bombay Dyeing',
-        phone: '+91 99870 33221',
-        dateTime: at(6, 11, 0),
-        action: 'Post-delivery quality check-in',
-      ),
-    ]);
-  }
-
+  final FollowUpsRepository _repository;
   final List<FollowUp> _followUps = [];
   String _query = '';
+  bool _loading = false;
+  String? _error;
+  bool _loadedOnce = false;
 
   String get query => _query;
 
@@ -110,6 +23,10 @@ class FollowUpsController extends ChangeNotifier {
     _query = value;
     notifyListeners();
   }
+
+  bool get loading => _loading;
+  String? get error => _error;
+  bool get loadedOnce => _loadedOnce;
 
   List<FollowUp> get all {
     final sorted = [..._followUps]
@@ -134,14 +51,12 @@ class FollowUpsController extends ChangeNotifier {
   int get convertedToOrders =>
       _followUps.where((f) => f.outcome == FollowUpOutcome.order).length;
 
-  /// Whole-number conversion percentage.
   int get conversionPercent {
     if (_followUps.isEmpty) return 0;
     final converted = _followUps.where((f) => f.converted).length;
     return (converted * 100 / _followUps.length).round();
   }
 
-  /// Entries for a tab, with the search query applied.
   List<FollowUp> forTab(FollowUpTab tab, DateTime now) {
     final base = switch (tab) {
       FollowUpTab.all => all,
@@ -165,8 +80,72 @@ class FollowUpsController extends ChangeNotifier {
         FollowUpTab.overdue => overdue(now).length,
       };
 
+  Future<void> refresh({bool silent = false}) async {
+    if (!silent) {
+      _loading = true;
+      _error = null;
+      notifyListeners();
+    }
+    try {
+      final items = await _repository.listWithFollowUpDate();
+      _followUps
+        ..clear()
+        ..addAll(items);
+      _error = null;
+      _loadedOnce = true;
+    } on ApiException catch (e) {
+      _error = e.message;
+    } catch (e) {
+      _error = e.toString();
+    } finally {
+      _loading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<FollowUp?> schedule({
+    required Lead lead,
+    required DateTime when,
+    required String action,
+    String? relatedRef,
+    bool highPriority = false,
+  }) async {
+    try {
+      final scheduled = await _repository.schedule(
+        lead: lead,
+        when: when,
+        action: action,
+        relatedRef: relatedRef,
+        highPriority: highPriority,
+      );
+      final i = _followUps.indexWhere((f) => f.leadId == scheduled.leadId);
+      if (i == -1) {
+        _followUps.add(scheduled);
+      } else {
+        _followUps[i] = scheduled;
+      }
+      notifyListeners();
+      return scheduled;
+    } on ApiException catch (e) {
+      _error = e.message;
+      notifyListeners();
+      return null;
+    }
+  }
+
   void add(FollowUp followUp) {
     _followUps.add(followUp);
+    notifyListeners();
+  }
+
+  @visibleForTesting
+  void debugReplaceAll(List<FollowUp> items) {
+    _followUps
+      ..clear()
+      ..addAll(items);
+    _loadedOnce = true;
+    _loading = false;
+    _error = null;
     notifyListeners();
   }
 }

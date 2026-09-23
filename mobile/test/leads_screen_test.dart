@@ -3,8 +3,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:loom_run/features/crm/leads_controller.dart';
 import 'package:loom_run/features/crm/leads_screen.dart';
 
+import 'crm_test_seed.dart';
+
 void main() {
-  setUp(() => leadsController.setFilters(const LeadFilters()));
+  setUp(() {
+    leadsController.setFilters(const LeadFilters());
+    leadsController.debugReplaceAll(testSeedLeads());
+  });
 
   Future<void> pump(WidgetTester tester) async {
     tester.view.physicalSize = const Size(1200, 3200);

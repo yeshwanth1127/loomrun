@@ -1,5 +1,7 @@
 import 'package:flutter/foundation.dart';
 
+import '../../core/api/api_exception.dart';
+import 'leads_repository.dart';
 import 'models/lead.dart';
 
 /// Active filter state for the Leads screen.
@@ -49,124 +51,22 @@ class LeadFilters {
       scoreMax != null;
 }
 
-/// Frontend-only in-memory lead store.
+/// Lead store backed by the Loomrun API (same DB as the web app).
 class LeadsController extends ChangeNotifier {
-  LeadsController() {
-    final now = DateTime.now();
-    DateTime ago(Duration d) => now.subtract(d);
+  LeadsController({LeadsRepository? repository})
+      : _repository = repository ?? leadsRepository;
 
-    _leads.addAll([
-      Lead(
-        id: 'lead-1',
-        name: 'Raghu',
-        company: 'Exora Solutions',
-        phone: '+91 98450 11223',
-        location: 'Bangalore',
-        source: LeadSource.whatsapp,
-        score: 50,
-        status: 'Busy',
-        stage: LeadStage.newLead,
-        value: 10000,
-        lastActivity: ago(const Duration(minutes: 50)),
-      ),
-      Lead(
-        id: 'lead-2',
-        name: 'Sunita Desai',
-        company: 'Arvind Mills',
-        phone: '+91 99201 44556',
-        location: 'Ahmedabad',
-        source: LeadSource.referral,
-        score: 82,
-        status: 'Interested',
-        stage: LeadStage.contacted,
-        value: 620000,
-        lastActivity: ago(const Duration(hours: 5)),
-      ),
-      Lead(
-        id: 'lead-3',
-        name: 'Nikhil Rao',
-        company: 'Welspun India',
-        phone: '+91 98330 22114',
-        location: 'Mumbai',
-        source: LeadSource.website,
-        score: 34,
-        status: 'Callback',
-        stage: LeadStage.contacted,
-        value: 85000,
-        lastActivity: ago(const Duration(hours: 26)),
-      ),
-      Lead(
-        id: 'lead-4',
-        name: 'Priya Nair',
-        company: 'Vardhman Textiles',
-        phone: '+91 90080 91234',
-        location: 'Ludhiana',
-        source: LeadSource.whatsapp,
-        score: 76,
-        status: 'Requirement shared',
-        stage: LeadStage.requirementCollected,
-        value: 320000,
-        lastActivity: ago(const Duration(hours: 3)),
-      ),
-      Lead(
-        id: 'lead-5',
-        name: 'Lakshmi Iyer',
-        company: 'KPR Mill',
-        phone: '+91 97890 55321',
-        location: 'Coimbatore',
-        source: LeadSource.phoneCall,
-        score: 68,
-        status: 'Quote sent',
-        stage: LeadStage.quoted,
-        value: 780000,
-        lastActivity: ago(const Duration(days: 2)),
-      ),
-      Lead(
-        id: 'lead-6',
-        name: 'Ashok Menon',
-        company: 'Raymond Ltd',
-        phone: '+91 98110 77654',
-        location: 'Thane',
-        source: LeadSource.referral,
-        score: 88,
-        status: 'Negotiating',
-        stage: LeadStage.negotiation,
-        value: 1450000,
-        lastActivity: ago(const Duration(days: 1)),
-      ),
-      Lead(
-        id: 'lead-7',
-        name: 'Farah Khan',
-        company: 'Bombay Dyeing',
-        phone: '+91 99870 33221',
-        location: 'Mumbai',
-        source: LeadSource.instagram,
-        score: 91,
-        status: 'Won',
-        stage: LeadStage.won,
-        value: 1900000,
-        lastActivity: ago(const Duration(days: 4)),
-      ),
-      Lead(
-        id: 'lead-8',
-        name: 'Deepak Joshi',
-        company: 'RSWM Ltd',
-        phone: '+91 94140 88123',
-        location: 'Bhilwara',
-        source: LeadSource.website,
-        score: 22,
-        status: 'Not interested',
-        stage: LeadStage.lost,
-        value: 150000,
-        lastActivity: ago(const Duration(days: 8)),
-      ),
-    ]);
-  }
-
+  final LeadsRepository _repository;
   final List<Lead> _leads = [];
   LeadFilters _filters = const LeadFilters();
+  bool _loading = false;
+  String? _error;
+  bool _loadedOnce = false;
 
   LeadFilters get filters => _filters;
+  bool get loading => _loading;
+  String? get error => _error;
+  bool get loadedOnce => _loadedOnce;
 
   List<Lead> get all => List.unmodifiable(_leads);
 
@@ -184,9 +84,36 @@ class LeadsController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Leads matching the active filters.
-  /// - Board column: pass `stage` to scope to that column.
-  /// - Table view: omit `stage`; honours the Stage dropdown and "Show closed".
+  /// Fetch leads from the backend. Safe to call repeatedly.
+  Future<void> refresh({bool silent = false}) async {
+    if (!silent) {
+      _loading = true;
+      _error = null;
+      notifyListeners();
+    }
+    try {
+      final items = await _repository.list(
+        search: _filters.query.isEmpty ? null : _filters.query,
+        source: _filters.source,
+        scoreMin: _filters.scoreMin,
+        scoreMax: _filters.scoreMax,
+      );
+      _leads
+        ..clear()
+        ..addAll(items);
+      _error = null;
+      _loadedOnce = true;
+    } on ApiException catch (e) {
+      _error = e.message;
+    } catch (e) {
+      _error = e.toString();
+    } finally {
+      _loading = false;
+      notifyListeners();
+    }
+  }
+
+  /// Leads matching the active filters (client-side stage/closed filtering).
   List<Lead> filtered({LeadStage? stage}) {
     final q = _filters.query.trim().toLowerCase();
     return _leads.where((lead) {
@@ -224,18 +151,93 @@ class LeadsController extends ChangeNotifier {
 
   int countForStage(LeadStage stage) => filtered(stage: stage).length;
 
-  double valueForStage(LeadStage stage) => filtered(stage: stage)
-      .fold(0, (sum, lead) => sum + lead.value);
+  double valueForStage(LeadStage stage) =>
+      filtered(stage: stage).fold(0, (sum, lead) => sum + lead.value);
 
+  Future<Lead?> createLead({
+    required String name,
+    required String company,
+    required String phone,
+    required String location,
+    required LeadSource source,
+    required LeadStage stage,
+    required double value,
+    String? notes,
+  }) async {
+    try {
+      final created = await _repository.create(
+        title: name,
+        company: company,
+        phone: phone,
+        city: location,
+        source: source,
+        stage: stage,
+        estimatedValue: value,
+        notes: notes,
+      );
+      _leads.insert(0, created);
+      notifyListeners();
+      return created;
+    } on ApiException catch (e) {
+      _error = e.message;
+      notifyListeners();
+      return null;
+    }
+  }
+
+  /// Legacy local insert used by tests / offline stubs.
   void add(Lead lead) {
     _leads.insert(0, lead);
     notifyListeners();
   }
 
-  void moveToStage(String leadId, LeadStage stage) {
+  Future<void> moveToStage(String leadId, LeadStage stage) async {
     final i = _leads.indexWhere((l) => l.id == leadId);
     if (i == -1) return;
-    _leads[i] = _leads[i].copyWith(stage: stage);
+    final previous = _leads[i];
+    _leads[i] = previous.copyWith(stage: stage);
+    notifyListeners();
+    try {
+      final updated = await _repository.update(leadId, stage: stage);
+      final j = _leads.indexWhere((l) => l.id == leadId);
+      if (j != -1) {
+        _leads[j] = updated;
+        notifyListeners();
+      }
+    } on ApiException catch (e) {
+      _leads[i] = previous;
+      _error = e.message;
+      notifyListeners();
+    }
+  }
+
+  Future<void> scheduleFollowUp(
+    String leadId,
+    DateTime when, {
+    String? notes,
+  }) async {
+    final updated = await _repository.update(
+      leadId,
+      nextFollowUpAt: when,
+      notes: notes,
+    );
+    final i = _leads.indexWhere((l) => l.id == leadId);
+    if (i == -1) {
+      _leads.insert(0, updated);
+    } else {
+      _leads[i] = updated;
+    }
+    notifyListeners();
+  }
+
+  @visibleForTesting
+  void debugReplaceAll(List<Lead> leads) {
+    _leads
+      ..clear()
+      ..addAll(leads);
+    _loadedOnce = true;
+    _loading = false;
+    _error = null;
     notifyListeners();
   }
 }

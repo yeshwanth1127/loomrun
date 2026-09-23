@@ -24,6 +24,17 @@ class _FollowUpsScreenState extends State<FollowUpsScreen> {
   final _searchController = TextEditingController();
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (!followUpsController.loadedOnce) {
+        followUpsController.refresh();
+      }
+    });
+  }
+
+  @override
   void dispose() {
     _searchController.dispose();
     super.dispose();
