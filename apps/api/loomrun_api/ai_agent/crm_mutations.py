@@ -87,6 +87,18 @@ def _describe(name: str, r: dict[str, Any]) -> tuple[str, str, str, str, str]:
             summary = f"{summary} and sent"
         return ("quotation", "created", entity_id, number or entity_id, summary)
 
+    if name == "delete_quotation":
+        number = str(r.get("number") or r.get("invoice_number") or "")
+        entity = "invoice" if r.get("invoice_number") else "quotation"
+        label = number or str(r.get("id") or "")
+        return (
+            entity,
+            "deleted",
+            str(r.get("id") or ""),
+            label,
+            f"{label} deleted" if label else "Document deleted",
+        )
+
     if name == "update_quotation":
         number = str(r.get("number") or r.get("invoice_number") or "")
         entity = "invoice" if r.get("invoice_number") else "quotation"

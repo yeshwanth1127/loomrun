@@ -182,6 +182,7 @@ _TOOL_PACKS: dict[str, frozenset[str]] = {
             "list_quotations_for_lead",
             "create_quotation",
             "update_quotation",
+            "delete_quotation",
             "send_quotation",
             "generate_invoice",
             "send_invoice",

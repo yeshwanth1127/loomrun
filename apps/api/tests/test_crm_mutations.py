@@ -24,6 +24,26 @@ def test_mutation_from_update_quotation():
     assert "version 2" in m["summary"].lower()
 
 
+def test_mutation_from_delete_quotation():
+    m = mutation_from_tool(
+        "delete_quotation",
+        {
+            "status": "ok",
+            "result": {
+                "id": "q1",
+                "number": "Q-2026-00005",
+                "deleted": True,
+                "message": "Q-2026-00005 deleted",
+            },
+        },
+    )
+    assert m is not None
+    assert m["entity"] == "quotation"
+    assert m["action"] == "deleted"
+    assert m["id"] == "q1"
+    assert m["label"] == "Q-2026-00005"
+
+
 def test_mutation_from_schedule_follow_up():
     m = mutation_from_result(
         "schedule_follow_up",

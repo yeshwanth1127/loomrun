@@ -392,25 +392,7 @@ async def delete_quotation(
     quotation_id: str,
     ctx: OrgContext = Depends(require_roles("OWNER")),
 ) -> None:
-    q = await prisma.quotation.find_first(
-        where={"id": quotation_id, "organizationId": ctx.organization_id},
-    )
-    if not q:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Quotation not found")
-
-    if q.pdfUrl:
-        path = settings.storage_dir / q.pdfUrl
-        if path.is_file():
-            path.unlink()
-
-    await prisma.productionorder.update_many(
-        where={"quotationId": quotation_id},
-        data={"quotationId": None},
-    )
-    await prisma.quotation.delete(where={"id": quotation_id})
-    org_events.record_changed(
+    await quote_svc.delete_quotation(
         organization_id=ctx.organization_id,
-        entity_type=org_events.qlix_docs.ENTITY_QUOTATION,
-        entity_id=quotation_id,
-        deleted=True,
+        quotation_id=quotation_id,
     )

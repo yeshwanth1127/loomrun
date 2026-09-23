@@ -94,3 +94,22 @@ def test_update_quotation_tool_registered():
     assert spec is not None
     assert spec.kind == "write"
     assert "update_lead" in spec.description
+
+
+def test_quotation_delete_question_gets_delete_quotation():
+    names = select_tool_names_for_message(
+        "delete quotation Q-2026-00005",
+        mode="advanced",
+        role="OWNER",
+    )
+    assert names is not None
+    assert "delete_quotation" in names
+    assert "list_quotations_for_lead" in names
+
+
+def test_delete_quotation_tool_registered():
+    spec = get_tool("delete_quotation")
+    assert spec is not None
+    assert spec.kind == "write"
+    assert spec.owner_only is True
+    assert "quotation_id" in spec.parameters

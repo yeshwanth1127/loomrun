@@ -320,6 +320,39 @@ async def get_quotation(*, organization_id: str, quotation_id: str) -> dict[str,
     return serialize_quotation(q)
 
 
+async def delete_quotation(*, organization_id: str, quotation_id: str) -> dict[str, Any]:
+    """Delete a quotation or invoice by id or document number.
+
+    Production orders keep their own record; the quote link is cleared first
+    because that relation does not cascade.
+    """
+    q = await resolve_quotation(organization_id=organization_id, quotation_id=quotation_id)
+    if q.pdfUrl:
+        path = settings.storage_dir / q.pdfUrl
+        if path.is_file():
+            path.unlink()
+
+    await prisma.productionorder.update_many(
+        where={"quotationId": q.id},
+        data={"quotationId": None},
+    )
+    await prisma.quotation.delete(where={"id": q.id})
+    org_events.record_changed(
+        organization_id=organization_id,
+        entity_type=org_events.qlix_docs.ENTITY_QUOTATION,
+        entity_id=q.id,
+        deleted=True,
+    )
+    label = q.invoiceNumber or q.number
+    return {
+        "id": q.id,
+        "number": q.number,
+        "invoice_number": q.invoiceNumber,
+        "deleted": True,
+        "message": f"{label} deleted",
+    }
+
+
 async def list_quotations_for_lead(
     *,
     organization_id: str,

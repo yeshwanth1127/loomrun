@@ -97,6 +97,11 @@ def _with_crm_preamble(
         "Never ask the user for a lead id; they do not know it.",
         "Quotation or invoice LINE edits (description, qty, price) → "
         "update_quotation. Never use update_lead product_interest for quote lines.",
+        "Deleting a quotation or invoice → delete_quotation. Pass the Q- or "
+        "INV- number, or the id from list_quotations_for_lead. If you only have "
+        "a customer name, search_leads then list_quotations_for_lead first. "
+        "Never ask the user for an internal id, and never refuse because you "
+        "think delete is unavailable.",
         "Schedule a follow-up that appears on the Follow-ups screen → "
         "schedule_follow_up (not bare update_lead next_follow_up_at).",
         "If a tool errors because an id is missing or a name is unknown, call "

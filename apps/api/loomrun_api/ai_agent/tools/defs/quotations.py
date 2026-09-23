@@ -409,6 +409,34 @@ async def update_quotation(
 
 
 @register_tool(
+    name="delete_quotation",
+    description=(
+        "WHEN: permanently delete a quotation or invoice. NEEDS: quotation_id "
+        "(id or Q-/INV- number). If you only have a customer name, search_leads "
+        "then list_quotations_for_lead, then call this. Never ask the user for "
+        "an internal id. NOT: editing line items (update_quotation). "
+        "RETURNS: id, number, deleted."
+    ),
+    parameters={
+        "quotation_id": {
+            "type": "string",
+            "description": "Quotation/invoice id or document number (e.g. Q-2026-00005)",
+        },
+    },
+    kind="write",
+    modes=("advanced",),
+    required=["quotation_id"],
+    summary_fn=lambda a: f"Delete quotation {a.get('quotation_id')}",
+    owner_only=True,
+)
+async def delete_quotation(ctx: ToolContext, quotation_id: str, **_: Any) -> dict:
+    return await quote_svc.delete_quotation(
+        organization_id=ctx.organization_id,
+        quotation_id=quotation_id,
+    )
+
+
+@register_tool(
     name="send_quotation",
     description=(
         "WHEN: send an existing quotation PDF via WhatsApp or email. NEEDS: "
