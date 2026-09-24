@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronRight, Plus, Wallet, Zap } from 'lucide-react'
 import type { FormEvent } from 'react'
-import { useDeferredValue, useState } from 'react'
+import { useDeferredValue, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { LeadSearchSelect } from '../../components/LeadSearchSelect'
 import { EmptyState } from '../../components/ui/EmptyState'
@@ -73,6 +73,16 @@ export function OrdersPage() {
   const [showForm, setShowForm] = useState(false)
   const [leadId, setLeadId] = useState('')
   const [activityOpen, setActivityOpen] = useState(false)
+  const formRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!showForm) return
+    formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  }, [showForm])
+
+  function openNewOrderForm() {
+    setShowForm(true)
+  }
 
   function setShow(next: string) {
     const params = new URLSearchParams(searchParams)
@@ -146,7 +156,7 @@ export function OrdersPage() {
         description="Everything you are making and shipping."
         actions={
           isOwner ? (
-            <button type="button" className="btn" onClick={() => setShowForm((v) => !v)}>
+            <button type="button" className="btn" onClick={openNewOrderForm}>
               <Plus size={15} />
               New order
             </button>
@@ -248,6 +258,33 @@ export function OrdersPage() {
           )}
         </div>
 
+        {isOwner && showForm && (
+          <div className="card" ref={formRef} style={{ maxWidth: 480 }}>
+            <div style={{ fontWeight: 700, marginBottom: '1rem' }}>Start a new order</div>
+            <form
+              className="stack"
+              onSubmit={(e: FormEvent) => {
+                e.preventDefault()
+                if (leadId) void create.mutateAsync()
+              }}
+            >
+              <div className="form-field">
+                <label className="input-label">Customer *</label>
+                <LeadSearchSelect orgId={orgId} value={leadId} required onChange={setLeadId} />
+              </div>
+              {create.error && <p className="error">{(create.error as Error).message}</p>}
+              <div className="row">
+                <button type="submit" className="btn" disabled={create.isPending}>
+                  {create.isPending ? 'Creating…' : 'Start order'}
+                </button>
+                <button type="button" className="btn btn-ghost" onClick={() => setShowForm(false)}>
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
         {orders.length > 0 && (
           <InsightGrid>
             <InsightCard title="Where orders stand">
@@ -283,7 +320,7 @@ export function OrdersPage() {
             <InsightCard title="Quick actions">
               <div className="quick-action-list">
                 {isOwner && (
-                  <button type="button" onClick={() => setShowForm(true)}>
+                  <button type="button" onClick={openNewOrderForm}>
                     <Plus size={14} /> New order
                   </button>
                 )}
@@ -300,33 +337,6 @@ export function OrdersPage() {
           </InsightGrid>
         )}
 
-        {isOwner && showForm && (
-          <div className="card" style={{ maxWidth: 480 }}>
-            <div style={{ fontWeight: 700, marginBottom: '1rem' }}>Start a new order</div>
-            <form
-              className="stack"
-              onSubmit={(e: FormEvent) => {
-                e.preventDefault()
-                if (leadId) void create.mutateAsync()
-              }}
-            >
-              <div className="form-field">
-                <label className="input-label">Customer *</label>
-                <LeadSearchSelect orgId={orgId} value={leadId} required onChange={setLeadId} />
-              </div>
-              {create.error && <p className="error">{(create.error as Error).message}</p>}
-              <div className="row">
-                <button type="submit" className="btn" disabled={create.isPending}>
-                  {create.isPending ? 'Creating…' : 'Start order'}
-                </button>
-                <button type="button" className="btn btn-ghost" onClick={() => setShowForm(false)}>
-                  Cancel
-                </button>
-              </div>
-            </form>
-          </div>
-        )}
-
         {q.isLoading && <TableSkeleton rows={5} />}
         {q.error && <p className="error">{(q.error as Error).message}</p>}
 
@@ -340,7 +350,7 @@ export function OrdersPage() {
             }
             action={
               isOwner && !filtersOn ? (
-                <button type="button" className="btn" onClick={() => setShowForm(true)}>
+                <button type="button" className="btn" onClick={openNewOrderForm}>
                   <Plus size={15} /> New order
                 </button>
               ) : undefined
