@@ -19,6 +19,10 @@ _FOLLOW_UP_DEFINITION = (
     "A follow-up is a lead whose most recent call ended in CALLBACK_SCHEDULED "
     "— the same rule the Follow-ups screen uses."
 )
+_FOLLOW_UP_ATTENTION = (
+    "due_today = overdue + due_now + later_today. "
+    "Do not describe upcoming items as due today."
+)
 
 SOURCE_SCORES: dict[str, int] = {
     "META_ADS": 30,
@@ -828,7 +832,15 @@ async def list_follow_ups(
         include={"assignee": True},
     )
     if not leads:
-        return {"items": [], "count": 0, "total": 0, "buckets": {}, "definition": _FOLLOW_UP_DEFINITION}
+        return {
+            "total": 0,
+            "due_today": 0,
+            "buckets": {},
+            "attention": _FOLLOW_UP_ATTENTION,
+            "definition": _FOLLOW_UP_DEFINITION,
+            "items": [],
+            "count": 0,
+        }
 
     calls = await prisma.telecallercalllog.find_many(
         where={
@@ -879,12 +891,16 @@ async def list_follow_ups(
         items.append(compact_lead(full, extra))
 
     total = len(items)
+    shown = max(1, min(int(limit or 50), 100))
+    due_today = buckets["overdue"] + buckets["due_now"] + buckets["later_today"]
     return {
-        "items": items[: max(1, min(int(limit or 50), 100))],
-        "count": min(total, max(1, min(int(limit or 50), 100))),
         "total": total,
+        "due_today": due_today,
         "buckets": buckets,
+        "attention": _FOLLOW_UP_ATTENTION,
         "definition": _FOLLOW_UP_DEFINITION,
+        "items": items[:shown],
+        "count": min(total, shown),
     }
 
 

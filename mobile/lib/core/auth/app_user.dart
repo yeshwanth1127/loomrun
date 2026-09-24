@@ -17,10 +17,13 @@ class AppUser {
       .where((p) => p.isNotEmpty)
       .toList();
 
-  /// First name, used for the greeting.
+  /// First name, used for the greeting. An email is never treated as a name.
   String get firstName {
     final parts = _nameParts;
-    return parts.isEmpty ? '' : parts.first;
+    if (parts.isEmpty) return '';
+    final first = parts.first;
+    if (first.contains('@')) return '';
+    return first;
   }
 
   /// Up to two-letter initials for the avatar.

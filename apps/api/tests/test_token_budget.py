@@ -2,7 +2,7 @@
 
 import json
 
-from loomrun_api.ai_agent.crm_read_enforce import infer_search_leads_args
+from loomrun_api.ai_agent.crm_read_enforce import CrmReadPlan, search_args_from_plan
 from loomrun_api.ai_agent.service import _MAX_TOOL_RESULT_CHARS, _tool_result_text
 from loomrun_api.ai_usage import (
     DEFAULT_ESTIMATED_CREDITS,
@@ -94,5 +94,11 @@ class TestCachedTokenParsing:
 
 class TestForcedReadLimit:
     def test_forced_read_does_not_pull_a_full_roster(self):
-        args = infer_search_leads_args("list the won leads", timezone="Asia/Kolkata")
+        plan = CrmReadPlan(
+            intent="search_leads",
+            stage="WON",
+            time_window="none",
+            confidence=0.9,
+        )
+        args = search_args_from_plan(plan, timezone="Asia/Kolkata")
         assert args["limit"] <= 15

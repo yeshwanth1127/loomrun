@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_typography.dart';
@@ -10,6 +11,25 @@ import 'models/lead.dart';
 import 'telecaller_repository.dart';
 
 const _mono = 'monospace';
+
+Future<void> _openPhoneApp(BuildContext context, String phone) async {
+  final number = phone.replaceAll(RegExp(r'[^\d+]'), '');
+  if (number.isEmpty) return;
+  var opened = false;
+  try {
+    opened = await launchUrl(
+      Uri.parse('tel:$number'),
+      mode: LaunchMode.externalApplication,
+    );
+  } catch (_) {
+    opened = false;
+  }
+  if (!opened && context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Could not open the phone app.')),
+    );
+  }
+}
 
 /// Telecaller call queue — today's + overdue follow-ups from the live API.
 class TelecallerScreen extends StatefulWidget {
@@ -67,8 +87,10 @@ class _TelecallerScreenState extends State<TelecallerScreen> {
             await _loadSummary();
           },
           child: ListenableBuilder(
-            listenable:
-                Listenable.merge([followUpsController, leadsController]),
+            listenable: Listenable.merge([
+              followUpsController,
+              leadsController,
+            ]),
             builder: (context, _) {
               final now = DateTime.now();
               final queue = [
@@ -86,7 +108,7 @@ class _TelecallerScreenState extends State<TelecallerScreen> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Telecaller',
+                            'Calls',
                             style: AppTypography.heading(fontSize: 26),
                           ),
                           const SizedBox(height: 4),
@@ -94,8 +116,8 @@ class _TelecallerScreenState extends State<TelecallerScreen> {
                             queue.isEmpty
                                 ? 'No calls in the queue right now.'
                                 : '${queue.length} '
-                                    '${queue.length == 1 ? "call" : "calls"} '
-                                    'to work through.',
+                                      '${queue.length == 1 ? "call" : "calls"} '
+                                      'to work through.',
                             style: const TextStyle(
                               fontSize: 14,
                               color: AppColors.onSurfaceVariant,
@@ -183,8 +205,7 @@ class _CallCard extends StatelessWidget {
   });
 
   void _openLead(BuildContext context) {
-    final match =
-        leadsController.all.where((l) => l.id == followUp.leadId);
+    final match = leadsController.all.where((l) => l.id == followUp.leadId);
     final lead = match.isNotEmpty
         ? match.first
         : Lead(
@@ -200,9 +221,9 @@ class _CallCard extends StatelessWidget {
             value: 0,
             lastActivity: followUp.dateTime,
           );
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => LeadDetailsScreen(lead: lead)),
-    );
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => LeadDetailsScreen(lead: lead)));
   }
 
   @override
@@ -285,9 +306,14 @@ class _CallCard extends StatelessWidget {
               ),
               if (followUp.phone.isNotEmpty)
                 IconButton(
-                  onPressed: () {},
-                  icon: const Icon(Icons.call, color: AppColors.primary),
-                  tooltip: followUp.phone,
+                  onPressed: () => _openPhoneApp(context, followUp.phone),
+                  style: IconButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                    fixedSize: const Size(40, 40),
+                  ),
+                  icon: const Icon(Icons.call, size: 20),
+                  tooltip: 'Call ${followUp.phone}',
                 ),
             ],
           ),

@@ -148,8 +148,9 @@ async def count_leads(
         "WHEN: the user asks about follow-ups or callbacks — the Follow-ups "
         "screen. NOT: looking up a lead by name (search_leads / get_lead), a "
         "stage roster, or call history (list_calls). NEEDS: nothing. RETURNS: "
-        "short lead cards plus follow_up_bucket and last_call_outcome. A "
-        "follow-up is a lead whose most recent call ended in CALLBACK_SCHEDULED, "
+        "short lead cards plus follow_up_bucket and last_call_outcome. "
+        "due_today is overdue + due_now + later_today. upcoming is not due today. "
+        "A follow-up is a lead whose most recent call ended in CALLBACK_SCHEDULED, "
         "not merely next_follow_up_at."
     ),
     parameters={

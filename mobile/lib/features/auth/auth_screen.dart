@@ -134,35 +134,40 @@ class _AuthScreenState extends State<AuthScreen> {
     return Scaffold(
       backgroundColor: AppColors.surface,
       body: SafeArea(
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(24, 32, 24, 32),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 420),
-              child: Form(
-                key: _formKey,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const AppLogo(height: 36),
-                    const SizedBox(height: 40),
-                    Text(
-                      _isSignIn ? 'Sign in' : 'Log in',
-                      style: AppTypography.heading(fontSize: 28),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      _isSignIn
-                          ? 'Create your account to get started.'
-                          : 'Welcome back. Enter your details to continue.',
-                      style: const TextStyle(
-                        fontSize: 14,
-                        color: AppColors.onSurfaceVariant,
-                      ),
-                    ),
-                    const SizedBox(height: 32),
+        child: Column(
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(24, 28, 24, 0),
+              child: Center(child: AppLogo(height: 40)),
+            ),
+            Expanded(
+              child: Center(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(24, 32, 24, 32),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 420),
+                    child: Form(
+                      key: _formKey,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            _isSignIn ? 'Sign in' : 'Log in',
+                            style: AppTypography.heading(fontSize: 28),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            _isSignIn
+                                ? 'Create your account to get started.'
+                                : 'Welcome back. Enter your details to continue.',
+                            style: const TextStyle(
+                              fontSize: 14,
+                              color: AppColors.onSurfaceVariant,
+                            ),
+                          ),
+                          const SizedBox(height: 32),
 
-                    if (_isSignIn) ...[
+                          if (_isSignIn) ...[
                       _field(
                         controller: _fullName,
                         label: 'Full Name',
@@ -332,11 +337,14 @@ class _AuthScreenState extends State<AuthScreen> {
                         ],
                       ),
                     ),
-                  ],
+                        ],
+                      ),
+                    ),
+                  ),
                 ),
               ),
             ),
-          ),
+          ],
         ),
       ),
     );

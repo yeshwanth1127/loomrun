@@ -172,6 +172,83 @@ class ApiClient {
     });
   }
 
+  /// POST a JSON body and read a server-sent event stream (`data: {...}` frames).
+  ///
+  /// [streamClient] is owned by the caller so closing it aborts the turn
+  /// without tearing down the shared client used for ordinary requests.
+  Future<void> postEventStream(
+    String path, {
+    required Object json,
+    required void Function(Map<String, dynamic> event) onEvent,
+    required http.Client streamClient,
+  }) async {
+    Future<http.StreamedResponse> send() async {
+      final request = http.Request('POST', _buildUri(path, null));
+      request.headers['Accept'] = 'text/event-stream';
+      request.headers['Content-Type'] = 'application/json';
+      final token = await _tokens.getAccessToken();
+      if (token != null && token.isNotEmpty) {
+        request.headers['Authorization'] = 'Bearer $token';
+      }
+      request.body = jsonEncode(json);
+      return streamClient.send(request);
+    }
+
+    var response = await send();
+    if (response.statusCode == 401 && await _tokens.getRefreshToken() != null) {
+      final refreshed = await refreshAccessToken();
+      if (refreshed) response = await send();
+    }
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      final text = await response.stream.bytesToString();
+      Object? data;
+      if (text.isNotEmpty) {
+        try {
+          data = jsonDecode(text);
+        } catch (_) {
+          data = null;
+        }
+      }
+      throw ApiException(
+        _errorDetail(data, response.reasonPhrase ?? 'Request failed'),
+        statusCode: response.statusCode,
+      );
+    }
+
+    final buffer = StringBuffer();
+    await for (final chunk in response.stream.transform(utf8.decoder)) {
+      buffer.write(chunk);
+      var pending = buffer.toString();
+      buffer.clear();
+      while (true) {
+        final split = pending.indexOf('\n\n');
+        if (split < 0) {
+          buffer.write(pending);
+          break;
+        }
+        final frame = pending.substring(0, split);
+        pending = pending.substring(split + 2);
+        final dataLines = <String>[];
+        for (final line in frame.split('\n')) {
+          if (line.startsWith('data:')) {
+            dataLines.add(line.substring(5).trimLeft());
+          }
+        }
+        if (dataLines.isEmpty) continue;
+        final raw = dataLines.join('\n');
+        try {
+          final decoded = jsonDecode(raw);
+          if (decoded is Map) {
+            onEvent(Map<String, dynamic>.from(decoded));
+          }
+        } catch (_) {
+          // Ignore a partial or non-JSON frame and keep reading.
+        }
+      }
+    }
+  }
+
   Future<http.Response> _send(String method, Uri uri, String? body) async {
     final headers = <String, String>{'Accept': 'application/json'};
     final token = await _tokens.getAccessToken();

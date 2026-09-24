@@ -20,6 +20,8 @@ void main() {
     await authController.init();
     await tester.pumpWidget(const SizedBox());
     await tester.pumpWidget(const LoomRunApp());
+    // Splash holds 2s then fades into auth.
+    await tester.pump(const Duration(seconds: 2));
     await tester.pumpAndSettle();
   }
 
@@ -38,6 +40,18 @@ void main() {
         find.widgetWithText(TextFormField, 'Confirm Password'), 'secret12');
     await tester.tap(find.widgetWithText(FilledButton, 'SIGN IN'));
     await tester.pumpAndSettle();
+  }
+
+  Future<void> expectFollowUps(WidgetTester tester) async {
+    await tester.scrollUntilVisible(
+      find.text('Follow-ups due'),
+      300,
+      scrollable: find.descendant(
+        of: find.byType(HomePage),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    expect(find.text('Follow-ups due'), findsOneWidget);
   }
 
   Future<void> logIn(WidgetTester tester, String email, String password) async {
@@ -70,14 +84,14 @@ void main() {
     await signUp(tester);
     expect(find.textContaining('Asha'), findsWidgets);
     expect(find.text('AM'), findsOneWidget);
-    expect(find.text('Follow-ups due'), findsOneWidget);
+    await expectFollowUps(tester);
   });
 
   testWidgets('account persists across restart; session does not',
       (tester) async {
     await launch(tester);
     await signUp(tester);
-    expect(find.text('Follow-ups due'), findsOneWidget);
+    await expectFollowUps(tester);
 
     // Quit + relaunch.
     await launch(tester);
@@ -93,7 +107,7 @@ void main() {
     expect(find.text('No account found. Please sign in.'), findsOneWidget);
 
     await logIn(tester, 'asha@example.com', 'secret12');
-    expect(find.text('Follow-ups due'), findsOneWidget);
+    await expectFollowUps(tester);
   });
 
   testWidgets('log out ends the session but keeps the account',
@@ -110,6 +124,6 @@ void main() {
     expect(authController.hasAccount('asha@example.com'), isTrue);
 
     await logIn(tester, 'asha@example.com', 'secret12');
-    expect(find.text('Follow-ups due'), findsOneWidget);
+    await expectFollowUps(tester);
   });
 }

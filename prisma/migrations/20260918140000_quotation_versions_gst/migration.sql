@@ -1,5 +1,7 @@
 -- GST fields + quotation→invoice lineage on quotations
 ALTER TABLE "quotations"
+  ADD COLUMN IF NOT EXISTS "invoice_number" TEXT,
+  ADD COLUMN IF NOT EXISTS "invoiced_at" TIMESTAMP(3),
   ADD COLUMN IF NOT EXISTS "tax_enabled" BOOLEAN NOT NULL DEFAULT false,
   ADD COLUMN IF NOT EXISTS "tax_rate" DECIMAL(5,2),
   ADD COLUMN IF NOT EXISTS "source_quotation_id" TEXT,

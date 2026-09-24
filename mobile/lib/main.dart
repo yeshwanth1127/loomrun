@@ -1,18 +1,25 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import 'core/auth/auth.dart';
 import 'core/config/dev_config.dart';
 import 'core/theme/app_colors.dart';
 import 'core/theme/app_typography.dart';
 import 'core/widgets/app_logo.dart';
-import 'features/auth/auth_screen.dart';
+import 'features/auth/splash_screen.dart';
+import 'features/crm/documents_repository.dart';
 import 'features/crm/follow_ups_controller.dart';
 import 'features/crm/follow_ups_screen.dart';
 import 'features/crm/leads_controller.dart';
 import 'features/crm/leads_screen.dart';
 import 'features/crm/models/follow_up.dart';
 import 'features/crm/models/lead.dart';
+import 'features/ai/ask_ai_screen.dart';
 import 'features/crm/telecaller_screen.dart';
+import 'features/home/home_analytics.dart';
+import 'features/settings/settings_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -28,22 +35,30 @@ class LoomRunApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final base = ThemeData(
+      useMaterial3: true,
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: AppColors.primary,
+        surface: AppColors.surface,
+      ),
+      scaffoldBackgroundColor: AppColors.surface,
+    );
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Loom Run',
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: AppColors.primary,
-          surface: AppColors.surface,
+      theme: base.copyWith(
+        textTheme: GoogleFonts.plusJakartaSansTextTheme(base.textTheme).apply(
+          bodyColor: AppColors.onSurface,
+          displayColor: AppColors.onSurface,
         ),
-        scaffoldBackgroundColor: AppColors.surface,
-        fontFamily: 'Roboto',
+        primaryTextTheme:
+            GoogleFonts.plusJakartaSansTextTheme(base.primaryTextTheme),
       ),
       home: ListenableBuilder(
         listenable: authController,
-        builder: (context, _) =>
-            authController.isAuthenticated ? const MainApp() : const AuthScreen(),
+        builder: (context, _) => authController.isAuthenticated
+            ? const MainApp()
+            : const SplashGate(),
       ),
     );
   }
@@ -57,36 +72,36 @@ class MainApp extends StatefulWidget {
 }
 
 class _MainAppState extends State<MainApp> {
-  /// 0 Home · 1 Ask AI · 2 Telecaller
+  /// 0 Home · 1 Ask AI · 2 Calls · 3 Settings
   int currentIndex = 0;
 
   final List<Widget> pages = const [
     HomePage(),
-    PlaceholderPage(title: 'Ask AI'),
+    AskAiScreen(),
     TelecallerScreen(),
+    SettingsScreen(),
   ];
 
   @override
   Widget build(BuildContext context) {
+    final index = currentIndex.clamp(0, pages.length - 1);
     return Scaffold(
       backgroundColor: AppColors.surface,
       body: IndexedStack(
-        index: currentIndex,
+        index: index,
         children: pages,
       ),
       bottomNavigationBar: _PrimaryBottomNav(
-        currentIndex: currentIndex,
-        onSelect: (index) => setState(() => currentIndex = index),
+        currentIndex: index,
+        onSelect: (next) => setState(() => currentIndex = next),
       ),
     );
   }
 }
 
-/// Primary mobile nav: Home | Ask AI | Telecaller.
-/// Ask AI is always the filled teal center action; Home and Telecaller stay
-/// muted (outline) and only pick up a light selected tint — never the filled
-/// Ask AI treatment.
-class _PrimaryBottomNav extends StatelessWidget {
+/// Floating bar. The selected item rises so half of it sits above the bar,
+/// and the bar edge curves around it.
+class _PrimaryBottomNav extends StatefulWidget {
   final int currentIndex;
   final ValueChanged<int> onSelect;
 
@@ -96,59 +111,154 @@ class _PrimaryBottomNav extends StatelessWidget {
   });
 
   @override
+  State<_PrimaryBottomNav> createState() => _PrimaryBottomNavState();
+}
+
+class _PrimaryBottomNavState extends State<_PrimaryBottomNav>
+    with SingleTickerProviderStateMixin {
+  static const _itemCount = 4;
+  static const _circleRadius = 24.0;
+  static const _barTop = _circleRadius;
+
+  late final AnimationController _slide;
+  late double _fromSlot;
+  late double _toSlot;
+
+  @override
+  void initState() {
+    super.initState();
+    _fromSlot = widget.currentIndex.toDouble();
+    _toSlot = _fromSlot;
+    _slide = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 340),
+      value: 1,
+    );
+  }
+
+  double get _slot {
+    final t = Curves.easeOutCubic.transform(_slide.value);
+    return _fromSlot + (_toSlot - _fromSlot) * t;
+  }
+
+  @override
+  void didUpdateWidget(covariant _PrimaryBottomNav oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.currentIndex == widget.currentIndex) return;
+    _fromSlot = _slot;
+    _toSlot = widget.currentIndex.toDouble();
+    _slide.forward(from: 0);
+  }
+
+  @override
+  void dispose() {
+    _slide.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final bottomInset = MediaQuery.paddingOf(context).bottom;
-    return Container(
-      decoration: const BoxDecoration(
-        color: AppColors.surface,
-        border: Border(
-          top: BorderSide(color: Color(0x4DE5E9EE)),
-        ),
-      ),
-      padding: EdgeInsets.only(bottom: bottomInset),
+    const items = <_NavSpec>[
+      _NavSpec(0, 'Home', Icons.home_outlined, Icons.home),
+      _NavSpec(1, 'Ask', Icons.auto_awesome_outlined, Icons.auto_awesome),
+      _NavSpec(2, 'Calls', Icons.phone_outlined, Icons.phone),
+      _NavSpec(3, 'Settings', Icons.settings_outlined, Icons.settings),
+    ];
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(16, 0, 16, 8 + bottomInset),
       child: SizedBox(
-        height: 64,
-        child: Row(
-          children: [
-            Expanded(
-              child: _SideNavItem(
-                icon: currentIndex == 0 ? Icons.home : Icons.home_outlined,
-                label: 'Home',
-                selected: currentIndex == 0,
-                onTap: () => onSelect(0),
-              ),
-            ),
-            Expanded(
-              child: _AskAiNavItem(
-                onTap: () => onSelect(1),
-              ),
-            ),
-            Expanded(
-              child: _SideNavItem(
-                icon: currentIndex == 2
-                    ? Icons.phone_in_talk
-                    : Icons.phone_in_talk_outlined,
-                label: 'Telecaller',
-                selected: currentIndex == 2,
-                onTap: () => onSelect(2),
-              ),
-            ),
-          ],
+        height: _barTop + 64,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final width = constraints.maxWidth;
+            return AnimatedBuilder(
+              animation: _slide,
+              builder: (context, _) {
+                final centerX = (_slot + 0.5) * width / _itemCount;
+                return Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      top: _barTop,
+                      bottom: 0,
+                      child: CustomPaint(
+                        painter: _WaveBarPainter(notchCenterX: centerX),
+                      ),
+                    ),
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      top: _barTop,
+                      bottom: 0,
+                      child: Row(
+                        children: [
+                          for (final item in items)
+                            _WaveNavItem(
+                              spec: item,
+                              selected: widget.currentIndex == item.index,
+                              onTap: () => widget.onSelect(item.index),
+                            ),
+                        ],
+                      ),
+                    ),
+                    Positioned(
+                      left: centerX - _circleRadius,
+                      top: 0,
+                      child: IgnorePointer(
+                        child: Container(
+                          width: _circleRadius * 2,
+                          height: _circleRadius * 2,
+                          decoration: BoxDecoration(
+                            color: AppColors.primary,
+                            shape: BoxShape.circle,
+                            border: Border.all(color: AppColors.surface, width: 3),
+                            boxShadow: const [
+                              BoxShadow(
+                                color: Color(0x330F766E),
+                                blurRadius: 10,
+                                offset: Offset(0, 3),
+                              ),
+                            ],
+                          ),
+                          child: Icon(
+                            items[widget.currentIndex.clamp(0, _itemCount - 1)].selectedIcon,
+                            color: Colors.white,
+                            size: 20,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            );
+          },
         ),
       ),
     );
   }
 }
 
-class _SideNavItem extends StatelessWidget {
-  final IconData icon;
+class _NavSpec {
+  final int index;
   final String label;
+  final IconData icon;
+  final IconData selectedIcon;
+
+  const _NavSpec(this.index, this.label, this.icon, this.selectedIcon);
+}
+
+class _WaveNavItem extends StatelessWidget {
+  final _NavSpec spec;
   final bool selected;
   final VoidCallback onTap;
 
-  const _SideNavItem({
-    required this.icon,
-    required this.label,
+  const _WaveNavItem({
+    required this.spec,
     required this.selected,
     required this.onTap,
   });
@@ -156,68 +266,98 @@ class _SideNavItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = selected ? AppColors.primary : AppColors.outline;
-    return InkWell(
-      onTap: onTap,
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(icon, size: 22, color: color),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: TextStyle(
-              fontFamily: _mono,
-              fontSize: 10,
-              fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-              color: color,
-            ),
-          ),
-        ],
+    return Expanded(
+      child: InkWell(
+        onTap: onTap,
+        child: selected
+            ? Align(
+                alignment: Alignment.bottomCenter,
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Text(
+                    spec.label,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: color,
+                    ),
+                  ),
+                ),
+              )
+            : Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(spec.icon, size: 22, color: color),
+                  const SizedBox(height: 2),
+                  Text(
+                    spec.label,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                      color: color,
+                    ),
+                  ),
+                ],
+              ),
       ),
     );
   }
 }
 
-/// Filled teal center tab — always visually primary, never muted.
-class _AskAiNavItem extends StatelessWidget {
-  final VoidCallback onTap;
+class _WaveBarPainter extends CustomPainter {
+  _WaveBarPainter({required this.notchCenterX});
 
-  const _AskAiNavItem({
-    required this.onTap,
-  });
+  final double notchCenterX;
 
   @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(24),
-      child: Center(
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          decoration: BoxDecoration(
-            color: AppColors.primary,
-            borderRadius: BorderRadius.circular(24),
-          ),
-          child: const Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.auto_awesome, size: 16, color: Colors.white),
-              SizedBox(width: 6),
-              Text(
-                'Ask AI',
-                style: TextStyle(
-                  fontFamily: _mono,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  color: Colors.white,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
+  void paint(Canvas canvas, Size size) {
+    const dip = 28.0;
+    const bottomCorner = 22.0;
+    final cx = notchCenterX;
+    var half = 36.0;
+    final maxHalf = math.min(cx, size.width - cx);
+    if (half > maxHalf) half = math.max(12.0, maxHalf);
+
+    final leftFlat = math.max(0.0, cx - half);
+    final rightLip = math.min(size.width, cx + half);
+    final leftCorner = leftFlat.clamp(0.0, bottomCorner);
+    final rightCorner = (size.width - rightLip).clamp(0.0, bottomCorner);
+
+    final path = Path()
+      ..moveTo(0, leftCorner)
+      ..quadraticBezierTo(0, 0, leftCorner, 0)
+      ..lineTo(leftFlat, 0)
+      ..cubicTo(
+        cx - half * 0.55,
+        0,
+        cx - half * 0.42,
+        dip,
+        cx,
+        dip,
+      )
+      ..cubicTo(
+        cx + half * 0.42,
+        dip,
+        cx + half * 0.55,
+        0,
+        rightLip,
+        0,
+      )
+      ..lineTo(size.width - rightCorner, 0)
+      ..quadraticBezierTo(size.width, 0, size.width, rightCorner)
+      ..lineTo(size.width, size.height - bottomCorner)
+      ..quadraticBezierTo(size.width, size.height, size.width - bottomCorner, size.height)
+      ..lineTo(bottomCorner, size.height)
+      ..quadraticBezierTo(0, size.height, 0, size.height - bottomCorner)
+      ..close();
+
+    canvas.drawShadow(path, const Color(0x330F172A), 8, true);
+    canvas.drawPath(path, Paint()..color = AppColors.surfaceContainerLowest);
   }
+
+  @override
+  bool shouldRepaint(covariant _WaveBarPainter oldDelegate) =>
+      oldDelegate.notchCenterX != notchCenterX;
 }
 
 String _ddMmYyyy(DateTime d) {
@@ -235,13 +375,32 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends State<HomePage>
+    with SingleTickerProviderStateMixin {
   /// Defaults to today; updated via the date picker.
   DateTime _asOfDate = DateTime.now();
+  DocumentsSnapshot _documents = DocumentsSnapshot.empty;
+  late final AnimationController _greetingController;
+  late final Animation<double> _greetingFade;
+  late final Animation<Offset> _greetingSlide;
 
   @override
   void initState() {
     super.initState();
+    _greetingController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 420),
+    );
+    final curve = CurvedAnimation(
+      parent: _greetingController,
+      curve: Curves.easeOut,
+    );
+    _greetingFade = curve;
+    _greetingSlide = Tween<Offset>(
+      begin: const Offset(0.08, 0),
+      end: Offset.zero,
+    ).animate(curve);
+    _greetingController.forward();
     leadsController.addListener(_onCrmChanged);
     followUpsController.addListener(_onCrmChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -251,6 +410,7 @@ class _HomePageState extends State<HomePage> {
 
   @override
   void dispose() {
+    _greetingController.dispose();
     leadsController.removeListener(_onCrmChanged);
     followUpsController.removeListener(_onCrmChanged);
     super.dispose();
@@ -269,7 +429,18 @@ class _HomePageState extends State<HomePage> {
     await Future.wait([
       leadsController.refresh(silent: leadsController.loadedOnce),
       followUpsController.refresh(silent: followUpsController.loadedOnce),
+      _refreshDocuments(),
     ]);
+  }
+
+  Future<void> _refreshDocuments() async {
+    try {
+      final snap = await documentsRepository.fetchSnapshot();
+      if (!mounted) return;
+      setState(() => _documents = snap);
+    } catch (_) {
+      // Charts fall back to empty slices; attention cards stay usable.
+    }
   }
 
   String _greeting() {
@@ -277,6 +448,13 @@ class _HomePageState extends State<HomePage> {
     if (hour < 12) return 'Good morning';
     if (hour < 17) return 'Good afternoon';
     return 'Good evening';
+  }
+
+  String _greetingLine(AppUser user) {
+    final name = user.firstName;
+    final hello = _greeting();
+    if (name.isEmpty) return hello;
+    return '$hello, $name';
   }
 
   void _open(BuildContext context, Widget page) {
@@ -319,11 +497,24 @@ class _HomePageState extends State<HomePage> {
     final revenue = wonLeads.fold<double>(0, (sum, l) => sum + l.value);
     final winRatePercent =
         closedCount > 0 ? (wonLeads.length / closedCount * 100).round() : null;
+    final now = DateTime.now();
+    final overdueFollowUps = followUpsController.overdue(now);
+    final dueTodayFollowUps = followUpsController.dueToday(now);
+    final upcomingFollowUps = followUpsController.upcoming(now);
 
     // How many of the six attention sections currently have something to
     // act on — mirrors the website's "N things need your attention." line.
     final needingAttention =
         [dueFollowUps.length, newLeads.length].where((c) => c > 0).length;
+
+    const quoteColors = {
+      'DRAFT': Color(0xFF7C8CA1),
+      'SENT': Color(0xFF0F766E),
+      'ACCEPTED': Color(0xFF1F7A4D),
+      'REJECTED': Color(0xFFB42318),
+      'EXPIRED': Color(0xFFB45309),
+      'INVOICED': Color(0xFF0B5C56),
+    };
 
     return Column(
       children: [
@@ -334,26 +525,92 @@ class _HomePageState extends State<HomePage> {
           child: ListView(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
             children: [
-              _DateSelector(
-                date: _asOfDate,
-                onPickDate: _pickDate,
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _DateSelector(
+                    date: _asOfDate,
+                    onPickDate: _pickDate,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: FadeTransition(
+                      opacity: _greetingFade,
+                      child: SlideTransition(
+                        position: _greetingSlide,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Text(
+                              _greetingLine(user),
+                              textAlign: TextAlign.right,
+                              style: AppTypography.heading(fontSize: 28),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '$needingAttention '
+                              '${needingAttention == 1 ? 'thing needs' : 'things need'} '
+                              'your attention.',
+                              textAlign: TextAlign.right,
+                              style: AppTypography.caption(fontSize: 13),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 16),
-              Text(
-                '${_greeting()}, ${user.firstName}',
-                style: AppTypography.heading(fontSize: 28),
+              const SizedBox(height: 22),
+              HomeAnalytics(
+                counts: {
+                  for (final stage in LeadStage.values)
+                    stage: leadsController.countForStage(stage),
+                },
+                totalLeads: leadsController.totalCount,
+                won: wonLeads.length,
+                revenue: revenue,
+                winRatePercent: winRatePercent,
+                closedCount: closedCount,
+                followUpSlices: [
+                  if (overdueFollowUps.isNotEmpty)
+                    ChartSlice(
+                      'Overdue',
+                      overdueFollowUps.length,
+                      AppColors.error,
+                    ),
+                  if (dueTodayFollowUps.isNotEmpty)
+                    ChartSlice(
+                      'Today',
+                      dueTodayFollowUps.length,
+                      AppColors.warning,
+                    ),
+                  if (upcomingFollowUps.isNotEmpty)
+                    ChartSlice(
+                      'Upcoming',
+                      upcomingFollowUps.length,
+                      AppColors.primary,
+                    ),
+                ],
+                quotationSlices: [
+                  for (final entry in _documents.quotationByStatus.entries)
+                    if (entry.value > 0)
+                      ChartSlice(
+                        entry.key[0] + entry.key.substring(1).toLowerCase(),
+                        entry.value,
+                        quoteColors[entry.key] ?? AppColors.outline,
+                      ),
+                ],
+                invoiceSlices: [
+                  if (_documents.invoiceCount > 0)
+                    ChartSlice(
+                      'Invoices',
+                      _documents.invoiceCount,
+                      AppColors.success,
+                    ),
+                ],
               ),
-              const SizedBox(height: 4),
-              Text(
-                '$needingAttention '
-                '${needingAttention == 1 ? 'thing needs' : 'things need'} '
-                'your attention.',
-                style: const TextStyle(
-                  fontSize: 14,
-                  color: AppColors.onSurfaceVariant,
-                ),
-              ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 22),
 
               _AttentionCard(
                 icon: Icons.event_note_outlined,
@@ -440,73 +697,6 @@ class _HomePageState extends State<HomePage> {
                     _open(context, const PlaceholderPage(title: 'Money')),
               ),
 
-              const SizedBox(height: 12),
-              const Padding(
-                padding: EdgeInsets.only(bottom: 12),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.baseline,
-                  textBaseline: TextBaseline.alphabetic,
-                  children: [
-                    Text(
-                      'Business',
-                      style: TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.onSurface,
-                      ),
-                    ),
-                    SizedBox(width: 6),
-                    Text(
-                      '· All time',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: AppColors.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              GridView.count(
-                crossAxisCount: 2,
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                mainAxisSpacing: 10,
-                crossAxisSpacing: 10,
-                childAspectRatio: 1.7,
-                children: [
-                  _BusinessTile(
-                    label: 'LEADS',
-                    value: '${leadsController.totalCount}',
-                    caption: 'All time',
-                  ),
-                  _BusinessTile(
-                    label: 'ORDERS WON',
-                    value: '${wonLeads.length}',
-                    caption: formatInr(revenue),
-                  ),
-                  _BusinessTile(
-                    label: 'WIN RATE',
-                    value:
-                        winRatePercent == null ? '—' : '$winRatePercent%',
-                    caption: '$closedCount closed',
-                  ),
-                  _BusinessTile(
-                    label: 'REVENUE',
-                    value: formatInr(revenue),
-                    caption: 'Confirmed orders',
-                  ),
-                  const _BusinessTile(
-                    label: 'MARGIN',
-                    value: '—',
-                    caption: 'Revenue less spend',
-                  ),
-                  const _BusinessTile(
-                    label: 'COLLECTIONS PENDING',
-                    value: '0',
-                    caption: '—',
-                  ),
-                ],
-              ),
             ],
           ),
           ),
@@ -780,69 +970,6 @@ class _AttentionCard extends StatelessWidget {
                   ],
                 ),
               ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// One tile in the "Business · All time" grid.
-class _BusinessTile extends StatelessWidget {
-  final String label;
-  final String value;
-  final String caption;
-
-  const _BusinessTile({
-    required this.label,
-    required this.value,
-    required this.caption,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceContainerLowest,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.outlineVariant),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Text(
-            label,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              fontSize: 10.5,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.4,
-              color: AppColors.onSurfaceVariant,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            value,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              fontSize: 19,
-              fontWeight: FontWeight.w700,
-              color: AppColors.onSurface,
-            ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            caption,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              fontSize: 11,
-              color: AppColors.onSurfaceVariant,
             ),
           ),
         ],

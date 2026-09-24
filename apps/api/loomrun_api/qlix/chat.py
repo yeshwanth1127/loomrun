@@ -83,6 +83,10 @@ def _with_crm_preamble(
         "For any count or 'how many' question you MUST call count_leads in this "
         "turn and quote its `total`. Never answer a count from memory, Brain, "
         "or this preamble — there are no numeric hints here.",
+        "get_ceo_dashboard headline counts are the live pipeline. Do not pass a "
+        "day to mean today — that counts records created that day. For what is "
+        "due today, call list_follow_ups and use due_today (overdue, due_now, "
+        "later_today). upcoming is not due today.",
         lead_svc.clock_instructions(clock),
         "'Stage' means two different things — pick by the VALUE named:",
         "  NEW, CONTACTED, QUALIFICATION, QUOTATION, NEGOTIATION, SAMPLE, WON, "

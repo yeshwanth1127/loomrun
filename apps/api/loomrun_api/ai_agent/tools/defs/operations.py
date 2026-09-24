@@ -433,19 +433,61 @@ async def list_calls(
 @register_tool(
     name="get_ceo_dashboard",
     description=(
-        "WHEN: organisation KPIs — 'how are we doing', 'summary', today's "
-        "numbers. NOT: a lead roster or a filtered count (search_leads / "
-        "count_leads). RETURNS: hot leads, deals won/lost, win rate, pending "
-        "quotations, delayed follow-ups, production bottlenecks, collections."
+        "WHEN: current organisation KPIs — live pipeline size, deals won/lost, "
+        "win rate, overdue follow-ups, production, collections. NOT: a lead "
+        "roster (search_leads) or how many were created on a date "
+        "(count_leads). RETURNS the live pipeline. Headline counts are never "
+        "records created today. An optional day only adds "
+        "leads_created_on_requested_day; it does not change total_leads."
     ),
     parameters={
-        "day": {"type": "string", "description": "YYYY-MM-DD for one day, or 'all' (default)"},
+        "day": {
+            "type": "string",
+            "description": (
+                "Optional YYYY-MM-DD. Does not filter headline KPIs. When set, "
+                "the result also includes leads_created_on_requested_day."
+            ),
+        },
     },
     kind="read",
     modes=("minimal", "advanced"),
     owner_only=True,
 )
 async def get_ceo_dashboard(ctx: ToolContext, day: str | None = "all", **_: Any) -> dict:
-    return await dash_svc.get_ceo_dashboard(
-        organization_id=ctx.organization_id, day=day
+    # Headline KPIs are the live pipeline. A calendar day used to mean
+    # "created that UTC day", so "what needs attention today" came back as
+    # total_leads=0 whenever nothing was created that day.
+    live = await dash_svc.get_ceo_dashboard(
+        organization_id=ctx.organization_id, day="all"
     )
+    requested = (day or "all").strip()
+    if not requested or requested.lower() == "all":
+        live["count_scope"] = "live_pipeline"
+        return live
+
+    from loomrun_api.date_filter import parse_day_param
+    from loomrun_api.prisma_client import prisma
+
+    created: int | None = None
+    try:
+        rng = parse_day_param(requested)
+    except Exception:
+        rng = None
+    if rng:
+        created = await prisma.lead.count(
+            where={
+                "organizationId": ctx.organization_id,
+                "createdAt": {"gte": rng[0], "lt": rng[1]},
+            }
+        )
+    return {
+        "count_scope": "live_pipeline",
+        "note": (
+            f"total_leads and the other headline counts are the current pipeline, "
+            f"not records created on {requested}. leads_created_on_requested_day "
+            f"is that slice. Do not report the live total as if it were created that day."
+        ),
+        "requested_day": requested,
+        "leads_created_on_requested_day": created,
+        **live,
+    }

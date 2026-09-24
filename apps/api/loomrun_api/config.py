@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 60
     refresh_token_expire_days: int = 7
     cors_origins: str = "http://localhost:5173"
+    # Extra origins matched by regex. Flutter web picks a new localhost port
+    # on every `flutter run`, so an exact allow-list never includes it.
+    cors_origin_regex: str = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
     storage_dir: Path = _REPO_ROOT / "storage"
     whatsapp_verify_token: str = ""
     whatsapp_access_token: str = ""
@@ -92,6 +95,17 @@ class Settings(BaseSettings):
     ai_usage_bypass_org_ids: str = ""
     # Shared secret for n8n → Loomrun automation API (LLM proxy, future hooks)
     loomrun_automation_api_key: str = ""
+    # ── Jev via OpenRouter (System One — CRM read classification) ─────────────
+    # Uses OPENROUTER_API_KEY by default. Optional JEV_API_KEY overrides the Bearer
+    # token (e.g. direct TypeSafe). When not ready, chat fails open to the LLM.
+    jev_enabled: bool = False
+    jev_api_key: str = ""  # optional; falls back to openrouter_api_key
+    jev_base_url: str = "https://openrouter.ai/api/v1"
+    # Path under jev_base_url: "systemone" (OpenRouter/TypeSafe) or "alpha/decisions".
+    jev_path: str = "systemone"
+    jev_model: str = "typesafe/jev-1.13"
+    # Act on a count_leads classify only when confidence is at or above this.
+    jev_count_confidence: float = 0.75
     # ── Qlix (per-org AI: one Qlix workspace + agent + brain per Loomrun org) ──
     # Master switch. When false, Loomrun runs its own in-process agent for every
     # turn: no run is handed to Qlix, no org can be provisioned, and existing
@@ -167,6 +181,15 @@ class Settings(BaseSettings):
     @property
     def llm_ready(self) -> bool:
         return bool(self.openrouter_api_key.strip() and self.loomrun_automation_api_key.strip())
+
+    @property
+    def jev_ready(self) -> bool:
+        return bool(self.jev_enabled and self.jev_bearer_token)
+
+    @property
+    def jev_bearer_token(self) -> str:
+        """OpenRouter key by default; optional JEV_API_KEY override."""
+        return (self.jev_api_key.strip() or self.openrouter_api_key.strip())
 
     @property
     def qlix_context_signing_key(self) -> str:

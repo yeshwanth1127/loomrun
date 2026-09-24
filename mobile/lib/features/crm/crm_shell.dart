@@ -5,7 +5,7 @@ import 'follow_ups_screen.dart';
 import 'leads_screen.dart';
 import 'telecaller_screen.dart';
 
-/// Hosts the CRM section (Leads · Follow ups · Telecaller), mirroring the
+/// Hosts the CRM section (Leads · Follow ups · Calls), mirroring the
 /// web sidebar's CRM group. Each pane keeps its own state while switching.
 class CrmShell extends StatefulWidget {
   const CrmShell({super.key});
@@ -17,7 +17,7 @@ class CrmShell extends StatefulWidget {
 class _CrmShellState extends State<CrmShell> {
   int _index = 0;
 
-  static const _labels = ['Leads', 'Follow ups', 'Telecaller'];
+  static const _labels = ['Leads', 'Follow ups', 'Calls'];
 
   @override
   Widget build(BuildContext context) {

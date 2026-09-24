@@ -180,7 +180,7 @@ class ApiAuthService extends ChangeNotifier implements AuthService {
     final email = me['email'] as String? ?? '';
     _currentUser = AppUser(
       id: me['id'] as String?,
-      fullName: (name == null || name.isEmpty) ? email : name,
+      fullName: (name == null || name.isEmpty) ? '' : name,
       email: email,
     );
 
