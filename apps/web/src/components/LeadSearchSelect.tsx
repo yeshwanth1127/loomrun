@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Search, X } from 'lucide-react'
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { apiFetch } from '../lib/api'
 
 export type LeadOption = {
@@ -20,6 +21,8 @@ type Props = {
   placeholder?: string
 }
 
+type DropdownCoords = { top: number; left: number; width: number; maxHeight: number }
+
 export function LeadSearchSelect({
   orgId,
   value,
@@ -29,10 +32,12 @@ export function LeadSearchSelect({
 }: Props) {
   const listId = useId()
   const rootRef = useRef<HTMLDivElement>(null)
+  const dropdownRef = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [debouncedQuery, setDebouncedQuery] = useState('')
   const [selectedLead, setSelectedLead] = useState<LeadOption | null>(null)
+  const [coords, setCoords] = useState<DropdownCoords | null>(null)
 
   useEffect(() => {
     const t = window.setTimeout(() => setDebouncedQuery(query.trim()), 250)
@@ -80,15 +85,55 @@ export function LeadSearchSelect({
     },
   })
 
+  useLayoutEffect(() => {
+    if (!open || value) {
+      setCoords(null)
+      return
+    }
+
+    function updatePosition() {
+      const anchor = rootRef.current
+      if (!anchor) return
+      const rect = anchor.getBoundingClientRect()
+      const gap = 4
+      const spaceBelow = window.innerHeight - rect.bottom - gap - 12
+      const spaceAbove = rect.top - 12
+      const preferBelow = spaceBelow >= 160 || spaceBelow >= spaceAbove
+      const maxHeight = Math.max(120, Math.min(260, preferBelow ? spaceBelow : spaceAbove))
+      const top = preferBelow
+        ? rect.bottom + gap
+        : Math.max(12, rect.top - gap - maxHeight)
+      setCoords({
+        top,
+        left: rect.left,
+        width: rect.width,
+        maxHeight,
+      })
+    }
+
+    updatePosition()
+    window.addEventListener('resize', updatePosition)
+    // Capture scroll from modal/page so the menu stays aligned with the input.
+    window.addEventListener('scroll', updatePosition, true)
+    return () => {
+      window.removeEventListener('resize', updatePosition)
+      window.removeEventListener('scroll', updatePosition, true)
+    }
+  }, [open, value, query, leadsQ.dataUpdatedAt])
+
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
-      if (!rootRef.current?.contains(e.target as Node)) setOpen(false)
+      const target = e.target as Node
+      if (rootRef.current?.contains(target)) return
+      if (dropdownRef.current?.contains(target)) return
+      setOpen(false)
     }
     document.addEventListener('mousedown', onDocClick)
     return () => document.removeEventListener('mousedown', onDocClick)
   }, [])
 
   const items = leadsQ.data?.items ?? []
+  const showDropdown = open && !value && coords != null
 
   function pick(lead: LeadOption) {
     setSelectedLead(lead)
@@ -104,6 +149,47 @@ export function LeadSearchSelect({
     setDebouncedQuery('')
     onChange('', null)
   }
+
+  const dropdown = showDropdown
+    ? createPortal(
+        <div
+          ref={dropdownRef}
+          id={listId}
+          className="lead-search-dropdown lead-search-dropdown--portal"
+          role="listbox"
+          style={{
+            top: coords.top,
+            left: coords.left,
+            width: coords.width,
+            maxHeight: coords.maxHeight,
+          }}
+        >
+          {leadsQ.isLoading && <div className="lead-search-empty">Searching…</div>}
+          {leadsQ.error && (
+            <div className="lead-search-empty error">{(leadsQ.error as Error).message}</div>
+          )}
+          {!leadsQ.isLoading && !leadsQ.error && items.length === 0 && (
+            <div className="lead-search-empty">
+              {debouncedQuery ? 'No leads match your search.' : 'No leads found.'}
+            </div>
+          )}
+          {items.map((lead) => (
+            <button
+              key={lead.id}
+              type="button"
+              role="option"
+              className="lead-search-option"
+              onClick={() => pick(lead)}
+            >
+              <span className="lead-search-option-title">{lead.title}</span>
+              <span className="lead-search-option-meta">{lead.phone || 'No phone'}</span>
+              <span className="lead-search-option-meta">{lead.company || 'No company'}</span>
+            </button>
+          ))}
+        </div>,
+        document.body,
+      )
+    : null
 
   return (
     <div ref={rootRef} className="lead-search-select">
@@ -144,32 +230,7 @@ export function LeadSearchSelect({
         </div>
       )}
 
-      {open && !value && (
-        <div id={listId} className="lead-search-dropdown" role="listbox">
-          {leadsQ.isLoading && <div className="lead-search-empty">Searching…</div>}
-          {leadsQ.error && (
-            <div className="lead-search-empty error">{(leadsQ.error as Error).message}</div>
-          )}
-          {!leadsQ.isLoading && !leadsQ.error && items.length === 0 && (
-            <div className="lead-search-empty">
-              {debouncedQuery ? 'No leads match your search.' : 'No leads found.'}
-            </div>
-          )}
-          {items.map((lead) => (
-            <button
-              key={lead.id}
-              type="button"
-              role="option"
-              className="lead-search-option"
-              onClick={() => pick(lead)}
-            >
-              <span className="lead-search-option-title">{lead.title}</span>
-              <span className="lead-search-option-meta">{lead.phone || 'No phone'}</span>
-              <span className="lead-search-option-meta">{lead.company || 'No company'}</span>
-            </button>
-          ))}
-        </div>
-      )}
+      {dropdown}
     </div>
   )
 }

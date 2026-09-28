@@ -38,6 +38,34 @@ SOURCE_SCORES: dict[str, int] = {
     "OTHER": 10,
 }
 
+
+def _parse_lead_stage(stage: LeadStage | str) -> LeadStage:
+    """Coerce a stage arg to LeadStage, with a clear hint for factory stages."""
+    if isinstance(stage, LeadStage):
+        return stage
+    key = str(stage).strip().upper().replace(" ", "_").replace("-", "_")
+    if key in LeadStage.__members__:
+        return LeadStage[key]
+    from loomrun_api.services.production import looks_like_production_stage
+
+    if looks_like_production_stage(stage):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"'{stage}' is a factory/production stage, not a sales lead stage. "
+                "Use get_production_order or list_production_orders "
+                f"(factory_step={key}) instead. "
+                f"Lead stages are: {', '.join(LeadStage.__members__)}"
+            ),
+        )
+    raise HTTPException(
+        status.HTTP_400_BAD_REQUEST,
+        detail=(
+            f"Unknown stage '{stage}'. Valid stages: "
+            f"{', '.join(LeadStage.__members__)}"
+        ),
+    )
+
 _SOURCE_ALIASES: dict[str, str] = {
     "META": "META_ADS",
     "META_ADS": "META_ADS",
@@ -534,6 +562,21 @@ async def resolve_lead(*, organization_id: str, lead_id: str):
     if not needle:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="lead_id is required")
 
+    upper = needle.upper()
+    if upper.startswith(("ORD-", "Q-", "INV-")):
+        hint = (
+            "get_production_order"
+            if upper.startswith("ORD-")
+            else "get_quotation / delete_quotation"
+        )
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"'{needle}' is a document/order number, not a lead id or name. "
+                f"Use {hint} instead."
+            ),
+        )
+
     lead = await prisma.lead.find_first(
         where={"id": needle, "organizationId": organization_id}
     )
@@ -664,19 +707,7 @@ async def search_leads(
 ) -> dict[str, Any]:
     where: dict = {"organizationId": organization_id}
     if stage is not None:
-        if isinstance(stage, LeadStage):
-            where["stage"] = stage
-        else:
-            key = str(stage).strip().upper()
-            if key not in LeadStage.__members__:
-                raise HTTPException(
-                    status.HTTP_400_BAD_REQUEST,
-                    detail=(
-                        f"Unknown stage '{stage}'. Valid stages: "
-                        f"{', '.join(LeadStage.__members__)}"
-                    ),
-                )
-            where["stage"] = LeadStage[key]
+        where["stage"] = _parse_lead_stage(stage)
     if assignee_id is not None:
         where["assigneeId"] = assignee_id
     if search:
@@ -771,19 +802,7 @@ async def count_leads(
     """
     where: dict[str, Any] = {"organizationId": organization_id}
     if stage is not None:
-        if isinstance(stage, LeadStage):
-            where["stage"] = stage
-        else:
-            key = str(stage).strip().upper()
-            if key not in LeadStage.__members__:
-                raise HTTPException(
-                    status.HTTP_400_BAD_REQUEST,
-                    detail=(
-                        f"Unknown stage '{stage}'. Valid stages: "
-                        f"{', '.join(LeadStage.__members__)}"
-                    ),
-                )
-            where["stage"] = LeadStage[key]
+        where["stage"] = _parse_lead_stage(stage)
     apply_dates_unless_live(
         where,
         created_after=created_after,

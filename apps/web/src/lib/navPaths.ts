@@ -22,7 +22,8 @@ export const ORDERS_LEGACY_PATHS = ['/app/production'] as const
 export const MONEY_PATHS = ['/app/money'] as const
 export const MONEY_LEGACY_PATHS = ['/app/invoices', '/app/expenses', '/app/vendors'] as const
 
-export const HOME_PATHS = ['/app/home', '/app/ceo'] as const
+export const HOME_PATHS = ['/app/home'] as const
+export const BUSINESS_PATHS = ['/app/ceo'] as const
 
 export const SETTINGS_PATHS = ['/app/settings'] as const
 
@@ -48,6 +49,10 @@ export function isHomePath(pathname: string): boolean {
   return pathMatches(pathname, HOME_PATHS)
 }
 
+export function isBusinessPath(pathname: string): boolean {
+  return pathMatches(pathname, BUSINESS_PATHS)
+}
+
 export function isPipelinesPath(pathname: string): boolean {
   return (
     pathname === '/app/sales/organize' ||
@@ -62,6 +67,8 @@ export function isSalesPath(pathname: string): boolean {
   if (pathname.startsWith('/app/leads/connections')) return false
   // Organize/pipelines has its own sidebar item.
   if (isPipelinesPath(pathname)) return false
+  // Quotes belong under Money → Quotations in the sidebar.
+  if (isMoneyQuotationsPath(pathname)) return false
   return pathMatches(pathname, SALES_PATHS) || pathMatches(pathname, SALES_LEGACY_PATHS)
 }
 
@@ -71,4 +78,28 @@ export function isOrdersPath(pathname: string): boolean {
 
 export function isMoneyPath(pathname: string): boolean {
   return pathMatches(pathname, MONEY_PATHS) || pathMatches(pathname, MONEY_LEGACY_PATHS)
+}
+
+export function isMoneyQuotationsPath(pathname: string): boolean {
+  return (
+    pathname.startsWith('/app/money/quotations') ||
+    pathname.startsWith('/app/sales/quotes') ||
+    pathname.startsWith('/app/quotations')
+  )
+}
+
+export function isMoneyInvoicesPath(pathname: string): boolean {
+  return pathname.startsWith('/app/money/invoices') || pathname.startsWith('/app/invoices')
+}
+
+export function isMoneyExpensesPath(pathname: string): boolean {
+  return pathname.startsWith('/app/money/expenses') || pathname.startsWith('/app/expenses')
+}
+
+export function isMoneySuppliersPath(pathname: string): boolean {
+  return pathname.startsWith('/app/money/suppliers') || pathname.startsWith('/app/vendors')
+}
+
+export function isAiPath(pathname: string): boolean {
+  return pathname === '/app/ai' || pathname.startsWith('/app/ai/')
 }

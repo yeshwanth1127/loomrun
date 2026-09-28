@@ -53,6 +53,45 @@ ORDER_STATUSES = [s.name for s in OrderStatus]
 _TERMINAL_STAGES = {"SHIPPED", "DELIVERED"}
 _LOCKED_STATUSES = {"ON_HOLD", "CANCELLED", "COMPLETED"}
 
+# Human labels from the UI (and common variants) → enum names.
+_STAGE_ALIASES: dict[str, str] = {
+    "QUALITY_CHECK": "QC",
+    "QUALITY": "QC",
+    "READY_TO_DISPATCH": "READY_DISPATCH",
+    "READY_FOR_DISPATCH": "READY_DISPATCH",
+}
+
+
+def normalize_production_stage(stage: str | None) -> str | None:
+    """Map a factory-stage enum name or UI label to the ProductionStage key.
+
+    Returns None when the value is empty; raises when it is non-empty but unknown.
+    """
+    if stage is None:
+        return None
+    raw = str(stage).strip()
+    if not raw:
+        return None
+    key = raw.upper().replace(" ", "_").replace("-", "_")
+    key = _STAGE_ALIASES.get(key, key)
+    if key in STAGES:
+        return key
+    raise HTTPException(
+        status.HTTP_400_BAD_REQUEST,
+        detail=f"Unknown stage '{stage}'. Valid stages: {', '.join(STAGES)}",
+    )
+
+
+def looks_like_production_stage(stage: str | None) -> bool:
+    """True when `stage` is a factory step (enum or common UI label)."""
+    if stage is None:
+        return False
+    try:
+        return normalize_production_stage(stage) is not None
+    except HTTPException:
+        return False
+
+
 # Customer-facing milestones (collapsed from internal stages)
 CUSTOMER_MILESTONES: list[tuple[str, str]] = [
     ("CONFIRMED", "Order Confirmed"),
@@ -218,15 +257,45 @@ def order_card(r) -> dict[str, Any]:
 
 
 async def _require_order(*, organization_id: str, order_id: str):
-    """Find an order by its id, or by the lead it belongs to."""
+    """Find an order by cuid, ORD-… number, or the lead it belongs to."""
+    key = (order_id or "").strip()
+    if not key:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="order_id is required (order id, ORD-… number, or customer name)",
+        )
+
     row = await prisma.productionorder.find_first(
-        where={"id": order_id, "organizationId": organization_id},
+        where={"id": key, "organizationId": organization_id},
         include=_ORDER_INCLUDE,
     )
     if row:
         return row
+
+    # Ask AI / UI prompts pass human-facing numbers like ORD-2026-00001.
+    row = await prisma.productionorder.find_first(
+        where={
+            "organizationId": organization_id,
+            "orderNumber": {"equals": key, "mode": "insensitive"},
+        },
+        include=_ORDER_INCLUDE,
+    )
+    if row:
+        return row
+
+    upper = key.upper()
+    if upper.startswith("ORD-"):
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"No production order with number '{key}'. "
+                "Use list_production_orders to find the right ORD-… number, "
+                "or pass the customer/lead name instead."
+            ),
+        )
+
     # Callers naturally reach for the customer, not the order id.
-    lead = await resolve_lead(organization_id=organization_id, lead_id=order_id)
+    lead = await resolve_lead(organization_id=organization_id, lead_id=key)
     row = await prisma.productionorder.find_first(
         where={"leadId": lead.id, "organizationId": organization_id},
         include=_ORDER_INCLUDE,
@@ -261,12 +330,8 @@ async def list_production_orders(
 ) -> dict[str, Any]:
     where: dict[str, Any] = {"organizationId": organization_id}
     if stage:
-        key = str(stage).strip().upper()
-        if key not in STAGES:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                detail=f"Unknown stage '{stage}'. Valid stages: {', '.join(STAGES)}",
-            )
+        key = normalize_production_stage(stage)
+        assert key is not None
         where["stage"] = ProductionStage[key]
     if lead_id:
         where["leadId"] = lead_id
@@ -415,12 +480,8 @@ async def update_production_order(
     data: dict[str, Any] = {}
     new_stage = old_stage
     if stage is not None:
-        key = str(stage).strip().upper()
-        if key not in STAGES:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                detail=f"Unknown stage '{stage}'. Valid stages: {', '.join(STAGES)}",
-            )
+        key = normalize_production_stage(stage)
+        assert key is not None
         new_stage = key
         data["stage"] = ProductionStage[key]
         if key != old_stage:

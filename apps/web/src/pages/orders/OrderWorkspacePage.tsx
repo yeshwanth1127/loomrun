@@ -117,7 +117,7 @@ export function OrderWorkspacePage() {
     { key: 'design', label: 'Design', show: true },
     { key: 'production', label: 'Production', show: true },
     { key: 'shipping', label: 'Shipping', show: true },
-    { key: 'money', label: 'Money', show: canViewMoney },
+    { key: 'money', label: 'Finance', show: canViewMoney },
   ]
 
   return (
@@ -225,7 +225,7 @@ export function OrderWorkspacePage() {
             <Link
               className="quick-action-btn"
               to={routes.askAi(
-                `About order ${order.order_number} for ${orderTitle(order)} (stage ${STAGE_LABELS[order.stage] ?? order.stage}): what needs attention?`,
+                `About order ${order.order_number} for ${orderTitle(order)} (production stage ${order.stage}): what needs attention?`,
               )}
             >
               <Bot size={14} />

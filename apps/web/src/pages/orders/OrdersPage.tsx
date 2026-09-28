@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronRight, Plus, Wallet, Zap } from 'lucide-react'
 import type { FormEvent } from 'react'
-import { useDeferredValue, useEffect, useRef, useState } from 'react'
+import { useDeferredValue, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { LeadSearchSelect } from '../../components/LeadSearchSelect'
 import { EmptyState } from '../../components/ui/EmptyState'
 import { FilterToolbar } from '../../components/ui/FilterToolbar'
+import { Modal } from '../../components/ui/Modal'
 import { PageHeader } from '../../components/ui/PageHeader'
 import { TableSkeleton } from '../../components/ui/Skeleton'
 import {
@@ -73,15 +74,14 @@ export function OrdersPage() {
   const [showForm, setShowForm] = useState(false)
   const [leadId, setLeadId] = useState('')
   const [activityOpen, setActivityOpen] = useState(false)
-  const formRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!showForm) return
-    formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-  }, [showForm])
 
   function openNewOrderForm() {
     setShowForm(true)
+  }
+
+  function closeNewOrderForm() {
+    setShowForm(false)
+    setLeadId('')
   }
 
   function setShow(next: string) {
@@ -258,33 +258,6 @@ export function OrdersPage() {
           )}
         </div>
 
-        {isOwner && showForm && (
-          <div className="card" ref={formRef} style={{ maxWidth: 480 }}>
-            <div style={{ fontWeight: 700, marginBottom: '1rem' }}>Start a new order</div>
-            <form
-              className="stack"
-              onSubmit={(e: FormEvent) => {
-                e.preventDefault()
-                if (leadId) void create.mutateAsync()
-              }}
-            >
-              <div className="form-field">
-                <label className="input-label">Customer *</label>
-                <LeadSearchSelect orgId={orgId} value={leadId} required onChange={setLeadId} />
-              </div>
-              {create.error && <p className="error">{(create.error as Error).message}</p>}
-              <div className="row">
-                <button type="submit" className="btn" disabled={create.isPending}>
-                  {create.isPending ? 'Creating…' : 'Start order'}
-                </button>
-                <button type="button" className="btn btn-ghost" onClick={() => setShowForm(false)}>
-                  Cancel
-                </button>
-              </div>
-            </form>
-          </div>
-        )}
-
         {orders.length > 0 && (
           <InsightGrid>
             <InsightCard title="Where orders stand">
@@ -406,6 +379,32 @@ export function OrdersPage() {
           </div>
         )}
       </div>
+
+      {isOwner && (
+        <Modal open={showForm} onClose={closeNewOrderForm} title="Start a new order" size="sm">
+          <form
+            className="stack"
+            onSubmit={(e: FormEvent) => {
+              e.preventDefault()
+              if (leadId) void create.mutateAsync()
+            }}
+          >
+            <div className="form-field">
+              <label className="input-label">Customer *</label>
+              <LeadSearchSelect orgId={orgId} value={leadId} required onChange={setLeadId} />
+            </div>
+            {create.error && <p className="error">{(create.error as Error).message}</p>}
+            <div className="row" style={{ gap: '0.5rem', justifyContent: 'flex-end' }}>
+              <button type="button" className="btn btn-ghost" onClick={closeNewOrderForm}>
+                Cancel
+              </button>
+              <button type="submit" className="btn" disabled={create.isPending || !leadId}>
+                {create.isPending ? 'Creating…' : 'Start order'}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
     </>
   )
 }

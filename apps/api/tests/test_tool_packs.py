@@ -113,3 +113,53 @@ def test_delete_quotation_tool_registered():
     assert spec.kind == "write"
     assert spec.owner_only is True
     assert "quotation_id" in spec.parameters
+
+
+def test_order_ask_ai_prompt_gets_production_tools():
+    """UI Ask-AI deep-link must expose get_production_order, not leads-only."""
+    prompt = (
+        "About order ORD-2026-00001 for Raghu (production stage PROCUREMENT): "
+        "what needs attention?"
+    )
+    names = select_tool_names_for_message(prompt, mode="advanced", role="OWNER")
+    assert names is not None
+    assert "get_production_order" in names
+    assert "list_production_orders" in names
+
+
+def test_legacy_stage_label_order_prompt_still_gets_production():
+    prompt = (
+        "About order ORD-2026-00001 for Raghu (stage Procurement): "
+        "what needs attention?"
+    )
+    names = select_tool_names_for_message(prompt, mode="advanced", role="OWNER")
+    assert names is not None
+    assert "get_production_order" in names
+
+
+def test_cutting_stage_move_gets_production_not_only_leads():
+    names = select_tool_names_for_message(
+        "Move Shivu S to CUTTING stage — we started production for them.",
+        mode="advanced",
+        role="OWNER",
+    )
+    assert names is not None
+    assert "update_production_order" in names
+    assert "get_production_order" in names
+
+
+def test_get_production_order_docs_mention_ord_numbers():
+    spec = get_tool("get_production_order")
+    assert spec is not None
+    assert "ORD" in spec.description
+    assert "ORD" in (spec.parameters.get("order_id") or {}).get("description", "")
+
+
+def test_contacted_stage_question_still_gets_leads_pack():
+    names = select_tool_names_for_message(
+        "How many leads are in CONTACTED stage?",
+        mode="advanced",
+        role="OWNER",
+    )
+    assert names is not None
+    assert "count_leads" in names or "search_leads" in names

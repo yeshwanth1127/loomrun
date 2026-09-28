@@ -1,18 +1,23 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
+  BarChart3,
   Bot,
   Building2,
+  FileText,
   GitBranch,
   Home,
-  IndianRupee,
   LayoutDashboard,
   LogOut,
   Menu,
   Moon,
   Package,
+  Plug,
+  Receipt,
   Settings,
+  Store,
   Sun,
+  Wallet,
   X,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
@@ -31,8 +36,13 @@ import { routes } from '../lib/appRoutes'
 import { planBadgeClass } from '../lib/entitlements'
 import { isProductionRole, isTelecallerRole, membershipForOrg, roleLabel } from '../lib/membership'
 import {
+  isAiPath,
+  isBusinessPath,
   isHomePath,
-  isMoneyPath,
+  isMoneyExpensesPath,
+  isMoneyInvoicesPath,
+  isMoneyQuotationsPath,
+  isMoneySuppliersPath,
   isOrdersPath,
   isPipelinesPath,
   isSalesPath,
@@ -47,8 +57,19 @@ type OrgBrandMeta = {
   updated_at: string
 }
 
+type NavSectionId =
+  | 'overview'
+  | 'sales'
+  | 'orders'
+  | 'money'
+  | 'ai'
+  | 'analytics'
+  | 'settings'
+  | 'account'
+
 type PrimaryNavItem = {
   id: string
+  section: NavSectionId
   to: string
   icon: LucideIcon
   label: string
@@ -60,9 +81,32 @@ type PrimaryNavItem = {
   telecallerConnections?: boolean
 }
 
+const SECTION_ORDER: NavSectionId[] = [
+  'overview',
+  'sales',
+  'orders',
+  'money',
+  'ai',
+  'analytics',
+  'account',
+  'settings',
+]
+
+const SECTION_LABELS: Record<NavSectionId, string> = {
+  overview: 'Overview',
+  sales: 'Sales',
+  orders: 'Orders',
+  money: 'Money',
+  ai: 'AI',
+  analytics: 'Analytics',
+  account: 'Account',
+  settings: 'Settings',
+}
+
 const PRIMARY_NAV: PrimaryNavItem[] = [
   {
     id: 'home',
+    section: 'overview',
     to: routes.home,
     icon: Home,
     label: 'Home',
@@ -70,6 +114,7 @@ const PRIMARY_NAV: PrimaryNavItem[] = [
   },
   {
     id: 'sales',
+    section: 'sales',
     to: routes.sales(),
     icon: LayoutDashboard,
     label: 'Sales',
@@ -78,36 +123,85 @@ const PRIMARY_NAV: PrimaryNavItem[] = [
   },
   {
     id: 'pipelines',
+    section: 'sales',
     to: routes.salesOrganize,
     icon: GitBranch,
     label: 'Pipelines',
     match: isPipelinesPath,
   },
   {
+    id: 'my-connections',
+    section: 'account',
+    to: '/app/my-connections',
+    icon: Plug,
+    label: 'My Connections',
+    match: (pathname) => pathname.startsWith('/app/my-connections'),
+    telecallerConnections: true,
+  },
+  {
     id: 'orders',
+    section: 'orders',
     to: routes.orders(),
     icon: Package,
     label: 'Orders',
     match: isOrdersPath,
   },
   {
-    id: 'money',
-    to: routes.money(),
-    icon: IndianRupee,
-    label: 'Money',
-    match: isMoneyPath,
+    id: 'quotations',
+    section: 'money',
+    to: routes.money('quotations'),
+    icon: FileText,
+    label: 'Quotations',
+    match: isMoneyQuotationsPath,
     fullAccessOnly: true,
   },
   {
-    id: 'my-connections',
-    to: '/app/my-connections',
-    icon: Settings,
-    label: 'My Connections',
-    match: (pathname) => pathname.startsWith('/app/my-connections'),
-    telecallerConnections: true,
+    id: 'invoices',
+    section: 'money',
+    to: routes.money('invoices'),
+    icon: Receipt,
+    label: 'Invoices',
+    match: isMoneyInvoicesPath,
+    fullAccessOnly: true,
+  },
+  {
+    id: 'expenses',
+    section: 'money',
+    to: routes.money('expenses'),
+    icon: Wallet,
+    label: 'Expense',
+    match: isMoneyExpensesPath,
+    fullAccessOnly: true,
+  },
+  {
+    id: 'suppliers',
+    section: 'money',
+    to: routes.money('suppliers'),
+    icon: Store,
+    label: 'Suppliers',
+    match: isMoneySuppliersPath,
+    fullAccessOnly: true,
+  },
+  {
+    id: 'ai',
+    section: 'ai',
+    to: routes.ai,
+    icon: Bot,
+    label: 'Ask NoolRun AI',
+    match: isAiPath,
+  },
+  {
+    id: 'business',
+    section: 'analytics',
+    to: routes.business,
+    icon: BarChart3,
+    label: 'CEO Dashboard',
+    match: isBusinessPath,
+    fullAccessOnly: true,
   },
   {
     id: 'settings',
+    section: 'settings',
     to: routes.settings(),
     icon: Settings,
     label: 'Settings',
@@ -151,13 +245,19 @@ export function AppShell() {
       ),
     [hasFullAccess, isProduction, isTelecaller, isSales],
   )
+  const navSections = useMemo(() => {
+    return SECTION_ORDER.map((sectionId) => ({
+      id: sectionId,
+      label: SECTION_LABELS[sectionId],
+      items: visibleNav.filter((item) => item.section === sectionId),
+    })).filter((section) => section.items.length > 0)
+  }, [visibleNav])
   const orgName = membership?.organization?.name ?? ''
   const org = membership?.organization
   const trialExpired = !!org?.trial_expired
   const trialActive = !!org?.trial_active
   const trialDaysLeft = org?.days_left ?? null
   const settingsActive = isSettingsPath(location.pathname)
-  const aiActive = location.pathname === '/app/ai' || location.pathname.startsWith('/app/ai/')
   const onSpecialScrollPage =
     location.pathname === '/app/sales' ||
     location.pathname === '/app/home' ||
@@ -352,61 +452,58 @@ export function AppShell() {
         <GlobalSearch />
 
         <nav className="sidebar-nav" aria-label="Primary">
-          <div className="sidebar-section">
-            <div className="sidebar-group-items">
-              {visibleNav.map((item) => {
-                const Icon = item.icon
-                const active = item.match(location.pathname)
-                return (
-                  <NavLink
-                    key={item.id}
-                    to={item.to}
-                    end={item.id === 'home'}
-                    className={() => `nav-item${active ? ' active' : ''}`}
-                  >
-                    <Icon size={16} />
-                    <span style={{ flex: 1 }}>{item.label}</span>
-                    {item.badge === 'follow-ups' && dueCount > 0 && (
-                      <span
-                        className="badge badge-red"
-                        style={{
-                          marginLeft: 'auto',
-                          fontSize: '0.65rem',
-                          minWidth: '1.25rem',
-                          textAlign: 'center',
-                        }}
-                      >
-                        {dueCount > 99 ? '99+' : dueCount}
-                      </span>
-                    )}
-                  </NavLink>
-                )
-              })}
+          {navSections.map((section) => (
+            <div key={section.id} className="sidebar-section">
+              <div className="sidebar-section-label">{section.label}</div>
+              <div className="sidebar-group-items">
+                {section.items.map((item) => {
+                  const Icon = item.icon
+                  const active = item.match(location.pathname)
+                  return (
+                    <NavLink
+                      key={item.id}
+                      to={item.to}
+                      end={item.id === 'home'}
+                      className={() =>
+                        `nav-item${active ? ' active' : ''}${item.id === 'ai' ? ' nav-item-ai' : ''}`
+                      }
+                    >
+                      <Icon size={16} />
+                      <span style={{ flex: 1 }}>{item.label}</span>
+                      {item.badge === 'follow-ups' && dueCount > 0 && (
+                        <span
+                          className="badge badge-red"
+                          style={{
+                            marginLeft: 'auto',
+                            fontSize: '0.65rem',
+                            minWidth: '1.25rem',
+                            textAlign: 'center',
+                          }}
+                        >
+                          {dueCount > 99 ? '99+' : dueCount}
+                        </span>
+                      )}
+                    </NavLink>
+                  )
+                })}
+              </div>
             </div>
-          </div>
+          ))}
 
           {me.is_super_admin && (
-            <div className="sidebar-section" style={{ marginTop: '0.75rem' }}>
+            <div className="sidebar-section">
               <div className="sidebar-section-label">Platform</div>
-              <NavLink to="/platform" className="nav-item">
-                <Building2 size={16} />
-                Platform Admin
-              </NavLink>
+              <div className="sidebar-group-items">
+                <NavLink to="/platform" className="nav-item">
+                  <Building2 size={16} />
+                  Platform Admin
+                </NavLink>
+              </div>
             </div>
           )}
         </nav>
 
         <div className="sidebar-footer">
-          {/* Global / contextual AI entry — full AiChatPage capability preserved */}
-          <NavLink
-            to="/app/ai"
-            className={() => `nav-item nav-item-ai${aiActive ? ' active' : ''}`}
-            title="Ask Loomrun AI"
-          >
-            <Bot size={16} />
-            <span style={{ flex: 1 }}>Ask AI</span>
-          </NavLink>
-
           {membership?.organization?.plan && (
             <div
               className="row"

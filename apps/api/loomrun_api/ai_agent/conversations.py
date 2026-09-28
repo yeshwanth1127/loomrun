@@ -144,13 +144,17 @@ async def ensure_conversation(
     user_id: str,
     conversation_id: str | None,
 ) -> str:
+    """Return a conversation id for this org, creating one when needed.
+
+    A stale or cross-org id (common when the browser keeps the last chat across
+    org switches) must not block the turn — open a fresh thread instead.
+    """
     if conversation_id:
         row = await prisma.aiconversation.find_first(
             where={"id": conversation_id, "organizationId": organization_id},
         )
-        if not row:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Conversation not found")
-        return row.id
+        if row:
+            return row.id
     created = await create_conversation(organization_id=organization_id, user_id=user_id)
     return created["id"]
 

@@ -31,10 +31,17 @@ import {
 } from '../components/QlixActivation'
 import { applyCrmMutations, type CrmMutation } from '../lib/crmMutations'
 
-const CONV_STORAGE_KEY = 'loomrun.ai.conversation'
+// Legacy unscoped key — kept only so we can clear it after migrating to
+// per-org keys. Sharing one conversation id across orgs made every chat fail
+// with "Conversation not found" after switching company.
+const CONV_STORAGE_KEY_LEGACY = 'loomrun.ai.conversation'
 const ACTIVATION_SEEN_KEY = 'loomrun.ai.activationSeen'
 const HISTORY_STORAGE_KEY = 'loomrun.ai.history'
 const VOICE_STORAGE_KEY = 'loomrun.ai.voice'
+
+function convStorageKey(orgId: string) {
+  return `loomrun.ai.conversation.${orgId}`
+}
 // Fallback typewriter when a reply arrives in one piece (local agent).
 // One frame × ~32 ticks keeps the motion without the old ~20s crawl.
 const STREAM_TICK_MS = 16
@@ -166,6 +173,14 @@ function readStored(key: string): string | null {
 function writeStored(key: string, id: string) {
   try {
     localStorage.setItem(key, id)
+  } catch {
+    /* ignore */
+  }
+}
+
+function clearStored(key: string) {
+  try {
+    localStorage.removeItem(key)
   } catch {
     /* ignore */
   }
@@ -408,9 +423,7 @@ export function AiChatPage() {
   const [input, setInput] = useState(() => searchParams.get('ask') ?? '')
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [busyActionId, setBusyActionId] = useState<string | null>(null)
-  const [conversationId, setConversationId] = useState<string | null>(() =>
-    readStored(CONV_STORAGE_KEY),
-  )
+  const [conversationId, setConversationId] = useState<string | null>(null)
   const [voiceError, setVoiceError] = useState<string | null>(null)
   const [voiceEnabled, setVoiceEnabled] = useState(() => readStored(VOICE_STORAGE_KEY) === '1')
   const [convSearch, setConvSearch] = useState('')
@@ -470,6 +483,19 @@ export function AiChatPage() {
     voiceEnabledRef.current = voiceEnabled
   }, [voiceEnabled])
 
+  // Conversation ids are org-scoped. Restore the last thread for this org (and
+  // drop the old global key so a Fabblen chat id cannot poison Exora, etc.).
+  useEffect(() => {
+    if (!orgId) {
+      setConversationId(null)
+      return
+    }
+    clearStored(CONV_STORAGE_KEY_LEGACY)
+    const stored = readStored(convStorageKey(orgId))
+    setConversationId(stored)
+    setMessages([])
+  }, [orgId])
+
   const statusQ = useQuery({
     queryKey: ['ai-status', orgId],
     enabled: !!orgId,
@@ -495,6 +521,7 @@ export function AiChatPage() {
     enabled: !!orgId && !!conversationId,
     queryFn: () =>
       apiFetch<ConversationDetail>(`/v1/orgs/${orgId}/ai/conversations/${conversationId}`),
+    retry: false,
   })
 
   useEffect(() => {
@@ -509,6 +536,17 @@ export function AiChatPage() {
       }))
     setMessages(loaded)
   }, [conversationQ.data])
+
+  // Stale or cross-org ids 404; clear them so the next send opens a new thread.
+  useEffect(() => {
+    if (!conversationQ.isError || !orgId || !conversationId) return
+    const msg = (conversationQ.error as Error)?.message || ''
+    if (!/conversation not found/i.test(msg)) return
+    setConversationId(null)
+    conversationIdRef.current = null
+    setMessages([])
+    clearStored(convStorageKey(orgId))
+  }, [conversationQ.isError, conversationQ.error, orgId, conversationId])
 
   const qlix = statusQ.data?.qlix
   const qlixAvailable = qlix?.configured !== false
@@ -647,10 +685,10 @@ export function AiChatPage() {
           const event = raw as StreamEvent
           switch (event.type) {
             case 'start':
-              if (event.conversation_id) {
+              if (event.conversation_id && orgId) {
                 setConversationId(event.conversation_id)
                 conversationIdRef.current = event.conversation_id
-                writeStored(CONV_STORAGE_KEY, event.conversation_id)
+                writeStored(convStorageKey(orgId), event.conversation_id)
               }
               break
             case 'run':
@@ -755,6 +793,11 @@ export function AiChatPage() {
     },
     onError: (err: Error) => {
       setStreamingReply(null)
+      if (orgId && /conversation not found/i.test(err.message)) {
+        setConversationId(null)
+        conversationIdRef.current = null
+        clearStored(convStorageKey(orgId))
+      }
       setMessages((prev) => [...prev, { role: 'assistant', content: `Sorry — ${err.message}` }])
     },
   })
@@ -809,7 +852,7 @@ export function AiChatPage() {
       }),
     onSuccess: (data) => {
       setConversationId(data.id)
-      writeStored(CONV_STORAGE_KEY, data.id)
+      if (orgId) writeStored(convStorageKey(orgId), data.id)
       setMessages([])
       void queryClient.invalidateQueries({ queryKey: ['ai-conversations', orgId] })
     },
@@ -822,11 +865,7 @@ export function AiChatPage() {
       if (conversationId === id) {
         setConversationId(null)
         setMessages([])
-        try {
-          localStorage.removeItem(CONV_STORAGE_KEY)
-        } catch {
-          /* ignore */
-        }
+        if (orgId) clearStored(convStorageKey(orgId))
       }
       void queryClient.invalidateQueries({ queryKey: ['ai-conversations', orgId] })
     },
@@ -954,7 +993,7 @@ export function AiChatPage() {
 
   function selectConversation(id: string) {
     setConversationId(id)
-    writeStored(CONV_STORAGE_KEY, id)
+    if (orgId) writeStored(convStorageKey(orgId), id)
   }
 
   function onSubmit(e: FormEvent) {

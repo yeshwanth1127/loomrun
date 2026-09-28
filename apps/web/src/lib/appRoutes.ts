@@ -9,7 +9,7 @@
 export type SalesView = 'all' | 'new' | 'follow-ups' | 'quoted' | 'won' | 'lost' | 'calling'
 export type OrderTab = 'overview' | 'design' | 'production' | 'shipping' | 'money'
 export type OrdersFilter = 'active' | 'delayed' | 'on_hold' | 'shipped' | 'completed' | 'all'
-export type MoneyTab = 'invoices' | 'expenses' | 'suppliers' | 'quotations'
+export type MoneyTab = 'quotations' | 'invoices' | 'expenses' | 'suppliers'
 export type SettingsSection =
   'connections' | 'whatsapp' | 'calling' | 'brand' | 'documents' | 'team' | 'usage' | 'plan'
 

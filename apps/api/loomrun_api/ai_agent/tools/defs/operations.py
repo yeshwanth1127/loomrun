@@ -69,10 +69,16 @@ async def list_production_orders(
     description=(
         "WHEN: full details of one production order (stage, payments, expenses, "
         "P&L). NOT: a factory roster (list_production_orders) or a sales-stage "
-        "move (update_lead). NEEDS: order_id (order id or customer/lead name). "
+        "move (update_lead). NEEDS: order_id — prefer the human order number "
+        "(ORD-2026-00001), or the customer/lead name, or the internal id. "
         "Never ask the user for an internal id. RETURNS: the full order."
     ),
-    parameters={"order_id": {"type": "string", "description": "Order id, or the lead/company name"}},
+    parameters={
+        "order_id": {
+            "type": "string",
+            "description": "ORD-… number, order id, or lead/company name",
+        }
+    },
     kind="read",
     modes=("minimal", "advanced"),
     required=["order_id"],
@@ -116,10 +122,14 @@ async def create_production_order(
         "WHEN: advance a factory job (cutting, printing, stitching, QC, packing, "
         f"dispatch) or set delay/budget/name. Valid factory steps: {_STAGE_LIST}. "
         "NOT: sales pipeline stages NEW…WON/LOST (those are update_lead). NEEDS: "
-        "order_id (id or customer/lead name). Never ask the user for an internal id."
+        "order_id — prefer ORD-… number, or customer/lead name, or internal id. "
+        "Never ask the user for an internal id."
     ),
     parameters={
-        "order_id": {"type": "string", "description": "Order id, or the lead/company name"},
+        "order_id": {
+            "type": "string",
+            "description": "ORD-… number, order id, or lead/company name",
+        },
         "factory_step": {
             "type": "string",
             "description": f"New factory-floor step: {_STAGE_LIST}",

@@ -157,7 +157,7 @@ export function OrderOverviewTab({
       {(isOwner || canViewMoney) && (
         <div className="card">
           <div className="card-title-row">
-            <strong>Money</strong>
+            <strong>Finance</strong>
             <button
               type="button"
               className="btn btn-sm btn-ghost"
