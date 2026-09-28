@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
 
+from loomrun_api.call_outcomes import is_follow_up_outcome
 from loomrun_api.date_filter import apply_created_at, apply_recorded_at, parse_day_param
 from loomrun_api.deps import OrgContext, require_roles
 from loomrun_api.pnl import compute_pnl
@@ -13,6 +14,39 @@ from prisma.enums import LeadStage, PaymentStatus, ProductionActivityType, Quota
 router = APIRouter()
 
 HOT_VALUE_THRESHOLD = 10_000.0
+
+
+async def _count_active_followups(
+    *, organization_id: str, before: datetime | None = None, day: str | None = None
+) -> int:
+    """Count follow-ups using the same latest-call rule as the Sales screen."""
+    follow_up_filter: dict = {"not": None}
+    if before is not None:
+        follow_up_filter = {"lt": before}
+    where: dict = {
+        "organizationId": organization_id,
+        "nextFollowUpAt": follow_up_filter,
+    }
+    apply_created_at(where, day)
+    leads = await prisma.lead.find_many(where=where)
+    if not leads:
+        return 0
+
+    calls = await prisma.telecallercalllog.find_many(
+        where={
+            "organizationId": organization_id,
+            "leadId": {"in": [lead.id for lead in leads]},
+        },
+        order={"createdAt": "desc"},
+    )
+    latest_outcome: dict[str, object] = {}
+    for call in calls:
+        latest_outcome.setdefault(call.leadId, call.outcome)
+    return sum(
+        1
+        for lead in leads
+        if lead.id in latest_outcome and is_follow_up_outcome(latest_outcome[lead.id])
+    )
 
 
 @router.get("/orgs/{org_id}/dashboard/ceo")
@@ -46,21 +80,8 @@ async def build_ceo_dashboard(*, organization_id: str, day: str | None = None) -
         pending_quotations = await prisma.quotation.count(
             where={"organizationId": oid, "status": QuotationStatus.SENT},
         )
-        delayed_followups = await prisma.lead.count(
-            where={
-                "organizationId": oid,
-                "nextFollowUpAt": {"lt": overdue_cutoff},
-                "stage": {
-                    "in": [
-                        LeadStage.NEW,
-                        LeadStage.CONTACTED,
-                        LeadStage.QUALIFICATION,
-                        LeadStage.QUOTATION,
-                        LeadStage.NEGOTIATION,
-                        LeadStage.SAMPLE,
-                    ]
-                },
-            },
+        delayed_followups = await _count_active_followups(
+            organization_id=oid, before=overdue_cutoff
         )
         orders = await prisma.productionorder.find_many(
             where={"organizationId": oid},
@@ -87,22 +108,9 @@ async def build_ceo_dashboard(*, organization_id: str, day: str | None = None) -
         apply_created_at(quote_where, day)
         pending_quotations = await prisma.quotation.count(where=quote_where)
 
-        followup_where: dict = {
-            "organizationId": oid,
-            "nextFollowUpAt": {"lt": day_rng[1]},
-            "stage": {
-                "in": [
-                    LeadStage.NEW,
-                    LeadStage.CONTACTED,
-                    LeadStage.QUALIFICATION,
-                    LeadStage.QUOTATION,
-                    LeadStage.NEGOTIATION,
-                    LeadStage.SAMPLE,
-                ]
-            },
-        }
-        apply_created_at(followup_where, day)
-        delayed_followups = await prisma.lead.count(where=followup_where)
+        delayed_followups = await _count_active_followups(
+            organization_id=oid, before=day_rng[1], day=day
+        )
 
         prod_where: dict = {"organizationId": oid}
         apply_created_at(prod_where, day)
@@ -168,9 +176,7 @@ async def build_ceo_dashboard(*, organization_id: str, day: str | None = None) -
     apply_created_at(leads_where, day)
     total_leads = await prisma.lead.count(where=leads_where)
 
-    followups_where: dict = {"organizationId": oid, "nextFollowUpAt": {"not": None}}
-    apply_created_at(followups_where, day)
-    follow_ups = await prisma.lead.count(where=followups_where)
+    follow_ups = await _count_active_followups(organization_id=oid, day=day)
 
     def _estimated_value_cents(leads: list) -> int:
         total = 0

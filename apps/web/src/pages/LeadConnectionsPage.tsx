@@ -884,7 +884,7 @@ export function LeadConnectionsPage() {
     <PageHeader title="Integrations" description="Select an organization." />
   )
 
-  const items = q.data?.items ?? []
+  const items = q.data?.items.filter((item) => item.source_name !== 'MANUAL') ?? []
   const automations = automationsQ.data?.items ?? []
   const n8nUrl = automationsQ.data?.n8n_url ?? null
   const automationItem: AutomationItem | undefined = automations[0]
