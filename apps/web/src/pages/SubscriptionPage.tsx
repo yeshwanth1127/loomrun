@@ -145,7 +145,7 @@ export function SubscriptionPage() {
                   limit={data.usage.whatsapp_outbound.limit}
                 />
                 <div className="muted small">
-                  Loomrun AI usage is on{' '}
+                  Noolrun AI usage is on{' '}
                   <Link to={routes.settings('usage')}>Settings → Usage</Link>
                   {' · '}
                   Leads: {data.leads.used}
@@ -226,7 +226,7 @@ export function SubscriptionPage() {
 
             <p className="muted small">
               Need AI assistance?{' '}
-              <Link to="/app/ai">Open Loomrun AI</Link>
+              <Link to="/app/ai">Open Noolrun AI</Link>
               {' · '}
               Questions: {data.upgrade.contact_email}
             </p>

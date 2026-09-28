@@ -80,7 +80,7 @@ export function UsagePage() {
     <>
       <PageHeader
         title="Usage"
-        description="How much of your included Loomrun AI and messaging capacity you’ve used"
+        description="How much of your included Noolrun AI and messaging capacity you’ve used"
       />
 
       <div className="page-body stack" style={{ gap: '1.25rem', maxWidth: 640 }}>
@@ -92,7 +92,7 @@ export function UsagePage() {
             <div className="card">
               <div className="row" style={{ gap: '0.5rem', alignItems: 'center', marginBottom: '1rem' }}>
                 <Bot size={18} />
-                <strong>Loomrun AI</strong>
+                <strong>Noolrun AI</strong>
                 {data.ai_mode !== 'disabled' && (
                   <span className="badge badge-slate" style={{ marginLeft: 4 }}>{data.ai_mode}</span>
                 )}

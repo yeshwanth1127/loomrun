@@ -409,7 +409,7 @@ export function CEODashboardPage() {
         }
         actions={
           <Link to="/app/ai" className="btn btn-secondary btn-sm">
-            <Sparkles size={14} /> Ask Loomrun AI
+            <Sparkles size={14} /> Ask Noolrun AI
           </Link>
         }
       />
@@ -659,7 +659,7 @@ export function CEODashboardPage() {
                           : 'Follow-ups are on track. Keep converting quotations to orders.'}
                       </p>
                       <Link to="/app/ai" className="btn btn-sm" style={{ marginTop: '0.75rem' }}>
-                        Ask Loomrun AI
+                        Ask Noolrun AI
                       </Link>
                     </div>
                   </div>

@@ -4,7 +4,7 @@ import { routes } from '../../lib/appRoutes'
 const TABS: Array<{ to: string; label: string; hint: string }> = [
   { to: routes.money('quotations'), label: 'Quotations', hint: 'Quotes sent to customers' },
   { to: routes.money('invoices'), label: 'Invoices', hint: 'What customers owe you' },
-  { to: routes.money('expenses'), label: 'Costs', hint: 'What you spent' },
+  { to: routes.money('expenses'), label: 'Expenses', hint: 'What you spent' },
   { to: routes.money('suppliers'), label: 'Suppliers', hint: 'Who you pay' },
 ]
 

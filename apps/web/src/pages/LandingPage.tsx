@@ -603,7 +603,7 @@ export function LandingPage() {
                 <li>Unlimited users</li>
                 <li>Telecaller queue and call logging</li>
                 <li>CEO dashboard and daily report</li>
-                <li>Loomrun AI agent</li>
+                <li>Noolrun AI agent</li>
                 <li>Priority support and onboarding</li>
               </ul>
             </div>

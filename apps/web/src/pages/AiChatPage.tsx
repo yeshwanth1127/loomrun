@@ -1046,7 +1046,7 @@ export function AiChatPage() {
         >
           <div>
             <h1>
-              Loomrun AI
+              Noolrun AI
               {status && <span className="page-title-badge">{aiModeLabel(status.mode)}</span>}
             </h1>
             <p>
@@ -1077,7 +1077,7 @@ export function AiChatPage() {
               style={{ gap: '0.5rem', alignItems: 'center', marginBottom: '0.5rem' }}
             >
               <Sparkles size={18} />
-              <strong>Upgrade to continue with Loomrun AI</strong>
+              <strong>Upgrade to continue with Noolrun AI</strong>
             </div>
             <p className="muted small" style={{ marginBottom: '1rem' }}>
               Your free trial has ended. Growth includes basic AI Q&amp;A; Scale includes advanced
@@ -1496,7 +1496,7 @@ export function AiChatPage() {
                         ? voiceEnabled
                           ? 'Ask, command, or tap the mic…'
                           : 'Ask or command…'
-                        : 'Message Loomrun AI…'
+                        : 'Message Noolrun AI…'
                   }
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
