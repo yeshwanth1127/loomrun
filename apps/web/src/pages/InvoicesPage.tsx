@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, FileText, IndianRupee, Plus } from 'lucide-react'
+import { ArrowLeft, FileText, IndianRupee, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useDateFilter } from '../context/DateFilterContext'
 import { EmptyState } from '../components/ui/EmptyState'
 import { PageHeader } from '../components/ui/PageHeader'
+import { Modal } from '../components/ui/Modal'
 import { DonutChart, DonutLegend, InsightCard, InsightGrid, MetricCard } from '../components/ui/dashboard'
 import { apiFetch } from '../lib/api'
 import { routes } from '../lib/appRoutes'
@@ -69,6 +70,7 @@ export function InvoicesPage() {
   const [showNew, setShowNew] = useState(false)
   const [newLead, setNewLead] = useState<LeadOption | null>(null)
   const [sourceQuoteId, setSourceQuoteId] = useState('')
+  const [deletingInvoice, setDeletingInvoice] = useState<Invoice | null>(null)
 
   const q = useQuery({
     queryKey: ['invoices', orgId, dayParam],
@@ -129,6 +131,19 @@ export function InvoicesPage() {
     },
     onError: (err: Error) => toast.error(err.message),
   })
+
+  const deleteInvoice = useMutation({
+    mutationFn: (invoice: Invoice) =>
+      apiFetch<void>(`/v1/orgs/${orgId}/quotations/${invoice.id}`, { method: 'DELETE' }),
+    onSuccess: async (_data, invoice) => {
+      toast.success(`Invoice ${invoice.invoice_number} deleted`)
+      setDeletingInvoice(null)
+      await qc.invalidateQueries({ queryKey: ['invoices', orgId] })
+      await qc.invalidateQueries({ queryKey: ['quotations', orgId] })
+    },
+    onError: (err: Error) => toast.error(err.message || 'Failed to delete invoice'),
+  })
+
 
   if (!orgId) return (
     <PageHeader title="Invoices" description="Select an organization." />
@@ -422,19 +437,69 @@ export function InvoicesPage() {
                         </span>
                       )}
                     </div>
-                    <button
-                      type="button"
-                      className="btn btn-sm"
-                      onClick={() => navigate(routes.moneyInvoiceDoc(inv.id))}
-                    >
-                      Open
-                    </button>
+                    <div className="row" style={{ gap: '0.4rem', flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={() => navigate(routes.moneyInvoiceDoc(inv.id))}
+                      >
+                        Open
+                      </button>
+                      {isOwner && (
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-ghost"
+                          aria-label={`Delete invoice ${inv.invoice_number}`}
+                          onClick={() => setDeletingInvoice(inv)}
+                        >
+                          <Trash2 size={14} />
+                          Delete
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               ))
             )}
           </div>
         )}
+
+        <Modal
+          open={!!deletingInvoice}
+          onClose={() => {
+            if (!deleteInvoice.isPending) setDeletingInvoice(null)
+          }}
+          title="Delete invoice?"
+          size="sm"
+          closeOnBackdrop={!deleteInvoice.isPending}
+          footer={
+            <>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                disabled={deleteInvoice.isPending}
+                onClick={() => setDeletingInvoice(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                disabled={deleteInvoice.isPending || !deletingInvoice}
+                onClick={() => deletingInvoice && deleteInvoice.mutate(deletingInvoice)}
+              >
+                <Trash2 size={14} />
+                {deleteInvoice.isPending ? 'Deleting…' : 'Delete invoice'}
+              </button>
+            </>
+          }
+        >
+          <p className="muted small">
+            {deletingInvoice
+              ? `${deletingInvoice.invoice_number} and its PDF will be permanently deleted. Production records will remain.`
+              : ''}
+          </p>
+        </Modal>
 
         {showNew && isOwner && (
           <div className="drawer-overlay" onClick={() => setShowNew(false)}>

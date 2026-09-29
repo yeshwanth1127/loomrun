@@ -112,6 +112,9 @@ type CEO = {
     }>
   }
   collections_pending: { count: number }
+  vendor_payables: { amount_cents: number; vendor_count: number; expense_count: number }
+  client_receivables: { amount_cents: number; client_count: number }
+  pipeline_open_total: { amount_cents: number; lead_count: number }
   telecaller_today: { calls: number }
   stage_changes_today: { count: number }
   job_cost_total: { amount_cents: number }
@@ -441,47 +444,60 @@ export function CEODashboardPage() {
               </div>
             )}
 
-            {/* Briefing KPIs — always visible */}
+            {/* Executive KPIs — always visible */}
             <div className="ceo-band">
               <Stat
-                label="Follow-ups due"
-                value={d.delayed_followups.count}
-                hint={d.delayed_followups.count > 0 ? `Overdue > ${d.delayed_followups.overdue_days} days` : 'On track'}
-                tone={d.delayed_followups.count > 0 ? 'bad' : 'ok'}
-                to="/app/leads/follow-ups"
-              />
-              <Stat
-                label="Delayed orders"
-                value={d.order_health?.delayed ?? 0}
-                hint={(d.order_health?.delayed ?? 0) > 0 ? 'Past expected dispatch' : 'All on track'}
-                tone={(d.order_health?.delayed ?? 0) > 0 ? 'bad' : 'ok'}
+                label="Revenue"
+                value={fmtINR(ov?.revenue_cents ?? 0)}
+                hint={`${ov?.jobs_with_revenue ?? 0} revenue-generating orders`}
+                tone="ok"
                 to="/app/production"
               />
               <Stat
-                label="Collections"
-                value={d.collections_pending.count}
-                hint={d.collections_pending.count > 0 ? 'Unpaid after dispatch' : 'Caught up'}
-                tone={d.collections_pending.count > 0 ? 'warn' : 'ok'}
-                to="/app/production"
+                label="Total leads"
+                value={d.total_leads.count}
+                hint={`${d.follow_ups.count} currently in follow-up`}
+                to="/app/leads"
               />
               <Stat
-                label="Win rate"
-                value={winRate?.percent == null ? '—' : `${winRate.percent}%`}
-                hint={(winRate?.closed_count ?? 0) === 0 ? 'No closed deals yet' : `${winRate?.closed_count} closed`}
-                tone={winRate?.percent == null ? undefined : winRate.percent >= 50 ? 'ok' : 'warn'}
+                label="Deals won"
+                value={d.deals_won.count}
+                hint={`${fmtINR(d.deals_won.value_cents)} total value`}
+                tone="ok"
+                to="/app/leads"
               />
               <Stat
-                label="Margin"
-                value={fmtINR(ov?.margin_cents ?? d.margin_aggregate?.amount_cents ?? 0)}
-                hint={ov ? `${ov.client_count} clients in production` : `Across ${d.margin_aggregate?.jobs_with_revenue ?? 0} jobs`}
-                tone={(ov?.margin_cents ?? d.margin_aggregate?.amount_cents ?? 0) < 0 ? 'bad' : 'ok'}
-                to="/app/production"
+                label="Deals lost"
+                value={d.deals_lost.count}
+                hint={`${fmtINR(d.deals_lost.value_cents)} total value`}
+                tone={d.deals_lost.count > 0 ? 'bad' : undefined}
+                to="/app/leads"
+              />
+              <Stat
+                label="Vendor payables"
+                value={fmtINR(d.vendor_payables.amount_cents)}
+                hint={`${d.vendor_payables.vendor_count} vendors · ${d.vendor_payables.expense_count} bills`}
+                tone={d.vendor_payables.amount_cents > 0 ? 'warn' : 'ok'}
+                to="/app/vendors"
+              />
+              <Stat
+                label="Client receivables"
+                value={fmtINR(d.client_receivables.amount_cents)}
+                hint={`${d.client_receivables.client_count} clients outstanding`}
+                tone={d.client_receivables.amount_cents > 0 ? 'warn' : 'ok'}
+                to="/app/invoices"
+              />
+              <Stat
+                label="Pipeline value"
+                value={fmtINR(d.pipeline_open_total.amount_cents)}
+                hint={`${d.pipeline_open_total.lead_count} open opportunities`}
+                to="/app/leads"
               />
               <Stat
                 label="Active orders"
                 value={d.order_health?.active ?? 0}
-                hint={`${d.order_health?.on_hold ?? 0} on hold · ${totalOrders} in pipeline`}
-                tone="ok"
+                hint={`${d.order_health?.on_hold ?? 0} on hold · ${d.order_health?.delayed ?? 0} delayed`}
+                tone={(d.order_health?.delayed ?? 0) > 0 ? 'warn' : 'ok'}
                 to="/app/production"
               />
             </div>

@@ -16,6 +16,7 @@ import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useAgentActivity } from '../context/AgentActivityContext'
 import { AgentActivityTrace } from '../components/AgentActivityTrace'
+import { AiSpeedDials } from '../components/AiSpeedDials'
 import { useAuth } from '../context/AuthContext'
 import { useDateFilter } from '../context/DateFilterContext'
 import { useSpeechSynthesis } from '../hooks/useSpeechSynthesis'
@@ -1475,6 +1476,12 @@ export function AiChatPage() {
                 {voiceError && <p className="error">{voiceError}</p>}
                 <div ref={bottomRef} />
               </div>
+
+              <AiSpeedDials
+                orgId={orgId!}
+                disabled={chat.isPending || !!streamingReply || speech.listening}
+                onSend={sendMessage}
+              />
 
               <form
                 onSubmit={onSubmit}

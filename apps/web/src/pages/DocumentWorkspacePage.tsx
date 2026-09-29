@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Download, History, Pencil, Save, Send, X } from 'lucide-react'
+import { ArrowLeft, Download, History, Pencil, Save, Send, Trash2, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
+import { Modal } from '../components/ui/Modal'
 import { useAuth } from '../context/AuthContext'
 import { apiFetch, apiFetchBlob } from '../lib/api'
 import { routes } from '../lib/appRoutes'
@@ -44,6 +45,7 @@ export function DocumentWorkspacePage({
   const [taxRate, setTaxRate] = useState('18')
   const [showVersions, setShowVersions] = useState(false)
   const [viewingVersion, setViewingVersion] = useState<DocVersion | null>(null)
+  const [deleteOpen, setDeleteOpen] = useState(false)
 
   const detailQ = useQuery({
     queryKey: ['quotation-doc', orgId, quotationId],
@@ -219,6 +221,23 @@ export function DocumentWorkspacePage({
     onError: (err: Error) => toast.error(err.message),
   })
 
+  const deleteDocument = useMutation({
+    mutationFn: () =>
+      apiFetch<void>(`/v1/orgs/${orgId}/quotations/${quotationId}`, { method: 'DELETE' }),
+    onSuccess: async () => {
+      toast.success(`${isInvoice ? 'Invoice' : 'Quotation'} deleted`)
+      setDeleteOpen(false)
+      await qc.invalidateQueries({ queryKey: ['quotations', orgId] })
+      await qc.invalidateQueries({ queryKey: ['invoices', orgId] })
+      navigate(
+        isInvoice
+          ? routes.moneyInvoices(doc?.lead_id)
+          : routes.moneyQuotations(doc?.lead_id),
+      )
+    },
+    onError: (err: Error) => toast.error(err.message || 'Failed to delete document'),
+  })
+
   async function downloadPdf() {
     if (!orgId || !quotationId || !doc) return
     try {
@@ -379,6 +398,17 @@ export function DocumentWorkspacePage({
           )}
           {!isHistorical && (
             <>
+              {isOwner && !editing && (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  disabled={deleteDocument.isPending}
+                  onClick={() => setDeleteOpen(true)}
+                >
+                  <Trash2 size={14} />
+                  Delete
+                </button>
+              )}
               <button
                 type="button"
                 className="btn btn-secondary btn-sm"
@@ -418,6 +448,43 @@ export function DocumentWorkspacePage({
           )}
         </div>
       </header>
+
+      <Modal
+        open={deleteOpen}
+        onClose={() => {
+          if (!deleteDocument.isPending) setDeleteOpen(false)
+        }}
+        title={`Delete ${isInvoice ? 'invoice' : 'quotation'}?`}
+        size="sm"
+        closeOnBackdrop={!deleteDocument.isPending}
+        footer={
+          <>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              disabled={deleteDocument.isPending}
+              onClick={() => setDeleteOpen(false)}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-danger"
+              disabled={deleteDocument.isPending}
+              onClick={() => deleteDocument.mutate()}
+            >
+              <Trash2 size={14} />
+              {deleteDocument.isPending ? 'Deleting…' : `Delete ${isInvoice ? 'invoice' : 'quotation'}`}
+            </button>
+          </>
+        }
+      >
+        <p className="muted small">
+          {isInvoice
+            ? `${doc.invoice_number ?? doc.number} and its PDF will be permanently deleted. Production records will remain.`
+            : `${doc.number} will be permanently deleted. Existing invoices and production orders will remain.`}
+        </p>
+      </Modal>
 
       {showVersions && (
         <div className="drawer-overlay" onClick={() => setShowVersions(false)}>

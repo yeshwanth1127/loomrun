@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Download, FileText, Plus, ShieldCheck, TrendingUp } from 'lucide-react'
+import { ArrowLeft, Download, FileText, Plus, ShieldCheck, Trash2, TrendingUp } from 'lucide-react'
 import type { FormEvent } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
@@ -15,6 +15,7 @@ import { DonutChart, DonutLegend, InsightCard, InsightGrid, MetricCard } from '.
 import { toast } from 'sonner'
 import { groupDocsByLead, type QuotationDoc } from '../lib/documents'
 import { fmtINR } from '../lib/format'
+import { isOwnerRole, membershipForOrg } from '../lib/membership'
 
 type Lead = { id: string; title: string; phone?: string | null; email?: string | null; company?: string | null }
 type CatalogItem = {
@@ -123,7 +124,9 @@ function quotationDisplayName(q: Pick<Quotation, 'title' | 'number' | 'invoice_n
 }
 
 export function QuotationsPage() {
-  const { orgId } = useAuth()
+  const { orgId, me } = useAuth()
+  const membership = membershipForOrg(me, orgId)
+  const isOwner = isOwnerRole(membership) || !!me?.is_super_admin
   const { dayParam, appendDay, isAll } = useDateFilter()
   const qc = useQueryClient()
   const location = useLocation()
@@ -146,6 +149,7 @@ export function QuotationsPage() {
   const previewUrlRef = useRef<string | null>(null)
   const [renamingQuotation, setRenamingQuotation] = useState<Quotation | null>(null)
   const [renameTitle, setRenameTitle] = useState('')
+  const [deletingQuotation, setDeletingQuotation] = useState<Quotation | null>(null)
 
   useEffect(() => {
     const state = location.state as { leadId?: string; openForm?: boolean } | null
@@ -359,6 +363,19 @@ export function QuotationsPage() {
     },
     onError: (err: Error) => toast.error(err.message || 'Failed to rename'),
   })
+
+  const deleteQuotation = useMutation({
+    mutationFn: (quotation: Quotation) =>
+      apiFetch<void>(`/v1/orgs/${orgId}/quotations/${quotation.id}`, { method: 'DELETE' }),
+    onSuccess: async (_data, quotation) => {
+      toast.success(`Quotation ${quotation.number} deleted`)
+      setDeletingQuotation(null)
+      await qc.invalidateQueries({ queryKey: ['quotations', orgId] })
+      await qc.invalidateQueries({ queryKey: ['invoices', orgId] })
+    },
+    onError: (err: Error) => toast.error(err.message || 'Failed to delete quotation'),
+  })
+
 
   if (!orgId) return (
     <PageHeader title="Quotations" description="Select an organization." />
@@ -745,6 +762,17 @@ export function QuotationsPage() {
                           Create invoice
                         </button>
                       ) : null}
+                      {isOwner && (
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-ghost"
+                          aria-label={`Delete quotation ${x.number}`}
+                          onClick={() => setDeletingQuotation(x)}
+                        >
+                          <Trash2 size={14} />
+                          Delete
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1065,6 +1093,43 @@ export function QuotationsPage() {
             </div>
           </div>
         )}
+      </Modal>
+
+      <Modal
+        open={!!deletingQuotation}
+        onClose={() => {
+          if (!deleteQuotation.isPending) setDeletingQuotation(null)
+        }}
+        title="Delete quotation?"
+        size="sm"
+        closeOnBackdrop={!deleteQuotation.isPending}
+        footer={
+          <>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              disabled={deleteQuotation.isPending}
+              onClick={() => setDeletingQuotation(null)}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-danger"
+              disabled={deleteQuotation.isPending || !deletingQuotation}
+              onClick={() => deletingQuotation && deleteQuotation.mutate(deletingQuotation)}
+            >
+              <Trash2 size={14} />
+              {deleteQuotation.isPending ? 'Deleting…' : 'Delete quotation'}
+            </button>
+          </>
+        }
+      >
+        <p className="muted small">
+          {deletingQuotation
+            ? `${deletingQuotation.number} will be permanently deleted. Existing invoices and production orders will remain.`
+            : ''}
+        </p>
       </Modal>
 
       <Modal

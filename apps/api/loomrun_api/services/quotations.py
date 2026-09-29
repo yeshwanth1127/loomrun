@@ -327,6 +327,8 @@ async def delete_quotation(*, organization_id: str, quotation_id: str) -> dict[s
     because that relation does not cascade.
     """
     q = await resolve_quotation(organization_id=organization_id, quotation_id=quotation_id)
+    source_quotation_id = getattr(q, "sourceQuotationId", None)
+    is_invoice = bool(getattr(q, "invoiceNumber", None))
     if q.pdfUrl:
         path = settings.storage_dir / q.pdfUrl
         if path.is_file():
@@ -337,6 +339,23 @@ async def delete_quotation(*, organization_id: str, quotation_id: str) -> dict[s
         data={"quotationId": None},
     )
     await prisma.quotation.delete(where={"id": q.id})
+
+    # If the last derived invoice is removed, restore the source quotation to an
+    # actionable state instead of leaving it permanently marked as INVOICED.
+    if is_invoice and source_quotation_id:
+        remaining_invoices = await prisma.quotation.count(
+            where={
+                "organizationId": organization_id,
+                "sourceQuotationId": source_quotation_id,
+                "invoiceNumber": {"not": None},
+            }
+        )
+        if remaining_invoices == 0:
+            await prisma.quotation.update_many(
+                where={"id": source_quotation_id, "organizationId": organization_id},
+                data={"status": QuotationStatus.ACCEPTED},
+            )
+
     org_events.record_changed(
         organization_id=organization_id,
         entity_type=org_events.qlix_docs.ENTITY_QUOTATION,

@@ -6466,3 +6466,138 @@ textarea.input:focus {
     grid-template-columns: 1fr;
   }
 }
+
+/* AI Quick Questions — personal numbered prompt shortcuts. */
+.ai-speed-dials {
+  padding: 0.65rem 1rem;
+  border-top: 1px solid var(--border, #e2e8f0);
+  background: color-mix(in srgb, var(--card, #fff) 92%, var(--primary, #0f766e) 8%);
+}
+
+.ai-speed-dials__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.55rem;
+  font-size: 0.82rem;
+}
+
+.ai-speed-dials__items {
+  display: flex;
+  gap: 0.45rem;
+  overflow-x: auto;
+  padding-bottom: 0.1rem;
+  scrollbar-width: thin;
+}
+
+.ai-speed-dial {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex: 0 0 auto;
+  min-height: 2.25rem;
+  padding: 0.35rem 0.7rem 0.35rem 0.4rem;
+  border: 1px solid var(--border, #dbe2ea);
+  border-radius: 999px;
+  background: var(--card, #fff);
+  color: var(--foreground, #1e293b);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+}
+
+.ai-speed-dial:hover:not(:disabled) {
+  border-color: var(--primary, #0f766e);
+  background: color-mix(in srgb, var(--primary, #0f766e) 7%, #fff);
+  transform: translateY(-1px);
+}
+
+.ai-speed-dial:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.ai-speed-dial__number {
+  display: inline-grid;
+  place-items: center;
+  width: 1.45rem;
+  height: 1.45rem;
+  flex: 0 0 1.45rem;
+  border-radius: 50%;
+  background: var(--primary, #0f766e);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.ai-speed-dial--empty {
+  border-style: dashed;
+  color: var(--muted-fg, #64748b);
+}
+
+.ai-speed-dial-editor {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  gap: 0.75rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 1.25rem 1.5rem;
+  scrollbar-gutter: stable;
+}
+
+.ai-speed-dial-editor__row {
+  display: grid;
+  grid-template-columns: auto minmax(150px, 0.8fr) minmax(260px, 1.8fr) auto auto;
+  gap: 0.65rem;
+  align-items: end;
+  padding: 0.75rem;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 0.8rem;
+  background: var(--card, #fff);
+}
+
+.ai-speed-dial-editor__row > .ai-speed-dial__number {
+  align-self: center;
+}
+
+.ai-speed-dial-editor__prompt textarea {
+  resize: vertical;
+  min-height: 2.7rem;
+}
+
+.ai-speed-dial-editor__enabled {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 2.45rem;
+  font-size: 0.78rem;
+  color: var(--muted-fg, #64748b);
+}
+
+@media (max-width: 760px) {
+  .ai-speed-dial-editor {
+    padding: 1rem;
+  }
+
+  .ai-speed-dials__header .muted {
+    display: none;
+  }
+
+  .ai-speed-dial-editor__row {
+    grid-template-columns: auto 1fr auto;
+    align-items: start;
+  }
+
+  .ai-speed-dial-editor__row .form-field {
+    grid-column: 2 / -1;
+  }
+
+  .ai-speed-dial-editor__enabled {
+    grid-column: 2;
+  }
+}

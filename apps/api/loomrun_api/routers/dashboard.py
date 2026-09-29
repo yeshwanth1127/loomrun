@@ -315,6 +315,9 @@ async def build_ceo_dashboard(*, organization_id: str, day: str | None = None) -
     expense_rows = await prisma.expense.find_many(where=expense_where)
     job_cost_total = sum(e.amountCents for e in expense_rows if e.productionOrderId)
     overhead_total = sum(e.amountCents for e in expense_rows if not e.productionOrderId)
+    vendor_expenses = [e for e in expense_rows if (e.vendor or "").strip()]
+    vendor_payable_total = sum(e.amountCents for e in vendor_expenses)
+    vendor_count = len({e.vendor.strip().casefold() for e in vendor_expenses})
 
     pnl_orders = await prisma.productionorder.find_many(
         where={"organizationId": oid},
@@ -329,6 +332,8 @@ async def build_ceo_dashboard(*, organization_id: str, day: str | None = None) -
     collected_total = 0
     budget_total = 0
     jobs_with_budget = 0
+    client_receivable_total = 0
+    clients_with_receivables = 0
     client_pnl: list[dict] = []
 
     for o in pnl_orders:
@@ -365,6 +370,10 @@ async def build_ceo_dashboard(*, organization_id: str, day: str | None = None) -
             revenue_total += pnl["revenue_cents"]
             jobs_with_revenue += 1
         collected_total += pnl["collected_cents"]
+        collection_gap = pnl["collection_gap_cents"]
+        if collection_gap is not None and collection_gap > 0:
+            client_receivable_total += collection_gap
+            clients_with_receivables += 1
         if pnl["budget_cents"] is not None:
             budget_total += pnl["budget_cents"]
             jobs_with_budget += 1
@@ -387,6 +396,11 @@ async def build_ceo_dashboard(*, organization_id: str, day: str | None = None) -
         rec = pipeline_value.setdefault(stage_name, {"count": 0, "value_cents": 0})
         rec["count"] += 1
         rec["value_cents"] += int(round(float(lead.estimatedValue) * 100))
+    open_pipeline = {
+        stage: rec for stage, rec in pipeline_value.items() if stage not in {"WON", "LOST"}
+    }
+    open_pipeline_value = sum(rec["value_cents"] for rec in open_pipeline.values())
+    open_pipeline_count = sum(rec["count"] for rec in open_pipeline.values())
 
     return {
         "generated_at": now.isoformat(),
@@ -418,6 +432,19 @@ async def build_ceo_dashboard(*, organization_id: str, day: str | None = None) -
         "job_cost_total": {"amount_cents": job_cost_total},
         "overhead_total": {"amount_cents": overhead_total},
         "expense_total": {"amount_cents": job_cost_total + overhead_total},
+        "vendor_payables": {
+            "amount_cents": vendor_payable_total,
+            "vendor_count": vendor_count,
+            "expense_count": len(vendor_expenses),
+        },
+        "client_receivables": {
+            "amount_cents": client_receivable_total,
+            "client_count": clients_with_receivables,
+        },
+        "pipeline_open_total": {
+            "amount_cents": open_pipeline_value,
+            "lead_count": open_pipeline_count,
+        },
         "budget_overrun_count": {"count": budget_overrun_count},
         "margin_aggregate": {
             "amount_cents": margin_sum,

@@ -6,7 +6,7 @@ import json
 import logging
 
 from pydantic import BaseModel, Field
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Path as ApiPath, Query, status
 from fastapi.responses import StreamingResponse
 
 from loomrun_api.ai_agent import conversations as conv_svc
@@ -20,6 +20,7 @@ from loomrun_api.ai_agent.service import (
 )
 from loomrun_api.deps import OrgContext, get_org_context
 from loomrun_api.logging_setup import kv, sanitize_log_text
+from loomrun_api.prisma_client import prisma
 from loomrun_api.config import settings
 from loomrun_api.qlix import chat as qlix_chat
 from loomrun_api.qlix import grants
@@ -56,9 +57,152 @@ class StopRunBody(BaseModel):
     run_id: str = Field(min_length=1, max_length=200)
 
 
+class SpeedDialBody(BaseModel):
+    label: str = Field(min_length=1, max_length=60)
+    prompt: str = Field(min_length=1, max_length=4000)
+    is_enabled: bool = True
+
+
+_SPEED_DIAL_DEFAULTS = [
+    (1, "Today's priorities", "What needs my attention today?"),
+    (2, "Sales summary", "Summarize sales performance and important follow-ups."),
+    (3, "Production status", "Which production orders need attention and why?"),
+    (4, "Collections", "Show pending collections and recommend what to do next."),
+    (5, "CEO summary", "Give me a concise CEO summary of the business."),
+]
+
+
+def _speed_dial_where(*, organization_id: str, user_id: str, slot: int) -> dict:
+    return {
+        "organizationId_userId_slot": {
+            "organizationId": organization_id,
+            "userId": user_id,
+            "slot": slot,
+        }
+    }
+
+
+def _serialize_speed_dial(item) -> dict:
+    return {
+        "id": item.id,
+        "slot": item.slot,
+        "label": item.label,
+        "prompt": item.prompt,
+        "is_enabled": item.isEnabled,
+        "created_at": item.createdAt.isoformat(),
+        "updated_at": item.updatedAt.isoformat(),
+    }
+
+
+async def _ensure_speed_dial_defaults(*, organization_id: str, user_id: str) -> None:
+    count = await prisma.aispeeddial.count(
+        where={"organizationId": organization_id, "userId": user_id}
+    )
+    if count:
+        return
+    for slot, label, prompt in _SPEED_DIAL_DEFAULTS:
+        await prisma.aispeeddial.upsert(
+            where=_speed_dial_where(
+                organization_id=organization_id, user_id=user_id, slot=slot
+            ),
+            data={
+                "create": {
+                    "organizationId": organization_id,
+                    "userId": user_id,
+                    "slot": slot,
+                    "label": label,
+                    "prompt": prompt,
+                },
+                "update": {},
+            },
+        )
+
+
 @router.get("/orgs/{org_id}/ai/status")
 async def ai_status(ctx: OrgContext = Depends(get_org_context)) -> dict:
     return await get_ai_status(ctx.organization_id)
+
+
+@router.get("/orgs/{org_id}/ai/speed-dials")
+async def list_ai_speed_dials(ctx: OrgContext = Depends(get_org_context)) -> dict:
+    user_id = ctx.membership.userId
+    await _ensure_speed_dial_defaults(
+        organization_id=ctx.organization_id, user_id=user_id
+    )
+    items = await prisma.aispeeddial.find_many(
+        where={
+            "organizationId": ctx.organization_id,
+            "userId": user_id,
+            "isDeleted": False,
+        },
+        order={"slot": "asc"},
+    )
+    return {"items": [_serialize_speed_dial(item) for item in items]}
+
+
+@router.put("/orgs/{org_id}/ai/speed-dials/{slot}")
+async def upsert_ai_speed_dial(
+    body: SpeedDialBody,
+    slot: int = ApiPath(ge=1, le=9),
+    ctx: OrgContext = Depends(get_org_context),
+) -> dict:
+    label = body.label.strip()
+    prompt = body.prompt.strip()
+    if not label or not prompt:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, detail="Shortcut label and question are required"
+        )
+    user_id = ctx.membership.userId
+    item = await prisma.aispeeddial.upsert(
+        where=_speed_dial_where(
+            organization_id=ctx.organization_id, user_id=user_id, slot=slot
+        ),
+        data={
+            "create": {
+                "organizationId": ctx.organization_id,
+                "userId": user_id,
+                "slot": slot,
+                "label": label,
+                "prompt": prompt,
+                "isEnabled": body.is_enabled,
+                "isDeleted": False,
+            },
+            "update": {
+                "label": label,
+                "prompt": prompt,
+                "isEnabled": body.is_enabled,
+                "isDeleted": False,
+            },
+        },
+    )
+    return _serialize_speed_dial(item)
+
+
+@router.delete(
+    "/orgs/{org_id}/ai/speed-dials/{slot}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def delete_ai_speed_dial(
+    slot: int = ApiPath(ge=1, le=9),
+    ctx: OrgContext = Depends(get_org_context),
+) -> None:
+    user_id = ctx.membership.userId
+    await prisma.aispeeddial.upsert(
+        where=_speed_dial_where(
+            organization_id=ctx.organization_id, user_id=user_id, slot=slot
+        ),
+        data={
+            "create": {
+                "organizationId": ctx.organization_id,
+                "userId": user_id,
+                "slot": slot,
+                "label": "Unused",
+                "prompt": "Unused",
+                "isEnabled": False,
+                "isDeleted": True,
+            },
+            "update": {"isEnabled": False, "isDeleted": True},
+        },
+    )
 
 
 @router.get("/orgs/{org_id}/ai/memory")
